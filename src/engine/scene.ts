@@ -20,6 +20,14 @@ interface RegisteredGeometry {
   skinned: boolean
   joints?: Uint8Array
   weights?: Float32Array
+  textured?: boolean
+  uvs?: Float32Array
+}
+
+interface RegisteredTexture {
+  data: Uint8Array
+  width: number
+  height: number
 }
 
 export class Scene {
@@ -31,7 +39,9 @@ export class Scene {
   private meshes: (Mesh | null)[] = []
   private activeCount = 0
   private geometryRegistry = new Map<number, RegisteredGeometry>()
+  private textureRegistry = new Map<number, RegisteredTexture>()
   private nextGeometryId = 0
+  private nextTextureId = 0
   private config: SceneConfig
 
   // Lighting
@@ -80,6 +90,20 @@ export class Scene {
     const id = this.nextGeometryId++
     this.geometryRegistry.set(id, { geometry, skinned: true, joints, weights })
     this.renderer.registerSkinnedGeometry(id, geometry.vertices, geometry.indices, joints, weights)
+    return id
+  }
+
+  registerTexturedGeometry(geometry: Geometry, uvs: Float32Array): number {
+    const id = this.nextGeometryId++
+    this.geometryRegistry.set(id, { geometry, skinned: false, textured: true, uvs })
+    this.renderer.registerTexturedGeometry(id, geometry.vertices, geometry.indices, uvs)
+    return id
+  }
+
+  registerTexture(data: Uint8Array, width: number, height: number): number {
+    const id = this.nextTextureId++
+    this.textureRegistry.set(id, { data, width, height })
+    this.renderer.registerTexture(id, data, width, height)
     return id
   }
 
@@ -241,6 +265,11 @@ export class Scene {
       if (mesh.skinInstance) {
         entity.jointMatrices = mesh.skinInstance.jointMatrices
       }
+      if (mesh.aoMap >= 0) {
+        entity.textureId = mesh.aoMap
+        entity.isTextured = true
+        entity.aoIntensity = mesh.aoIntensity
+      }
       drawEntities.push(entity)
     }
 
@@ -268,9 +297,16 @@ export class Scene {
     for (const [id, reg] of this.geometryRegistry) {
       if (reg.skinned && reg.joints && reg.weights) {
         this.renderer.registerSkinnedGeometry(id, reg.geometry.vertices, reg.geometry.indices, reg.joints, reg.weights)
+      } else if (reg.textured && reg.uvs) {
+        this.renderer.registerTexturedGeometry(id, reg.geometry.vertices, reg.geometry.indices, reg.uvs)
       } else {
         this.renderer.registerGeometry(id, reg.geometry.vertices, reg.geometry.indices)
       }
+    }
+
+    // Re-register all textures
+    for (const [id, tex] of this.textureRegistry) {
+      this.renderer.registerTexture(id, tex.data, tex.width, tex.height)
     }
 
     // Re-apply bloom config

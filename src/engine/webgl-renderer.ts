@@ -2,6 +2,9 @@ import {
   vertexShaderGLSL,
   fragmentShaderGLSL,
   skinnedVertexShaderGLSL,
+  texturedVertexShaderGLSL,
+  texturedFragmentShaderGLSL,
+  texturedMrtFragmentShaderGLSL,
   mrtFragmentShaderGLSL,
   fullscreenVertexGLSL,
   downsampleFragmentGLSL,
@@ -16,6 +19,7 @@ interface GLGeometry {
   indexCount: number
   indexType: GLenum
   skinned: boolean
+  textured?: boolean
 }
 
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
@@ -82,6 +86,19 @@ export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
   gl.uniformBlockBinding(skinnedProgram, skLightBlockIdx, 2)
   gl.uniformBlockBinding(skinnedProgram, skJointBlockIdx, 3)
 
+  // Textured program
+  const texturedProgram = createProgram(gl, texturedVertexShaderGLSL, texturedFragmentShaderGLSL)
+  const txCameraBlockIdx = gl.getUniformBlockIndex(texturedProgram, 'CameraUniforms')
+  const txModelBlockIdx = gl.getUniformBlockIndex(texturedProgram, 'ModelUniforms')
+  const txLightBlockIdx = gl.getUniformBlockIndex(texturedProgram, 'LightUniforms')
+  gl.uniformBlockBinding(texturedProgram, txCameraBlockIdx, 0)
+  gl.uniformBlockBinding(texturedProgram, txModelBlockIdx, 1)
+  gl.uniformBlockBinding(texturedProgram, txLightBlockIdx, 2)
+  const uAoMapLoc = gl.getUniformLocation(texturedProgram, 'u_aoMap')
+
+  // Texture storage
+  const glTextures = new Map<number, WebGLTexture>()
+
   // Camera UBO (2 × mat4 = 128 bytes)
   const cameraUBO = gl.createBuffer()!
   gl.bindBuffer(gl.UNIFORM_BUFFER, cameraUBO)
@@ -117,6 +134,8 @@ export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
   // MRT programs (created lazily)
   let mrtProgram: WebGLProgram | null = null
   let mrtSkinnedProgram: WebGLProgram | null = null
+  let mrtTexturedProgram: WebGLProgram | null = null
+  let uMrtAoMapLoc: WebGLUniformLocation | null = null
 
   // Post-processing programs
   let downsampleProgram: WebGLProgram | null = null
@@ -230,6 +249,15 @@ export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
     gl.uniformBlockBinding(mrtSkinnedProgram, mrtSkLightBlockIdx, 2)
     gl.uniformBlockBinding(mrtSkinnedProgram, mrtSkJointBlockIdx, 3)
 
+    mrtTexturedProgram = createProgram(gl, texturedVertexShaderGLSL, texturedMrtFragmentShaderGLSL)
+    const mrtTxCameraBlockIdx = gl.getUniformBlockIndex(mrtTexturedProgram, 'CameraUniforms')
+    const mrtTxModelBlockIdx = gl.getUniformBlockIndex(mrtTexturedProgram, 'ModelUniforms')
+    const mrtTxLightBlockIdx = gl.getUniformBlockIndex(mrtTexturedProgram, 'LightUniforms')
+    gl.uniformBlockBinding(mrtTexturedProgram, mrtTxCameraBlockIdx, 0)
+    gl.uniformBlockBinding(mrtTexturedProgram, mrtTxModelBlockIdx, 1)
+    gl.uniformBlockBinding(mrtTexturedProgram, mrtTxLightBlockIdx, 2)
+    uMrtAoMapLoc = gl.getUniformLocation(mrtTexturedProgram, 'u_aoMap')
+
     // Post-processing programs
     downsampleProgram = createProgram(gl, fullscreenVertexGLSL, downsampleFragmentGLSL)
     uDownsampleInput = gl.getUniformLocation(downsampleProgram, 'u_input')
@@ -317,16 +345,18 @@ export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
     gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, cameraUBO)
     gl.bindBufferBase(gl.UNIFORM_BUFFER, 2, lightUBO)
 
-    // Draw non-skinned entities
+    // Draw non-skinned, non-textured entities
     gl.useProgram(useMrt ? mrtProgram : program)
     for (let i = 0; i < count; i++) {
       const entity = entities[i]!
+      if (entity.isTextured) continue
       const geo = geometries.get(entity.geometryId)
       if (!geo || geo.skinned) continue
 
       modelData.set(entity.worldMatrix, 0)
       modelData.set(entity.color, 16)
       modelData[20] = entity.unlit ? 1.0 : 0.0
+      modelData[21] = entity.aoIntensity ?? 0.0
       gl.bindBuffer(gl.UNIFORM_BUFFER, modelUBO)
       gl.bufferSubData(gl.UNIFORM_BUFFER, 0, modelData)
       gl.bindBufferBase(gl.UNIFORM_BUFFER, 1, modelUBO)
@@ -348,6 +378,7 @@ export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
       modelData.set(entity.worldMatrix, 0)
       modelData.set(entity.color, 16)
       modelData[20] = entity.unlit ? 1.0 : 0.0
+      modelData[21] = entity.aoIntensity ?? 0.0
       gl.bindBuffer(gl.UNIFORM_BUFFER, modelUBO)
       gl.bufferSubData(gl.UNIFORM_BUFFER, 0, modelData)
       gl.bindBufferBase(gl.UNIFORM_BUFFER, 1, modelUBO)
@@ -356,6 +387,38 @@ export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.bindBuffer(gl.UNIFORM_BUFFER, jointUBO)
       gl.bufferSubData(gl.UNIFORM_BUFFER, 0, entity.jointMatrices)
       gl.bindBufferBase(gl.UNIFORM_BUFFER, 3, jointUBO)
+
+      gl.bindVertexArray(geo.vao)
+      gl.drawElements(gl.TRIANGLES, geo.indexCount, geo.indexType, 0)
+    }
+
+    // Draw textured entities
+    let texturedProgramBound = false
+    for (let i = 0; i < count; i++) {
+      const entity = entities[i]!
+      if (!entity.isTextured || entity.textureId === undefined) continue
+      const geo = geometries.get(entity.geometryId)
+      const tex = glTextures.get(entity.textureId)
+      if (!geo?.textured || !tex) continue
+
+      if (!texturedProgramBound) {
+        gl.useProgram(useMrt ? mrtTexturedProgram : texturedProgram)
+        gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, cameraUBO)
+        gl.bindBufferBase(gl.UNIFORM_BUFFER, 2, lightUBO)
+        texturedProgramBound = true
+      }
+
+      modelData.set(entity.worldMatrix, 0)
+      modelData.set(entity.color, 16)
+      modelData[20] = entity.unlit ? 1.0 : 0.0
+      modelData[21] = entity.aoIntensity ?? 0.0
+      gl.bindBuffer(gl.UNIFORM_BUFFER, modelUBO)
+      gl.bufferSubData(gl.UNIFORM_BUFFER, 0, modelData)
+      gl.bindBufferBase(gl.UNIFORM_BUFFER, 1, modelUBO)
+
+      gl.activeTexture(gl.TEXTURE0)
+      gl.bindTexture(gl.TEXTURE_2D, tex)
+      gl.uniform1i(useMrt ? uMrtAoMapLoc : uAoMapLoc, 0)
 
       gl.bindVertexArray(geo.vao)
       gl.drawElements(gl.TRIANGLES, geo.indexCount, geo.indexType, 0)
@@ -387,6 +450,57 @@ export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
         indexType: indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT,
         skinned: true,
       })
+    },
+
+    registerTexturedGeometry(id, vertices, indices, uvs) {
+      const vao = gl.createVertexArray()!
+      gl.bindVertexArray(vao)
+
+      // Buffer 0: geometry [pos, normal, vertColor, bloom] = 40 bytes
+      const vbo = gl.createBuffer()!
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo)
+      gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW)
+
+      gl.enableVertexAttribArray(0)
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 40, 0)
+      gl.enableVertexAttribArray(1)
+      gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 40, 12)
+      gl.enableVertexAttribArray(2)
+      gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 40, 24)
+      gl.enableVertexAttribArray(3)
+      gl.vertexAttribPointer(3, 1, gl.FLOAT, false, 40, 36)
+
+      // Buffer 1: UV [u, v] = 8 bytes
+      const uvVBO = gl.createBuffer()!
+      gl.bindBuffer(gl.ARRAY_BUFFER, uvVBO)
+      gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.STATIC_DRAW)
+      gl.enableVertexAttribArray(4)
+      gl.vertexAttribPointer(4, 2, gl.FLOAT, false, 8, 0)
+
+      const ebo = gl.createBuffer()!
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo)
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW)
+
+      gl.bindVertexArray(null)
+
+      geometries.set(id, {
+        vao,
+        indexCount: indices.length,
+        indexType: indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT,
+        skinned: false,
+        textured: true,
+      })
+    },
+
+    registerTexture(id, data, width, height) {
+      const tex = gl.createTexture()!
+      gl.bindTexture(gl.TEXTURE_2D, tex)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, data)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      glTextures.set(id, tex)
     },
 
     updateCamera(view, projection) {
@@ -561,9 +675,11 @@ export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.deleteBuffer(jointUBO)
       gl.deleteProgram(program)
       gl.deleteProgram(skinnedProgram)
+      gl.deleteProgram(texturedProgram)
       gl.deleteVertexArray(fullscreenVAO)
       if (mrtProgram) gl.deleteProgram(mrtProgram)
       if (mrtSkinnedProgram) gl.deleteProgram(mrtSkinnedProgram)
+      if (mrtTexturedProgram) gl.deleteProgram(mrtTexturedProgram)
       if (downsampleProgram) gl.deleteProgram(downsampleProgram)
       if (upsampleProgram) gl.deleteProgram(upsampleProgram)
       if (compositeProgram) gl.deleteProgram(compositeProgram)
@@ -579,6 +695,9 @@ export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
       for (const tex of bloomMipTextures) gl.deleteTexture(tex)
       for (const geo of geometries.values()) {
         gl.deleteVertexArray(geo.vao)
+      }
+      for (const tex of glTextures.values()) {
+        gl.deleteTexture(tex)
       }
     },
   }

@@ -6,6 +6,7 @@ export interface GLTFPrimitive {
   materialIndices?: Uint8Array
   skinJoints?: Uint8Array
   skinWeights?: Float32Array
+  uvs?: Float32Array
 }
 
 export interface GLTFMesh {
@@ -458,6 +459,7 @@ async function decodeDracoPrimitive(
   materialIndices: Uint8Array | undefined
   skinJoints: Uint8Array | undefined
   skinWeights: Float32Array | undefined
+  uvs: Float32Array | undefined
 }> {
   const draco = await initDracoDecoder(decoderPath)
   const ext = primitive.extensions!.KHR_draco_mesh_compression!
@@ -524,6 +526,14 @@ async function decodeDracoPrimitive(
     }
   }
 
+  // Extract UVs (TEXCOORD_0) if present
+  let uvs: Float32Array | undefined
+  const texCoordKey = Object.keys(ext.attributes).find(k => k === 'TEXCOORD_0')
+  if (texCoordKey !== undefined) {
+    const uvAttr = decoder.GetAttributeByUniqueId(dracoMesh, ext.attributes[texCoordKey]!)
+    uvs = extractFloat32Attribute(uvAttr)
+  }
+
   // Extract skin attributes (JOINTS_0 / WEIGHTS_0) if present
   let skinJoints: Uint8Array | undefined
   let skinWeights: Float32Array | undefined
@@ -552,14 +562,20 @@ async function decodeDracoPrimitive(
   draco.destroy(decoder)
   draco.destroy(decoderBuffer)
 
-  return { positions, normals, indices, vertexCount, materialIndices, skinJoints, skinWeights }
+  return { positions, normals, indices, vertexCount, materialIndices, skinJoints, skinWeights, uvs }
 }
 
 function parsePrimitive(
   json: GLTFJson,
   primitive: GLTFJsonPrimitive,
   buffers: ArrayBuffer[],
-): { positions: Float32Array; normals: Float32Array | null; indices: Uint16Array | Uint32Array; vertexCount: number } {
+): {
+  positions: Float32Array
+  normals: Float32Array | null
+  indices: Uint16Array | Uint32Array
+  vertexCount: number
+  uvs: Float32Array | undefined
+} {
   // Resolve indices
   if (primitive.indices === undefined) {
     throw new Error('glTF primitives without indices are not supported')
@@ -583,6 +599,12 @@ function parsePrimitive(
     normals = normResult.data instanceof Float32Array ? normResult.data : new Float32Array(normResult.data)
   }
 
+  // Resolve UVs (optional)
+  let uvs: Float32Array | undefined
+  if (primitive.attributes.TEXCOORD_0 !== undefined) {
+    uvs = resolveAccessorFloat32(json, primitive.attributes.TEXCOORD_0, buffers)
+  }
+
   // Convert indices to appropriate type
   let indices: Uint16Array | Uint32Array
   if (vertexCount <= 65535) {
@@ -591,7 +613,7 @@ function parsePrimitive(
     indices = rawIndices instanceof Uint32Array ? rawIndices : new Uint32Array(rawIndices)
   }
 
-  return { positions, normals, indices, vertexCount }
+  return { positions, normals, indices, vertexCount, uvs }
 }
 
 function parseSkinAttributes(
@@ -800,6 +822,7 @@ export async function loadGLTF(url: string, options?: GLTFOptions): Promise<GLTF
       let matIndices: Uint8Array | undefined
       let dracoSkinJoints: Uint8Array | undefined
       let dracoSkinWeights: Float32Array | undefined
+      let uvs: Float32Array | undefined
 
       if (usesDraco && jsonPrim.extensions?.KHR_draco_mesh_compression) {
         const result = await decodeDracoPrimitive(json, jsonPrim, buffers, decoderPath)
@@ -810,12 +833,14 @@ export async function loadGLTF(url: string, options?: GLTFOptions): Promise<GLTF
         matIndices = result.materialIndices
         dracoSkinJoints = result.skinJoints
         dracoSkinWeights = result.skinWeights
+        uvs = result.uvs
       } else {
         const result = parsePrimitive(json, jsonPrim, buffers)
         positions = result.positions
         normals = result.normals
         indices = result.indices
         vertexCount = result.vertexCount
+        uvs = result.uvs
       }
 
       // Compute flat normals if not provided
@@ -837,7 +862,8 @@ export async function loadGLTF(url: string, options?: GLTFOptions): Promise<GLTF
       }
 
       // Extract skin attributes if this mesh has a skin
-      const prim: GLTFPrimitive = { geometry: { vertices, indices }, color, materialIndices: matIndices }
+      const geometry: Geometry = uvs ? { vertices, indices, uvs } : { vertices, indices }
+      const prim: GLTFPrimitive = { geometry, color, materialIndices: matIndices, uvs }
       if (hasSkin) {
         if (dracoSkinJoints && dracoSkinWeights) {
           prim.skinJoints = dracoSkinJoints

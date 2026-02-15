@@ -356,6 +356,190 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
 }
 `
 
+// Textured shaders — same as standard but with AO map sampling via UV coordinates
+
+export const texturedShaderSource = /* wgsl */ `
+struct CameraUniforms {
+  view: mat4x4f,
+  projection: mat4x4f,
+}
+
+struct ModelUniforms {
+  world: mat4x4f,
+  color: vec4f,
+  flags: vec4f,
+}
+
+struct LightUniforms {
+  direction: vec4f,
+  color: vec4f,
+  ambient: vec4f,
+}
+
+@group(0) @binding(0) var<uniform> camera: CameraUniforms;
+@group(1) @binding(0) var<uniform> model: ModelUniforms;
+@group(2) @binding(0) var<uniform> light: LightUniforms;
+@group(3) @binding(0) var aoTexture: texture_2d<f32>;
+@group(3) @binding(1) var aoSampler: sampler;
+
+struct VertexInput {
+  @location(0) position: vec3f,
+  @location(1) normal: vec3f,
+  @location(2) vertColor: vec3f,
+  @location(3) bloom: f32,
+  @location(4) uv: vec2f,
+}
+
+struct VertexOutput {
+  @builtin(position) position: vec4f,
+  @location(0) worldNormal: vec3f,
+  @location(1) color: vec4f,
+  @location(2) unlit: f32,
+  @location(3) vertColor: vec3f,
+  @location(4) bloom: f32,
+  @location(5) uv: vec2f,
+}
+
+@vertex
+fn vs_main(input: VertexInput) -> VertexOutput {
+  var output: VertexOutput;
+
+  let worldPos = model.world * vec4f(input.position, 1.0);
+  output.position = camera.projection * camera.view * worldPos;
+
+  let normalMat = mat3x3f(
+    model.world[0].xyz,
+    model.world[1].xyz,
+    model.world[2].xyz,
+  );
+  output.worldNormal = normalize(normalMat * input.normal);
+  output.color = model.color;
+  output.unlit = model.flags.x;
+  output.vertColor = input.vertColor;
+  output.bloom = input.bloom;
+  output.uv = input.uv;
+
+  return output;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4f {
+  let normal = normalize(input.worldNormal);
+  let lightDir = normalize(-light.direction.xyz);
+
+  let NdotL = max(dot(normal, lightDir), 0.0);
+  let diffuse = light.color.rgb * NdotL;
+  let aoRaw = textureSample(aoTexture, aoSampler, input.uv).r;
+  let aoIntensity = model.flags.y;
+  let ao = clamp(mix(1.0, aoRaw, aoIntensity), 0.0, 1.0);
+  let ambient = light.ambient.rgb * ao;
+
+  var finalColor: vec3f;
+  if (input.unlit > 0.5) {
+    finalColor = input.color.rgb * input.vertColor;
+  } else {
+    finalColor = input.color.rgb * input.vertColor * (diffuse * ao + ambient);
+  }
+
+  return vec4f(finalColor, input.color.a);
+}
+`
+
+export const texturedMrtShaderSource = /* wgsl */ `
+struct CameraUniforms {
+  view: mat4x4f,
+  projection: mat4x4f,
+}
+
+struct ModelUniforms {
+  world: mat4x4f,
+  color: vec4f,
+  flags: vec4f,
+}
+
+struct LightUniforms {
+  direction: vec4f,
+  color: vec4f,
+  ambient: vec4f,
+}
+
+@group(0) @binding(0) var<uniform> camera: CameraUniforms;
+@group(1) @binding(0) var<uniform> model: ModelUniforms;
+@group(2) @binding(0) var<uniform> light: LightUniforms;
+@group(3) @binding(0) var aoTexture: texture_2d<f32>;
+@group(3) @binding(1) var aoSampler: sampler;
+
+struct VertexInput {
+  @location(0) position: vec3f,
+  @location(1) normal: vec3f,
+  @location(2) vertColor: vec3f,
+  @location(3) bloom: f32,
+  @location(4) uv: vec2f,
+}
+
+struct VertexOutput {
+  @builtin(position) position: vec4f,
+  @location(0) worldNormal: vec3f,
+  @location(1) color: vec4f,
+  @location(2) unlit: f32,
+  @location(3) vertColor: vec3f,
+  @location(4) bloom: f32,
+  @location(5) uv: vec2f,
+}
+
+struct FragmentOutput {
+  @location(0) color: vec4f,
+  @location(1) bloom: vec4f,
+}
+
+@vertex
+fn vs_main(input: VertexInput) -> VertexOutput {
+  var output: VertexOutput;
+
+  let worldPos = model.world * vec4f(input.position, 1.0);
+  output.position = camera.projection * camera.view * worldPos;
+
+  let normalMat = mat3x3f(
+    model.world[0].xyz,
+    model.world[1].xyz,
+    model.world[2].xyz,
+  );
+  output.worldNormal = normalize(normalMat * input.normal);
+  output.color = model.color;
+  output.unlit = model.flags.x;
+  output.vertColor = input.vertColor;
+  output.bloom = input.bloom;
+  output.uv = input.uv;
+
+  return output;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> FragmentOutput {
+  let normal = normalize(input.worldNormal);
+  let lightDir = normalize(-light.direction.xyz);
+
+  let NdotL = max(dot(normal, lightDir), 0.0);
+  let diffuse = light.color.rgb * NdotL;
+  let aoRaw = textureSample(aoTexture, aoSampler, input.uv).r;
+  let aoIntensity = model.flags.y;
+  let ao = clamp(mix(1.0, aoRaw, aoIntensity), 0.0, 1.0);
+  let ambient = light.ambient.rgb * ao;
+
+  var finalColor: vec3f;
+  if (input.unlit > 0.5) {
+    finalColor = input.color.rgb * input.vertColor;
+  } else {
+    finalColor = input.color.rgb * input.vertColor * (diffuse * ao + ambient);
+  }
+
+  var out: FragmentOutput;
+  out.color = vec4f(finalColor, input.color.a);
+  out.bloom = vec4f(finalColor * input.bloom, 1.0);
+  return out;
+}
+`
+
 // Post-processing shaders
 
 export const fullscreenVertexSource = /* wgsl */ `

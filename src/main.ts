@@ -1,5 +1,7 @@
+import { mergeGeometries } from './engine/geometry.ts'
 import { loadGLTF } from './engine/gltf.ts'
 import { createRenderer } from './engine/gpu.ts'
+import { loadKTX2 } from './engine/ktx2.ts'
 import { Mesh } from './engine/mesh.ts'
 import { OrbitControls } from './engine/orbit-controls.ts'
 import { Scene } from './engine/scene.ts'
@@ -40,7 +42,43 @@ export const main = async (canvas: HTMLCanvasElement) => {
     [2, 1.0], // Material index 2 (teal parts) gets bloom
   ])
 
+  // Eden per-primitive colors (indexed by primitive order in the GLB)
+  // prettier-ignore
+  const EDEN_COLORS: [number, number, number][] = [
+    [0.78, 0.44, 0.25],   // 0
+    [0.85, 0.68, 0.3],    // 1
+    [0.75, 0.75, 0.75],   // 2
+    [0.725, 0.38, 0.09],  // 3
+    [0.25, 0.55, 0.2],    // 4
+    [0.212, 0.212, 0.212], // 5
+    [0.75, 0.75, 0.75],   // 6
+    [0.15, 0.15, 0.18],   // 7
+    [0.0, 0.75, 0.7],     // 8
+    [0.55, 0.5, 0.42],    // 9
+    [0.85, 0.35, 0.55],   // 10
+    [0.95, 0.95, 0.95],   // 11
+    [0.8, 0.65, 0.15],    // 12
+    [0.65, 0.65, 0.62],   // 13
+    [0.3, 0.65, 0.2],     // 14
+    [0.5, 0.32, 0.15],    // 15
+    [0.5, 0.25, 0.65],    // 16
+    [0.9, 0.8, 0.2],      // 17
+    [0.15, 0.15, 0.18],   // 18
+    [0.75, 0.75, 0.75],   // 19
+    [0.95, 0.95, 0.95],   // 20
+    [0.6, 0.4, 0.22],     // 21
+    [0.6, 0.4, 0.22],     // 22
+    [0.0, 0.75, 0.7],     // 23  (bloom)
+    [0.9, 0.8, 0.2],      // 24
+    [0.85, 0.35, 0.55],   // 25
+    [0.3, 0.36, 0.3],     // 26
+  ]
+  const EDEN_BLOOM_PRIM = 23 // primitive index 23 gets bloom
+
   let megaxeId: number | null = null
+  let edenGeoId: number | null = null
+  let aoTexId: number | null = null
+  let edenHasUVs = false
   try {
     const gltf = await loadGLTF('/static-bundle.glb', { materialColors: megaxeColors, materialBloom: megaxeBloom })
     const megaxeMesh = gltf.meshes.find(m => m.name === 'megaxe')
@@ -48,6 +86,41 @@ export const main = async (canvas: HTMLCanvasElement) => {
       const prim = megaxeMesh.primitives[0]!
       megaxeId = scene.registerGeometry(prim.geometry)
       console.log(`Loaded megaxe mesh (${prim.geometry.vertices.length / 10} vertices)`)
+    }
+
+    // Load Eden mesh (multiple primitives, one per material — merge into single geometry)
+    const edenMesh = gltf.meshes.find(m => m.name === 'Eden')
+    if (edenMesh && edenMesh.primitives.length > 0) {
+      const merged = mergeGeometries(
+        edenMesh.primitives.map((prim, i) => ({
+          vertices: prim.geometry.vertices,
+          indices: prim.geometry.indices,
+          color: EDEN_COLORS[i] ?? [1, 1, 1],
+          bloom: i === EDEN_BLOOM_PRIM ? 1.0 : undefined,
+          uvs: prim.uvs,
+        })),
+      )
+      edenHasUVs = !!merged.uvs
+
+      if (edenHasUVs) {
+        // Load AO texture and register textured geometry
+        try {
+          const aoTex = await loadKTX2('/city-ao.ktx2', '/basis-1.50/')
+          aoTexId = scene.registerTexture(aoTex.data, aoTex.width, aoTex.height)
+          edenGeoId = scene.registerTexturedGeometry(merged, merged.uvs!)
+          console.log(
+            `Loaded Eden textured (${edenMesh.primitives.length} primitives merged, ${merged.vertices.length / 10} vertices, AO ${aoTex.width}×${aoTex.height})`,
+          )
+        } catch (e) {
+          console.warn('Failed to load AO texture, falling back to non-textured:', e)
+          edenGeoId = scene.registerGeometry(merged)
+        }
+      } else {
+        edenGeoId = scene.registerGeometry(merged)
+        console.log(
+          `Loaded Eden (${edenMesh.primitives.length} primitives merged, ${merged.vertices.length / 10} vertices)`,
+        )
+      }
     }
   } catch (e) {
     console.warn('Failed to load static-bundle.glb:', e)
@@ -112,6 +185,20 @@ export const main = async (canvas: HTMLCanvasElement) => {
   if (runIdx >= 0) availableAnims.push(runIdx)
   if (slashIdx >= 0) availableAnims.push(slashIdx)
 
+  // Add Eden map mesh
+  if (edenGeoId !== null) {
+    scene.add(
+      new Mesh({
+        geometryId: edenGeoId,
+        position: [-53.5, -69.5, 0],
+        color: [1, 1, 1, 1],
+        scale: [1, 1, 1],
+        aoMap: aoTexId ?? undefined,
+        aoIntensity: 2,
+      }),
+    )
+  }
+
   // Spawn grid of characters
   const skinInstances: SkinInstance[] = []
   const animTimers: number[] = [] // time until next transition
@@ -145,7 +232,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
       scene.add(
         new Mesh({
           geometryId: skinnedGeoId,
-          position: [x, y, 0],
+          position: [x, y, -40],
           color: [1, 1, 1, 1],
           scale: [1, 1, 1],
           skinInstance: inst,
@@ -157,7 +244,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
         scene.add(
           new Mesh({
             geometryId: megaxeId,
-            position: [x, y, 0],
+            position: [x, y, -40],
             rotation: [0, 0, Math.PI],
             color: [1, 1, 1, 1],
             scale: [1, 1, 1],
@@ -179,8 +266,8 @@ export const main = async (canvas: HTMLCanvasElement) => {
   )
 
   // Lighting
-  scene.setDirectionalLight([0.5, 0.3, -1], [1, 0.95, 0.9])
-  scene.setAmbientLight([0.15, 0.15, 0.2])
+  scene.setDirectionalLight([0, -1, -1], [0.6, 0.6, 0.6])
+  scene.setAmbientLight([0.7, 0.7, 0.7])
 
   // Bloom
   scene.setBloom({ enabled: true, intensity: 5.0, radius: 1.0 })

@@ -3,6 +3,8 @@ import {
   skinnedShaderSource,
   mrtShaderSource,
   mrtSkinnedShaderSource,
+  texturedShaderSource,
+  texturedMrtShaderSource,
   fullscreenVertexSource,
   downsampleSource,
   upsampleSource,
@@ -23,6 +25,9 @@ export interface DrawEntity {
   geometryId: number
   unlit: boolean
   jointMatrices?: Float32Array
+  textureId?: number
+  isTextured?: boolean
+  aoIntensity?: number
 }
 
 export interface Renderer {
@@ -35,6 +40,13 @@ export interface Renderer {
     joints: Uint8Array,
     weights: Float32Array,
   ): void
+  registerTexturedGeometry(
+    id: number,
+    vertices: Float32Array,
+    indices: Uint16Array | Uint32Array,
+    uvs: Float32Array,
+  ): void
+  registerTexture(id: number, data: Uint8Array, width: number, height: number): void
   updateCamera(view: Float32Array, projection: Float32Array): void
   updateLighting(dir: Float32Array, dirColor: Float32Array, ambient: Float32Array): void
   draw(entities: DrawEntity[], count: number): void
@@ -90,7 +102,7 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
     entries: [
       {
         binding: 0,
-        visibility: GPUShaderStage.VERTEX,
+        visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
         buffer: { type: 'uniform', hasDynamicOffset: true },
       },
     ],
@@ -116,12 +128,23 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
     ],
   })
 
+  const textureBGL = device.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+    ],
+  })
+
   const pipelineLayout = device.createPipelineLayout({
     bindGroupLayouts: [cameraBindGroupLayout, modelBindGroupLayout, lightBindGroupLayout],
   })
 
   const skinnedPipelineLayout = device.createPipelineLayout({
     bindGroupLayouts: [cameraBindGroupLayout, modelBindGroupLayout, lightBindGroupLayout, jointBindGroupLayout],
+  })
+
+  const texturedPipelineLayout = device.createPipelineLayout({
+    bindGroupLayouts: [cameraBindGroupLayout, modelBindGroupLayout, lightBindGroupLayout, textureBGL],
   })
 
   // Vertex buffer layouts
@@ -141,6 +164,13 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
     attributes: [
       { shaderLocation: 4, offset: 0, format: 'uint8x4' }, // joints
       { shaderLocation: 5, offset: 4, format: 'float32x4' }, // weights
+    ],
+  }
+
+  const uvBufferLayout: GPUVertexBufferLayout = {
+    arrayStride: 8, // 2 floats × 4 bytes
+    attributes: [
+      { shaderLocation: 4, offset: 0, format: 'float32x2' }, // uv
     ],
   }
 
@@ -188,6 +218,25 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
     },
     fragment: {
       module: skinnedShaderModule,
+      entryPoint: 'fs_main',
+      targets: [{ format }],
+    },
+    primitive: { topology: 'triangle-list', cullMode: 'back' },
+    depthStencil: { depthWriteEnabled: true, depthCompare: 'less', format: 'depth24plus' },
+    multisample: { count: 4 },
+  })
+
+  // Textured pipeline (two vertex buffers: static + UV, texture bind group at slot 3)
+  const texturedShaderModule = device.createShaderModule({ code: texturedShaderSource })
+  const texturedPipeline = device.createRenderPipeline({
+    layout: texturedPipelineLayout,
+    vertex: {
+      module: texturedShaderModule,
+      entryPoint: 'vs_main',
+      buffers: [staticVertexBufferLayout, uvBufferLayout],
+    },
+    fragment: {
+      module: texturedShaderModule,
       entryPoint: 'fs_main',
       targets: [{ format }],
     },
@@ -245,6 +294,26 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
 
   const geometries = new Map<number, GeometryBuffers>()
 
+  // Textured geometry storage (includes UV buffer)
+  interface TexturedGeometryGPU {
+    vertexBuffer: GPUBuffer
+    uvBuffer: GPUBuffer
+    indexBuffer: GPUBuffer
+    indexCount: number
+    indexFormat: GPUIndexFormat
+  }
+  const texturedGeometries = new Map<number, TexturedGeometryGPU>()
+
+  // Texture storage
+  const textures = new Map<number, { bindGroup: GPUBindGroup; gpuTexture: GPUTexture }>()
+
+  const textureSampler = device.createSampler({
+    magFilter: 'linear',
+    minFilter: 'linear',
+    addressModeU: 'clamp-to-edge',
+    addressModeV: 'clamp-to-edge',
+  })
+
   // ── Bloom state ──────────────────────────────────────────────────
   let bloomEnabled = false
   let bloomIntensity = 1.0
@@ -253,6 +322,7 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
   // MRT pipelines (created lazily)
   let mrtPipeline: GPURenderPipeline | null = null
   let mrtSkinnedPipeline: GPURenderPipeline | null = null
+  let mrtTexturedPipeline: GPURenderPipeline | null = null
 
   // Post-processing pipelines
   let downsamplePipeline: GPURenderPipeline | null = null
@@ -446,6 +516,24 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
       multisample: { count: 4 },
     })
 
+    const mrtTexturedModule = device.createShaderModule({ code: texturedMrtShaderSource })
+    mrtTexturedPipeline = device.createRenderPipeline({
+      layout: texturedPipelineLayout,
+      vertex: {
+        module: mrtTexturedModule,
+        entryPoint: 'vs_main',
+        buffers: [staticVertexBufferLayout, uvBufferLayout],
+      },
+      fragment: {
+        module: mrtTexturedModule,
+        entryPoint: 'fs_main',
+        targets: mrtTargets,
+      },
+      primitive: { topology: 'triangle-list', cullMode: 'back' },
+      depthStencil: { depthWriteEnabled: true, depthCompare: 'less', format: 'depth24plus' },
+      multisample: { count: 4 },
+    })
+
     // Post-processing bind group layouts
     ppTextureBindGroupLayout = device.createBindGroupLayout({
       entries: [
@@ -518,6 +606,7 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
       modelData.set(entity.worldMatrix, base)
       modelData.set(entity.color, base + 16)
       modelData[base + 20] = entity.unlit ? 1.0 : 0.0
+      modelData[base + 21] = entity.aoIntensity ?? 0.0
     }
     device.queue.writeBuffer(modelBuffer, 0, modelData.buffer, 0, MODEL_UNIFORM_SIZE * count)
   }
@@ -552,14 +641,16 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
   ) {
     const staticPipe = useMrt ? mrtPipeline! : pipeline
     const skinnedPipe = useMrt ? mrtSkinnedPipeline! : skinnedPipeline
+    const texturedPipe = useMrt ? mrtTexturedPipeline! : texturedPipeline
 
-    // Draw non-skinned entities
+    // Draw non-skinned, non-textured entities
     renderPass.setPipeline(staticPipe)
     renderPass.setBindGroup(0, cameraBindGroup)
     renderPass.setBindGroup(2, lightBindGroup)
 
     for (let i = 0; i < count; i++) {
       const entity = entities[i]!
+      if (entity.isTextured) continue
       const geo = geometries.get(entity.geometryId)
       if (!geo || geo.skinned) continue
 
@@ -588,6 +679,30 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
         renderPass.setIndexBuffer(geo.indexBuffer, geo.indexFormat)
         renderPass.drawIndexed(geo.indexCount)
       }
+    }
+
+    // Draw textured entities
+    let texturedPipelineBound = false
+    for (let i = 0; i < count; i++) {
+      const entity = entities[i]!
+      if (!entity.isTextured || entity.textureId === undefined) continue
+      const geo = texturedGeometries.get(entity.geometryId)
+      const tex = textures.get(entity.textureId)
+      if (!geo || !tex) continue
+
+      if (!texturedPipelineBound) {
+        renderPass.setPipeline(texturedPipe)
+        renderPass.setBindGroup(0, cameraBindGroup)
+        renderPass.setBindGroup(2, lightBindGroup)
+        texturedPipelineBound = true
+      }
+
+      renderPass.setBindGroup(1, modelBindGroup, [MODEL_UNIFORM_SIZE * i])
+      renderPass.setBindGroup(3, tex.bindGroup)
+      renderPass.setVertexBuffer(0, geo.vertexBuffer)
+      renderPass.setVertexBuffer(1, geo.uvBuffer)
+      renderPass.setIndexBuffer(geo.indexBuffer, geo.indexFormat)
+      renderPass.drawIndexed(geo.indexCount)
     }
   }
 
@@ -667,6 +782,62 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
         skinned: true,
         skinBuffer,
       })
+    },
+
+    registerTexturedGeometry(id, vertices, indices, uvs) {
+      const vertexBuffer = device.createBuffer({
+        size: vertices.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      })
+      device.queue.writeBuffer(vertexBuffer, 0, new Float32Array(vertices))
+
+      const indexBuffer = device.createBuffer({
+        size: indices.byteLength,
+        usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+      })
+      device.queue.writeBuffer(
+        indexBuffer,
+        0,
+        indices instanceof Uint16Array ? new Uint16Array(indices) : new Uint32Array(indices),
+      )
+
+      const uvBuffer = device.createBuffer({
+        size: uvs.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      })
+      device.queue.writeBuffer(uvBuffer, 0, new Float32Array(uvs))
+
+      texturedGeometries.set(id, {
+        vertexBuffer,
+        uvBuffer,
+        indexBuffer,
+        indexCount: indices.length,
+        indexFormat: indices instanceof Uint32Array ? 'uint32' : 'uint16',
+      })
+    },
+
+    registerTexture(id, data, width, height) {
+      const gpuTexture = device.createTexture({
+        size: [width, height],
+        format: 'rgba8unorm',
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+      })
+      device.queue.writeTexture(
+        { texture: gpuTexture },
+        data.buffer as ArrayBuffer,
+        { offset: data.byteOffset, bytesPerRow: width * 4, rowsPerImage: height },
+        [width, height],
+      )
+
+      const bindGroup = device.createBindGroup({
+        layout: textureBGL,
+        entries: [
+          { binding: 0, resource: gpuTexture.createView() },
+          { binding: 1, resource: textureSampler },
+        ],
+      })
+
+      textures.set(id, { bindGroup, gpuTexture })
     },
 
     updateCamera(view, projection) {
@@ -859,6 +1030,14 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
         geo.vertexBuffer.destroy()
         geo.indexBuffer.destroy()
         geo.skinBuffer?.destroy()
+      }
+      for (const geo of texturedGeometries.values()) {
+        geo.vertexBuffer.destroy()
+        geo.uvBuffer.destroy()
+        geo.indexBuffer.destroy()
+      }
+      for (const tex of textures.values()) {
+        tex.gpuTexture.destroy()
       }
       device.destroy()
     },

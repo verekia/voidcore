@@ -4,7 +4,7 @@ export { Mesh, type MeshOptions } from './mesh.ts'
 export { Camera } from './camera.ts'
 export { OrbitControls } from './orbit-controls.ts'
 export { createRenderer, type Backend, type Renderer } from './gpu.ts'
-export { createBoxGeometry, createSphereGeometry, type Geometry } from './geometry.ts'
+export { createBoxGeometry, createSphereGeometry, mergeGeometries, type Geometry } from './geometry.ts'
 export {
   loadGLTF,
   type GLTFResult,
@@ -21,6 +21,8 @@ export {
   skinnedShaderSource,
   mrtShaderSource,
   mrtSkinnedShaderSource,
+  texturedShaderSource,
+  texturedMrtShaderSource,
   fullscreenVertexSource,
   downsampleSource,
   upsampleSource,
@@ -30,6 +32,9 @@ export {
   vertexShaderGLSL,
   fragmentShaderGLSL,
   skinnedVertexShaderGLSL,
+  texturedVertexShaderGLSL,
+  texturedFragmentShaderGLSL,
+  texturedMrtFragmentShaderGLSL,
   mrtFragmentShaderGLSL,
   fullscreenVertexGLSL,
   downsampleFragmentGLSL,
@@ -48,3 +53,4 @@ export {
   type SkinInstance,
 } from './skin.ts'
 export { v3Lerp, quatSlerp, m4FromQuatTRS, m4Multiply } from './math.ts'
+export { loadKTX2, type KTX2Texture } from './ktx2.ts'

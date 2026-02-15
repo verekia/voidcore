@@ -16,6 +16,9 @@ export interface MeshOptions {
   unlit?: boolean
   skinInstance?: SkinInstance
   boneAttachment?: { skinInstance: SkinInstance; boneNodeIndex: number }
+  aoMap?: number
+  aoIntensity?: number
+  colorMap?: number
 }
 
 export class Mesh {
@@ -43,10 +46,18 @@ export class Mesh {
   // Bone attachment: attach this mesh to a bone of another skinned mesh
   boneAttachment?: { skinInstance: SkinInstance; boneNodeIndex: number }
 
+  // Texture IDs (-1 = none)
+  aoMap = -1
+  aoIntensity = 1.0
+  colorMap = -1
+
   constructor(options: MeshOptions) {
     this.geometryId = options.geometryId
     this.skinInstance = options.skinInstance
     this.boneAttachment = options.boneAttachment
+    if (options.aoMap !== undefined) this.aoMap = options.aoMap
+    if (options.aoIntensity !== undefined) this.aoIntensity = options.aoIntensity
+    if (options.colorMap !== undefined) this.colorMap = options.colorMap
     this.initOptions = options
   }
 
