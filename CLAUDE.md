@@ -11,7 +11,7 @@ Game Code (JS) → Scene/Mesh/Camera (JS) → Computation (C/WASM) → GPU Rende
 ```
 
 - **C/WASM owns**: SoA entity storage, TRS→world matrix, frustum culling, draw sorting, all math
-- **JS owns**: GPU device/pipelines/buffers/draw calls, Scene/Mesh/Camera classes, geometry generation, glTF/GLB import
+- **JS owns**: GPU device/pipelines/buffers/draw calls, Scene/Mesh/Camera classes, geometry generation, glTF/GLB import, skeletal animation (skin instances, crossfade blending, bone attachments)
 - **Coordinate system**: Z-up, right-handed (Blender convention)
 - **Matrix format**: Column-major mat4, Euler ZXY rotation order
 
@@ -55,11 +55,13 @@ src/
     renderer.ts             WebGPU renderer + Renderer interface
     webgl-renderer.ts       WebGL2 fallback renderer
     geometry.ts             createBoxGeometry, createSphereGeometry
-    gltf.ts                 glTF 2.0 / GLB loader with optional Draco mesh compression
-    shaders.ts              WGSL shaders (WebGPU)
-    webgl-shaders.ts        GLSL 300 es shaders (WebGL2)
+    gltf.ts                 glTF 2.0 / GLB loader (skins, animations, Draco compression)
+    skin.ts                 Skeletal animation (skeleton, skin instances, crossfade, bone attachment)
+    math.ts                 Animation math (vec3 lerp, quat slerp, mat4 from TRS, mat4 multiply)
+    shaders.ts              WGSL shaders (WebGPU) — static + skinned pipelines
+    webgl-shaders.ts        GLSL 300 es shaders (WebGL2) — static + skinned pipelines
     index.ts                Barrel exports
-  main.ts                   Demo app (1000 entities, orbit camera, stats overlay)
+  main.ts                   Demo app (20×20 skinned characters with animation cycling)
 public/
   voidcore.wasm             Build artifact (gitignored)
   draco-1.5.7/              Draco WASM decoder (used by gltf.ts for compressed meshes)
@@ -86,10 +88,13 @@ Key exports: `vc_init`, `vc_compute_world_matrices`, `vc_perspective`, `vc_look_
 ## Rendering
 
 - **Lighting**: Lambert diffuse (directional + ambient), per-entity unlit flag
-- **Geometry**: Box and sphere primitives + glTF/GLB import (with optional Draco compression), vertex format `[px, py, pz, nx, ny, nz]` (24 bytes/vertex), supports Uint16 and Uint32 indices
+- **Geometry**: Box and sphere primitives + glTF/GLB import (with optional Draco compression), supports Uint16 and Uint32 indices
+  - Static vertex format: `[px, py, pz, nx, ny, nz]` (24 bytes/vertex)
+  - Skinned vertex format: static + `[joints(u8×4), weights(f32×4)]` (20 bytes/vertex in separate buffer)
+- **Skinned meshes**: Linear blend skinning (4 weights/vertex, 128 max joints), crossfade animation blending, bone attachments
 - **WebGPU**: MSAA 4x, depth24plus, dynamic offset model uniforms (256-byte aligned)
 - **WebGL2**: UBOs for camera/model/light, `antialias: true` canvas
-- **Bind groups**: Group 0 = camera (view + projection), Group 1 = model (world + color + flags), Group 2 = light (direction + color + ambient)
+- **Bind groups**: Group 0 = camera (view + projection), Group 1 = model (world + color + flags), Group 2 = light (direction + color + ambient), Group 3 = joints (skinned meshes only)
 
 ## Entity Flags (bitfield in u32)
 
@@ -100,10 +105,11 @@ Key exports: `vc_init`, `vc_compute_world_matrices`, `vc_perspective`, `vc_look_
 ## Render Loop (scene.render())
 
 1. `vc_compute_world_matrices` — TRS→mat4 for dirty entities
-2. `camera.update` — view/projection/VP via WASM
-3. Update bounding spheres
-4. `vc_extract_frustum_planes` + `vc_frustum_cull` — bounding sphere test
-5. `vc_build_sort_keys` + `vc_sort_draw_calls` — radix sort by geometry ID
-6. Build draw entity list from visible indices
-7. `renderer.draw` — submit GPU draw calls
-8. `vc_frame_reset` — reset per-frame arena
+2. Apply bone attachments — override world matrix for bone-attached meshes
+3. `camera.update` — view/projection/VP via WASM
+4. Update bounding spheres
+5. `vc_extract_frustum_planes` + `vc_frustum_cull` — bounding sphere test
+6. `vc_build_sort_keys` + `vc_sort_draw_calls` — radix sort by geometry ID
+7. Build draw entity list from visible indices (attach joint matrices for skinned entities)
+8. `renderer.draw` — submit GPU draw calls (separate pipeline for skinned vs static)
+9. `vc_frame_reset` — reset per-frame arena

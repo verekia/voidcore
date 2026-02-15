@@ -64,7 +64,8 @@ requestAnimationFrame(frame)
 - **Draw call sorting** — radix sort by geometry ID in WASM for batching
 - **Lambert lighting** — directional + ambient, per-entity unlit flag
 - **MSAA 4x** — multisample anti-aliasing (WebGPU), canvas antialiasing (WebGL)
-- **glTF 2.0 / GLB import** — load external 3D models with optional Draco mesh compression
+- **Skeletal animation** — glTF skinned meshes with linear blend skinning (up to 128 joints), crossfade transitions, bone attachments
+- **glTF 2.0 / GLB import** — load external 3D models with skins, animations, and optional Draco mesh compression
 - **Primitive geometry** — box and sphere generators with normals
 - **Z-up right-handed** coordinate system (Blender convention)
 - **Zero-copy JS↔WASM** — typed array views directly into WASM linear memory
@@ -116,6 +117,8 @@ const gltf2 = await loadGLTF('/models/compressed.glb', {
 
 Supports glTF 2.0 JSON + external `.bin` buffers, GLB binary, and `KHR_draco_mesh_compression`. Draco decoder is lazy-loaded only when a compressed primitive is encountered. Material `baseColorFactor` is extracted from `pbrMetallicRoughness`. Flat normals are computed when the `NORMAL` attribute is missing.
 
+The result also includes `skins`, `animations`, and `nodeTransforms` for skeletal animation (see Skinned Meshes below).
+
 ### Mesh
 
 ```ts
@@ -142,6 +145,50 @@ mesh.visible = false // exclude from rendering
 mesh.unlit = true // skip lighting calculation
 scene.remove(mesh) // remove from scene (swap-with-last)
 ```
+
+### Skinned Meshes
+
+```ts
+import {
+  loadGLTF,
+  createSkeleton,
+  createSkinInstance,
+  updateSkinInstance,
+  transitionTo,
+  findBoneNodeIndex,
+} from 'voidcore'
+
+// Load a glTF with skins and animations
+const gltf = await loadGLTF('/models/character.glb')
+const bodyMesh = gltf.meshes.find(m => m.skinIndex !== undefined)
+const prim = bodyMesh.primitives[0]
+const skin = gltf.skins[bodyMesh.skinIndex]
+
+// Create skeleton and animation instance
+const skeleton = createSkeleton(skin, gltf.nodeTransforms)
+const inst = createSkinInstance(skeleton, 0) // start with clip 0
+
+// Register skinned geometry (includes joint indices + weights)
+const geoId = scene.registerSkinnedGeometry(prim.geometry, prim.skinJoints, prim.skinWeights)
+
+// Add skinned mesh to scene
+scene.add(new Mesh({ geometryId: geoId, skinInstance: inst }))
+
+// Attach a weapon to a bone
+const handIdx = findBoneNodeIndex(skeleton, 'Hand.R')
+scene.add(
+  new Mesh({
+    geometryId: weaponGeoId,
+    boneAttachment: { skinInstance: inst, boneNodeIndex: handIdx },
+  }),
+)
+
+// In your render loop — advance animation and crossfade between clips
+updateSkinInstance(inst, gltf.animations, dt)
+transitionTo(inst, 1, 0.2) // crossfade to clip 1 over 200ms
+```
+
+Linear blend skinning with up to 128 joints per skeleton. Joint matrices are computed in JS (quaternion SLERP + hierarchical traversal) and uploaded per-entity. Crossfade blending interpolates between two animation clips.
 
 ### Camera
 
