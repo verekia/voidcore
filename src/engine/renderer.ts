@@ -27,6 +27,7 @@ interface GeometryBuffers {
   vertexBuffer: GPUBuffer
   indexBuffer: GPUBuffer
   indexCount: number
+  indexFormat: GPUIndexFormat
 }
 
 export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<Renderer> {
@@ -194,6 +195,7 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
         vertexBuffer,
         indexBuffer,
         indexCount: indices.length,
+        indexFormat: indices instanceof Uint32Array ? 'uint32' : 'uint16',
       })
     },
 
@@ -256,7 +258,7 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
 
         renderPass.setBindGroup(1, modelBindGroup, [MODEL_UNIFORM_SIZE * i])
         renderPass.setVertexBuffer(0, geo.vertexBuffer)
-        renderPass.setIndexBuffer(geo.indexBuffer, 'uint16')
+        renderPass.setIndexBuffer(geo.indexBuffer, geo.indexFormat)
         renderPass.drawIndexed(geo.indexCount)
       }
 

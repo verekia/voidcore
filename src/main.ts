@@ -1,4 +1,5 @@
 import { createBoxGeometry, createSphereGeometry } from './engine/geometry.ts'
+import { loadGLTF } from './engine/gltf.ts'
 import { Mesh } from './engine/mesh.ts'
 import { Scene } from './engine/scene.ts'
 
@@ -19,6 +20,24 @@ export const main = async (canvas: HTMLCanvasElement) => {
   const sphereId = scene.registerGeometry(sphereGeo)
   const groundId = scene.registerGeometry(groundGeo)
 
+  // Load megaxe mesh from GLB
+  let megaxeId: number | null = null
+  let megaxeColor: [number, number, number, number] | undefined
+  try {
+    const gltf = await loadGLTF('/static-bundle.glb')
+    const megaxeMesh = gltf.meshes.find(m => m.name === 'megaxe')
+    if (megaxeMesh && megaxeMesh.primitives.length > 0) {
+      const prim = megaxeMesh.primitives[0]!
+      megaxeId = scene.registerGeometry(prim.geometry)
+      megaxeColor = prim.color
+      console.log(`Loaded megaxe mesh (${prim.geometry.vertices.length / 6} vertices)`)
+    } else {
+      console.warn('megaxe mesh not found in static-bundle.glb')
+    }
+  } catch (e) {
+    console.warn('Failed to load static-bundle.glb:', e)
+  }
+
   // Ground plane
   scene.add(
     new Mesh({
@@ -28,12 +47,14 @@ export const main = async (canvas: HTMLCanvasElement) => {
     }),
   )
 
-  // Random cubes and spheres
+  // Random cubes, spheres, and megaxes
   const animatedMeshes: Mesh[] = []
-  const entityCount = 4000
+  const entityCount = 1000
 
   for (let i = 0; i < entityCount; i++) {
-    const isSphere = Math.random() > 0.5
+    const roll = Math.random()
+    const isSphere = roll < 0.33
+    const isMegaxe = roll >= 0.33 && roll < 0.66 && megaxeId !== null
     const x = (Math.random() - 0.5) * 30
     const y = (Math.random() - 0.5) * 30
     const z = Math.random() * 5 + 0.5
@@ -42,12 +63,14 @@ export const main = async (canvas: HTMLCanvasElement) => {
     const b = Math.random() * 0.8 + 0.2
 
     const mesh = new Mesh({
-      geometryId: isSphere ? sphereId : boxId,
+      geometryId: isMegaxe ? megaxeId! : isSphere ? sphereId : boxId,
       position: [x, y, z],
-      color: [r, g, b, 1],
-      scale: isSphere
-        ? [0.5 + Math.random(), 0.5 + Math.random(), 0.5 + Math.random()]
-        : [0.5 + Math.random() * 1.5, 0.5 + Math.random() * 1.5, 0.5 + Math.random() * 1.5],
+      color: isMegaxe ? (megaxeColor ?? [r, g, b, 1]) : [r, g, b, 1],
+      scale: isMegaxe
+        ? [1, 1, 1]
+        : isSphere
+          ? [0.5 + Math.random(), 0.5 + Math.random(), 0.5 + Math.random()]
+          : [0.5 + Math.random() * 1.5, 0.5 + Math.random() * 1.5, 0.5 + Math.random() * 1.5],
     })
 
     scene.add(mesh)

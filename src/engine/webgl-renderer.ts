@@ -5,6 +5,7 @@ import type { DrawEntity, Renderer } from './renderer.ts'
 interface GLGeometry {
   vao: WebGLVertexArrayObject
   indexCount: number
+  indexType: GLenum
 }
 
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
@@ -99,7 +100,11 @@ export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
 
       gl.bindVertexArray(null)
 
-      geometries.set(id, { vao, indexCount: indices.length })
+      geometries.set(id, {
+        vao,
+        indexCount: indices.length,
+        indexType: indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT,
+      })
     },
 
     updateCamera(view, projection) {
@@ -140,7 +145,7 @@ export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
         gl.bindBufferBase(gl.UNIFORM_BUFFER, 1, modelUBO)
 
         gl.bindVertexArray(geo.vao)
-        gl.drawElements(gl.TRIANGLES, geo.indexCount, gl.UNSIGNED_SHORT, 0)
+        gl.drawElements(gl.TRIANGLES, geo.indexCount, geo.indexType, 0)
       }
 
       gl.bindVertexArray(null)

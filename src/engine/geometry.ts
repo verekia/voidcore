@@ -1,6 +1,6 @@
 export interface Geometry {
   vertices: Float32Array // [px, py, pz, nx, ny, nz] per vertex
-  indices: Uint16Array
+  indices: Uint16Array | Uint32Array
 }
 
 export function createBoxGeometry(w = 1, h = 1, d = 1): Geometry {

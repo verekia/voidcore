@@ -5,7 +5,7 @@ High-performance WebGPU/WebGL game engine with a C/WASM compute core. Zero depen
 ## Quick Start
 
 ```ts
-import { Scene, Mesh, createBoxGeometry, createSphereGeometry } from 'voidcore'
+import { Scene, Mesh, createBoxGeometry, createSphereGeometry, loadGLTF } from 'voidcore'
 
 const canvas = document.querySelector('canvas')!
 const scene = await Scene.create(canvas)
@@ -64,6 +64,7 @@ requestAnimationFrame(frame)
 - **Draw call sorting** — radix sort by geometry ID in WASM for batching
 - **Lambert lighting** — directional + ambient, per-entity unlit flag
 - **MSAA 4x** — multisample anti-aliasing (WebGPU), canvas antialiasing (WebGL)
+- **glTF 2.0 / GLB import** — load external 3D models with optional Draco mesh compression
 - **Primitive geometry** — box and sphere generators with normals
 - **Z-up right-handed** coordinate system (Blender convention)
 - **Zero-copy JS↔WASM** — typed array views directly into WASM linear memory
@@ -93,6 +94,27 @@ const geoId = scene.registerGeometry(box) // returns geometry ID
 ```
 
 Vertex format: `[px, py, pz, nx, ny, nz]` (position + normal, 24 bytes/vertex).
+
+### glTF / GLB Import
+
+```ts
+import { loadGLTF } from 'voidcore'
+
+const gltf = await loadGLTF('/models/helmet.glb')
+for (const mesh of gltf.meshes) {
+  for (const prim of mesh.primitives) {
+    const geoId = scene.registerGeometry(prim.geometry)
+    scene.add(new Mesh({ geometryId: geoId, color: prim.color }))
+  }
+}
+
+// With custom Draco decoder path
+const gltf2 = await loadGLTF('/models/compressed.glb', {
+  dracoDecoderPath: '/draco-1.5.7/',
+})
+```
+
+Supports glTF 2.0 JSON + external `.bin` buffers, GLB binary, and `KHR_draco_mesh_compression`. Draco decoder is lazy-loaded only when a compressed primitive is encountered. Material `baseColorFactor` is extracted from `pbrMetallicRoughness`. Flat normals are computed when the `NORMAL` attribute is missing.
 
 ### Mesh
 
@@ -148,7 +170,7 @@ Game Code (JS) --> Scene/Mesh/Camera (JS) --> Computation (C/WASM) --> GPU Rende
 ```
 
 - **C/WASM owns**: SoA entity storage, TRS-to-world-matrix transforms, frustum culling, draw sorting, all math (sin/cos via minimax polynomials, WASM SIMD)
-- **JS owns**: GPU device/pipelines/buffers/draw calls, Scene/Mesh/Camera classes, geometry generation
+- **JS owns**: GPU device/pipelines/buffers/draw calls, Scene/Mesh/Camera classes, geometry generation, glTF/GLB import
 - **Matrix format**: column-major mat4, Euler ZXY rotation order
 
 ### Render Pipeline (`scene.render()`)

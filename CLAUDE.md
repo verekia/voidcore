@@ -11,7 +11,7 @@ Game Code (JS) → Scene/Mesh/Camera (JS) → Computation (C/WASM) → GPU Rende
 ```
 
 - **C/WASM owns**: SoA entity storage, TRS→world matrix, frustum culling, draw sorting, all math
-- **JS owns**: GPU device/pipelines/buffers/draw calls, Scene/Mesh/Camera classes, geometry generation
+- **JS owns**: GPU device/pipelines/buffers/draw calls, Scene/Mesh/Camera classes, geometry generation, glTF/GLB import
 - **Coordinate system**: Z-up, right-handed (Blender convention)
 - **Matrix format**: Column-major mat4, Euler ZXY rotation order
 
@@ -55,12 +55,14 @@ src/
     renderer.ts             WebGPU renderer + Renderer interface
     webgl-renderer.ts       WebGL2 fallback renderer
     geometry.ts             createBoxGeometry, createSphereGeometry
+    gltf.ts                 glTF 2.0 / GLB loader with optional Draco mesh compression
     shaders.ts              WGSL shaders (WebGPU)
     webgl-shaders.ts        GLSL 300 es shaders (WebGL2)
     index.ts                Barrel exports
   main.ts                   Demo app (1000 entities, orbit camera, stats overlay)
 public/
   voidcore.wasm             Build artifact (gitignored)
+  draco-1.5.7/              Draco WASM decoder (used by gltf.ts for compressed meshes)
 ```
 
 ## WASM Memory Layout (32 MB fixed, no growth)
@@ -84,7 +86,7 @@ Key exports: `vc_init`, `vc_compute_world_matrices`, `vc_perspective`, `vc_look_
 ## Rendering
 
 - **Lighting**: Lambert diffuse (directional + ambient), per-entity unlit flag
-- **Geometry**: Box and sphere primitives, vertex format `[px, py, pz, nx, ny, nz]` (24 bytes/vertex)
+- **Geometry**: Box and sphere primitives + glTF/GLB import (with optional Draco compression), vertex format `[px, py, pz, nx, ny, nz]` (24 bytes/vertex), supports Uint16 and Uint32 indices
 - **WebGPU**: MSAA 4x, depth24plus, dynamic offset model uniforms (256-byte aligned)
 - **WebGL2**: UBOs for camera/model/light, `antialias: true` canvas
 - **Bind groups**: Group 0 = camera (view + projection), Group 1 = model (world + color + flags), Group 2 = light (direction + color + ambient)
