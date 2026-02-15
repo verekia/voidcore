@@ -39,6 +39,9 @@ export class Scene {
   private lightColor = new Float32Array([1, 1, 1])
   private ambientColor = new Float32Array([0.15, 0.15, 0.15])
 
+  // Bloom
+  private bloomConfig: BloomConfig | null = null
+
   // Stats
   visibleCount = 0
   drawCalls = 0
@@ -125,6 +128,7 @@ export class Scene {
   }
 
   setBloom(config: BloomConfig) {
+    this.bloomConfig = config
     this.renderer.setBloom(config)
   }
 
@@ -256,18 +260,22 @@ export class Scene {
     this.renderer.resize(width, height)
   }
 
-  async switchBackend(canvas: HTMLCanvasElement, backend: Backend) {
-    this.renderer.destroy()
+  setRenderer(canvas: HTMLCanvasElement, renderer: Renderer) {
     this.canvas = canvas
-    this.renderer = await createRenderer(canvas, backend)
+    this.renderer = renderer
 
-    // Re-register all geometries
+    // Re-register all geometries with the new renderer
     for (const [id, reg] of this.geometryRegistry) {
       if (reg.skinned && reg.joints && reg.weights) {
         this.renderer.registerSkinnedGeometry(id, reg.geometry.vertices, reg.geometry.indices, reg.joints, reg.weights)
       } else {
         this.renderer.registerGeometry(id, reg.geometry.vertices, reg.geometry.indices)
       }
+    }
+
+    // Re-apply bloom config
+    if (this.bloomConfig) {
+      this.renderer.setBloom(this.bloomConfig)
     }
   }
 

@@ -1,4 +1,5 @@
 import { loadGLTF } from './engine/gltf.ts'
+import { createRenderer } from './engine/gpu.ts'
 import { Mesh } from './engine/mesh.ts'
 import { OrbitControls } from './engine/orbit-controls.ts'
 import { Scene } from './engine/scene.ts'
@@ -237,12 +238,19 @@ export const main = async (canvas: HTMLCanvasElement) => {
     switching = true
     toggle.textContent = 'Switching...'
     const target: Backend = scene.renderer.backend === 'webgpu' ? 'webgl' : 'webgpu'
+
+    // Fully destroy old renderer before creating anything new
+    scene.destroy()
+    controls.dispose()
+
+    // Create fresh canvas and renderer with zero overlap
     const newCanvas = document.createElement('canvas')
     currentCanvas.replaceWith(newCanvas)
     currentCanvas = newCanvas
-    await scene.switchBackend(newCanvas, target)
+    const newRenderer = await createRenderer(newCanvas, target)
+    scene.setRenderer(newCanvas, newRenderer)
+
     localStorage.setItem('voidcore-backend', target)
-    controls.dispose()
     controls = new OrbitControls(camera, newCanvas)
     resize()
     updateToggle()
