@@ -2,8 +2,11 @@ import { createBoxGeometry, createSphereGeometry } from './engine/geometry.ts'
 import { loadGLTF } from './engine/gltf.ts'
 import { Mesh } from './engine/mesh.ts'
 import { Scene } from './engine/scene.ts'
+import { createSkeleton, createSkinInstance, updateSkinInstance, findBoneNodeIndex } from './engine/skin.ts'
 
+import type { GltfAnimation } from './engine/gltf.ts'
 import type { Backend } from './engine/gpu.ts'
+import type { SkinInstance } from './engine/skin.ts'
 
 export const main = async (canvas: HTMLCanvasElement) => {
   // Create scene (restore saved backend preference, or auto-pick)
@@ -40,6 +43,62 @@ export const main = async (canvas: HTMLCanvasElement) => {
     }
   } catch (e) {
     console.warn('Failed to load static-bundle.glb:', e)
+  }
+
+  // Load player character (skinned mesh)
+  let playerSkinInstance: SkinInstance | undefined
+  let playerAnimations: GltfAnimation[] = []
+  try {
+    const playerGltf = await loadGLTF('/player-bundle.glb')
+    const bodyMesh = playerGltf.meshes.find(m => m.name === 'Body' && m.skinIndex !== undefined)
+
+    if (bodyMesh && bodyMesh.primitives.length > 0) {
+      const prim = bodyMesh.primitives[0]!
+      const skin = playerGltf.skins[bodyMesh.skinIndex!]!
+      const skeleton = createSkeleton(skin, playerGltf.nodeTransforms)
+
+      // Find the Idle animation clip index
+      const idleIdx = playerGltf.animations.findIndex(a => a.name.toLowerCase().includes('idle'))
+      playerSkinInstance = createSkinInstance(skeleton, idleIdx >= 0 ? idleIdx : 0)
+      playerAnimations = playerGltf.animations
+
+      // Register skinned geometry
+      const skinnedGeoId = scene.registerSkinnedGeometry(prim.geometry, prim.skinJoints!, prim.skinWeights!)
+
+      // Add player mesh to scene
+      scene.add(
+        new Mesh({
+          geometryId: skinnedGeoId,
+          position: [0, 0, 0],
+          color: [1, 1, 1, 1],
+          scale: [1, 1, 1],
+          skinInstance: playerSkinInstance,
+        }),
+      )
+
+      console.log(
+        `Loaded player (${prim.geometry.vertices.length / 9} verts, ${skeleton.jointCount} joints, ${playerGltf.animations.length} anims: ${playerGltf.animations.map(a => a.name).join(', ')})`,
+      )
+
+      // Attach megaxe to player's right hand bone
+      if (megaxeId !== null && playerSkinInstance) {
+        const handBoneIdx = findBoneNodeIndex(skeleton, 'Hand.R')
+        scene.add(
+          new Mesh({
+            geometryId: megaxeId,
+            position: [0, 0, 0],
+            color: [1, 1, 1, 1],
+            scale: [1, 1, 1],
+            boneAttachment: { skinInstance: playerSkinInstance, boneNodeIndex: handBoneIdx },
+          }),
+        )
+        console.log(`Attached megaxe to Hand.R bone (node ${handBoneIdx})`)
+      }
+    } else {
+      console.warn('Body mesh not found in player-bundle.glb')
+    }
+  } catch (e) {
+    console.warn('Failed to load player-bundle.glb:', e)
   }
 
   // Ground plane
@@ -147,26 +206,32 @@ export const main = async (canvas: HTMLCanvasElement) => {
   document.body.appendChild(toggle)
 
   // Animation loop
-  let time = 0
+  let lastTime = performance.now()
 
-  const frame = () => {
-    time += 0.016
+  const frame = (now: number) => {
+    const dt = Math.min((now - lastTime) / 1000, 0.05) // cap dt to avoid large jumps
+    lastTime = now
 
     // FPS counter
     frameCount++
-    const now = performance.now()
     if (now - lastFpsTime >= 1000) {
       fps = frameCount
       frameCount = 0
       lastFpsTime = now
     }
 
-    // Orbit camera (Z-up)
-    const orbitRadius = 20
-    const orbitSpeed = 0.2
+    // Update player skin animation
+    if (playerSkinInstance && playerAnimations.length > 0) {
+      updateSkinInstance(playerSkinInstance, playerAnimations, dt)
+    }
+
+    // Orbit camera (Z-up), focus closer to see the player
+    const time = now / 1000
+    const orbitRadius = 8
+    const orbitSpeed = 0.3
     camera.eye[0] = Math.sin(time * orbitSpeed) * orbitRadius
     camera.eye[1] = Math.cos(time * orbitSpeed) * orbitRadius
-    camera.eye[2] = 8 + Math.sin(time * 0.3) * 3
+    camera.eye[2] = 3 + Math.sin(time * 0.3)
     camera.target[0] = 0
     camera.target[1] = 0
     camera.target[2] = 1
@@ -180,7 +245,8 @@ export const main = async (canvas: HTMLCanvasElement) => {
     resize()
     scene.render()
 
-    stats.textContent = `${fps} fps | ${scene.drawCalls} draws | ${scene.visibleCount}/${entityCount + 1} visible`
+    const skinInfo = playerSkinInstance ? ' | skinned' : ''
+    stats.textContent = `${fps} fps | ${scene.drawCalls} draws | ${scene.visibleCount}/${entityCount + 1} visible${skinInfo}`
 
     requestAnimationFrame(frame)
   }

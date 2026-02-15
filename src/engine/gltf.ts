@@ -4,15 +4,49 @@ export interface GLTFPrimitive {
   geometry: Geometry
   color?: [number, number, number, number]
   materialIndices?: Uint8Array
+  skinJoints?: Uint8Array
+  skinWeights?: Float32Array
 }
 
 export interface GLTFMesh {
   name?: string
   primitives: GLTFPrimitive[]
+  skinIndex?: number
+}
+
+export interface GltfSkin {
+  jointNodeIndices: number[]
+  inverseBindMatrices: Float32Array
+}
+
+export interface GltfAnimationChannel {
+  targetNodeIndex: number
+  path: 'translation' | 'rotation' | 'scale'
+  interpolation: string
+  inputTimes: Float32Array
+  outputValues: Float32Array
+}
+
+export interface GltfAnimation {
+  name: string
+  channels: GltfAnimationChannel[]
+  duration: number
+}
+
+export interface GltfNodeTransform {
+  name: string
+  nodeIndex: number
+  parentIndex: number
+  translation: Float32Array
+  rotation: Float32Array
+  scale: Float32Array
 }
 
 export interface GLTFResult {
   meshes: GLTFMesh[]
+  skins: GltfSkin[]
+  animations: GltfAnimation[]
+  nodeTransforms: GltfNodeTransform[]
 }
 
 export interface GLTFOptions {
@@ -28,6 +62,11 @@ interface GLTFJson {
   meshes?: GLTFJsonMesh[]
   materials?: GLTFMaterial[]
   extensionsUsed?: string[]
+  nodes?: GLTFJsonNode[]
+  skins?: GLTFJsonSkin[]
+  animations?: GLTFJsonAnimation[]
+  scenes?: GLTFJsonScene[]
+  scene?: number
 }
 
 interface GLTFAccessor {
@@ -73,6 +112,43 @@ interface GLTFMaterial {
   pbrMetallicRoughness?: {
     baseColorFactor?: [number, number, number, number]
   }
+}
+
+interface GLTFJsonNode {
+  name?: string
+  mesh?: number
+  skin?: number
+  children?: number[]
+  translation?: [number, number, number]
+  rotation?: [number, number, number, number]
+  scale?: [number, number, number]
+}
+
+interface GLTFJsonSkin {
+  joints: number[]
+  inverseBindMatrices?: number
+  skeleton?: number
+}
+
+interface GLTFJsonAnimation {
+  name?: string
+  channels: GLTFJsonAnimChannel[]
+  samplers: GLTFJsonAnimSampler[]
+}
+
+interface GLTFJsonAnimChannel {
+  sampler: number
+  target: { node: number; path: string }
+}
+
+interface GLTFJsonAnimSampler {
+  input: number
+  output: number
+  interpolation?: string
+}
+
+interface GLTFJsonScene {
+  nodes: number[]
 }
 
 // glTF component type constants
@@ -246,6 +322,32 @@ function resolveAccessor(
 
   const data = getTypedArray(buffer, accessor.componentType, byteOffset, totalElements)
   return { data, elementCount: accessor.count, componentCount }
+}
+
+function resolveAccessorFloat32(json: GLTFJson, accessorIndex: number, buffers: ArrayBuffer[]): Float32Array {
+  const result = resolveAccessor(json, accessorIndex, buffers)
+  return result.data instanceof Float32Array ? result.data : new Float32Array(result.data)
+}
+
+function resolveAccessorUint8(json: GLTFJson, accessorIndex: number, buffers: ArrayBuffer[]): Uint8Array {
+  const accessor = json.accessors![accessorIndex]!
+  const bufferView = json.bufferViews![accessor.bufferView!]!
+  const buffer = buffers[bufferView.buffer]!
+  const byteOffset = (bufferView.byteOffset ?? 0) + (accessor.byteOffset ?? 0)
+  const componentCount = getTypeElementCount(accessor.type)
+  const total = accessor.count * componentCount
+
+  if (accessor.componentType === GL_UNSIGNED_BYTE) {
+    return new Uint8Array(buffer, byteOffset, total)
+  }
+  // Unsigned short joints → downconvert to uint8
+  if (accessor.componentType === GL_UNSIGNED_SHORT) {
+    const u16 = new Uint16Array(buffer, byteOffset, total)
+    const out = new Uint8Array(total)
+    for (let i = 0; i < total; i++) out[i] = u16[i]!
+    return out
+  }
+  return new Uint8Array(buffer, byteOffset, total)
 }
 
 function computeFlatNormals(positions: Float32Array, indices: Uint16Array | Uint32Array): Float32Array {
@@ -467,6 +569,19 @@ function parsePrimitive(
   return { positions, normals, indices, vertexCount }
 }
 
+function parseSkinAttributes(
+  json: GLTFJson,
+  primitive: GLTFJsonPrimitive,
+  buffers: ArrayBuffer[],
+): { skinJoints: Uint8Array; skinWeights: Float32Array } | null {
+  if (primitive.attributes.JOINTS_0 === undefined || primitive.attributes.WEIGHTS_0 === undefined) {
+    return null
+  }
+  const skinJoints = resolveAccessorUint8(json, primitive.attributes.JOINTS_0, buffers)
+  const skinWeights = resolveAccessorFloat32(json, primitive.attributes.WEIGHTS_0, buffers)
+  return { skinJoints, skinWeights }
+}
+
 export async function loadGLTF(url: string, options?: GLTFOptions): Promise<GLTFResult> {
   const decoderPath = options?.dracoDecoderPath ?? '/draco-1.5.7/'
   const materialColors = options?.materialColors
@@ -541,10 +656,115 @@ export async function loadGLTF(url: string, options?: GLTFOptions): Promise<GLTF
 
   const usesDraco = json.extensionsUsed?.includes('KHR_draco_mesh_compression') ?? false
 
+  // ── Build node hierarchy ──────────────────────────────────────────
+  const nodes = json.nodes ?? []
+  const nodeTransforms: GltfNodeTransform[] = []
+  const childToParent = new Map<number, number>()
+
+  for (let ni = 0; ni < nodes.length; ni++) {
+    const node = nodes[ni]!
+    if (node.children) {
+      for (const childIdx of node.children) {
+        childToParent.set(childIdx, ni)
+      }
+    }
+  }
+
+  for (let ni = 0; ni < nodes.length; ni++) {
+    const node = nodes[ni]!
+    const t = new Float32Array(3)
+    const r = new Float32Array([0, 0, 0, 1])
+    const s = new Float32Array([1, 1, 1])
+    if (node.translation) {
+      t[0] = node.translation[0]
+      t[1] = node.translation[1]
+      t[2] = node.translation[2]
+    }
+    if (node.rotation) {
+      r[0] = node.rotation[0]
+      r[1] = node.rotation[1]
+      r[2] = node.rotation[2]
+      r[3] = node.rotation[3]
+    }
+    if (node.scale) {
+      s[0] = node.scale[0]
+      s[1] = node.scale[1]
+      s[2] = node.scale[2]
+    }
+    nodeTransforms.push({
+      name: node.name ?? '',
+      nodeIndex: ni,
+      parentIndex: childToParent.get(ni) ?? -1,
+      translation: t,
+      rotation: r,
+      scale: s,
+    })
+  }
+
+  // ── Map mesh index to skin index (via node references) ──────────
+  const meshSkinMap = new Map<number, number>()
+  for (const node of nodes) {
+    if (node.mesh !== undefined && node.skin !== undefined) {
+      meshSkinMap.set(node.mesh, node.skin)
+    }
+  }
+
+  // ── Parse skins ───────────────────────────────────────────────────
+  const skins: GltfSkin[] = []
+  if (json.skins) {
+    for (const skin of json.skins) {
+      const jointNodeIndices: number[] = skin.joints
+      let inverseBindMatrices: Float32Array
+      if (skin.inverseBindMatrices !== undefined) {
+        inverseBindMatrices = resolveAccessorFloat32(json, skin.inverseBindMatrices, buffers)
+      } else {
+        // Identity matrices
+        inverseBindMatrices = new Float32Array(jointNodeIndices.length * 16)
+        for (let j = 0; j < jointNodeIndices.length; j++) {
+          const o = j * 16
+          inverseBindMatrices[o] = 1
+          inverseBindMatrices[o + 5] = 1
+          inverseBindMatrices[o + 10] = 1
+          inverseBindMatrices[o + 15] = 1
+        }
+      }
+      skins.push({ jointNodeIndices, inverseBindMatrices })
+    }
+  }
+
+  // ── Parse animations ──────────────────────────────────────────────
+  const animations: GltfAnimation[] = []
+  if (json.animations) {
+    for (const anim of json.animations) {
+      const channels: GltfAnimationChannel[] = []
+      let duration = 0
+      for (const ch of anim.channels) {
+        const sampler = anim.samplers[ch.sampler]!
+        const inputTimes = resolveAccessorFloat32(json, sampler.input, buffers)
+        const outputValues = resolveAccessorFloat32(json, sampler.output, buffers)
+        const maxTime = inputTimes[inputTimes.length - 1]!
+        if (maxTime > duration) duration = maxTime
+        channels.push({
+          targetNodeIndex: ch.target.node,
+          path: ch.target.path as 'translation' | 'rotation' | 'scale',
+          interpolation: sampler.interpolation ?? 'LINEAR',
+          inputTimes,
+          outputValues,
+        })
+      }
+      animations.push({ name: anim.name ?? '', channels, duration })
+    }
+  }
+
+  // ── Process meshes ────────────────────────────────────────────────
   const meshes: GLTFMesh[] = []
 
-  for (const jsonMesh of json.meshes ?? []) {
+  const jsonMeshes = json.meshes ?? []
+  for (let mi = 0; mi < jsonMeshes.length; mi++) {
+    const jsonMesh = jsonMeshes[mi]!
     const primitives: GLTFPrimitive[] = []
+    const skinIndex = meshSkinMap.get(mi)
+    const hasSkin = skinIndex !== undefined
 
     for (const jsonPrim of jsonMesh.primitives) {
       let positions: Float32Array
@@ -586,11 +806,21 @@ export async function loadGLTF(url: string, options?: GLTFOptions): Promise<GLTF
         }
       }
 
-      primitives.push({ geometry: { vertices, indices }, color, materialIndices: matIndices })
+      // Extract skin attributes if this mesh has a skin
+      const prim: GLTFPrimitive = { geometry: { vertices, indices }, color, materialIndices: matIndices }
+      if (hasSkin) {
+        const skinData = parseSkinAttributes(json, jsonPrim, buffers)
+        if (skinData) {
+          prim.skinJoints = skinData.skinJoints
+          prim.skinWeights = skinData.skinWeights
+        }
+      }
+
+      primitives.push(prim)
     }
 
-    meshes.push({ name: jsonMesh.name, primitives })
+    meshes.push({ name: jsonMesh.name, primitives, skinIndex })
   }
 
-  return { meshes }
+  return { meshes, skins, animations, nodeTransforms }
 }

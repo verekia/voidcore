@@ -69,3 +69,51 @@ void main() {
   fragColor = vec4(finalColor, v_color.a);
 }
 `
+
+export const skinnedVertexShaderGLSL = /* glsl */ `#version 300 es
+precision highp float;
+
+layout(std140) uniform CameraUniforms {
+  mat4 view;
+  mat4 projection;
+} camera;
+
+layout(std140) uniform ModelUniforms {
+  mat4 world;
+  vec4 color;
+  vec4 flags;
+} model;
+
+layout(std140) uniform JointUniforms {
+  mat4 joints[128];
+} skin;
+
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec3 a_normal;
+layout(location = 2) in vec3 a_vertColor;
+layout(location = 3) in uvec4 a_joints;
+layout(location = 4) in vec4 a_weights;
+
+out vec3 v_worldNormal;
+out vec4 v_color;
+out float v_unlit;
+out vec3 v_vertColor;
+
+void main() {
+  mat4 skinMat =
+    a_weights.x * skin.joints[a_joints.x] +
+    a_weights.y * skin.joints[a_joints.y] +
+    a_weights.z * skin.joints[a_joints.z] +
+    a_weights.w * skin.joints[a_joints.w];
+
+  mat4 skinnedWorld = model.world * skinMat;
+  vec4 worldPos = skinnedWorld * vec4(a_position, 1.0);
+  gl_Position = camera.projection * camera.view * worldPos;
+
+  mat3 normalMat = mat3(skinnedWorld);
+  v_worldNormal = normalize(normalMat * a_normal);
+  v_color = model.color;
+  v_unlit = model.flags.x;
+  v_vertColor = a_vertColor;
+}
+`

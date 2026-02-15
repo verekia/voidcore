@@ -1,3 +1,4 @@
+import type { SkinInstance } from './skin.ts'
 import type { WasmCore } from './wasm.ts'
 
 // Flags
@@ -13,6 +14,8 @@ export interface MeshOptions {
   color?: [number, number, number, number]
   visible?: boolean
   unlit?: boolean
+  skinInstance?: SkinInstance
+  boneAttachment?: { skinInstance: SkinInstance; boneNodeIndex: number }
 }
 
 export class Mesh {
@@ -34,8 +37,16 @@ export class Mesh {
   bsphereRadius = 0.5
   bsphereCenterOffset = new Float32Array(3)
 
+  // Skinned mesh data
+  skinInstance?: SkinInstance
+
+  // Bone attachment: attach this mesh to a bone of another skinned mesh
+  boneAttachment?: { skinInstance: SkinInstance; boneNodeIndex: number }
+
   constructor(options: MeshOptions) {
     this.geometryId = options.geometryId
+    this.skinInstance = options.skinInstance
+    this.boneAttachment = options.boneAttachment
     this.initOptions = options
   }
 
