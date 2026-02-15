@@ -1,4 +1,4 @@
-CLANG = /opt/homebrew/opt/llvm/bin/clang
+CLANG ?= /opt/homebrew/opt/llvm/bin/clang
 WASM_OPT = wasm-opt
 CFLAGS = --target=wasm32-unknown-unknown -O3 -flto -msimd128 -nostdlib \
          -Wl,--no-entry -Wl,--export-dynamic -Wl,--import-memory -Wl,--initial-memory=33554432
