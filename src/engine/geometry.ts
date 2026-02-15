@@ -81,8 +81,8 @@ export function createSphereGeometry(radius = 0.5, wSegs = 16, hSegs = 12): Geom
       const a = y * (wSegs + 1) + x
       const b = a + wSegs + 1
 
-      idxs.push(a, b, a + 1)
-      idxs.push(b, b + 1, a + 1)
+      idxs.push(a, a + 1, b)
+      idxs.push(b, a + 1, b + 1)
     }
   }
 
