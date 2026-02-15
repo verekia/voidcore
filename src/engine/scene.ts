@@ -225,15 +225,16 @@ export class Scene {
     dz: number,
     result: RaycastHit,
     meshFilter?: (mesh: Mesh) => boolean,
+    maxT = Infinity,
   ): boolean {
     const { wasm } = this
-    const { f32, u32 } = wasm
+    const { f32 } = wasm
 
     result.hit = false
     result.distance = Infinity
     result.mesh = null
 
-    let closestT = Infinity
+    let closestT = maxT
 
     for (let i = 0; i < this.activeCount; i++) {
       const mesh = this.meshes[i]
@@ -270,30 +271,18 @@ export class Scene {
       if (dirLen < 1e-8) continue
       const localMaxT = closestT * dirLen
 
-      let t: number
-      try {
-        t = wasm.exports.vc_bvh_raycast(bvh.offset, lox, loy, loz, ldx, ldy, ldz, localMaxT, this._rayResultOffset)
-      } catch (e) {
-        console.error('BVH raycast failed:', e, {
-          bvhOffset: bvh.offset,
-          ray: [lox, loy, loz, ldx, ldy, ldz],
-          maxT: localMaxT,
-          resultOff: this._rayResultOffset,
-        })
-        continue
-      }
+      const t = wasm.exports.vc_bvh_raycast(bvh.offset, lox, loy, loz, ldx, ldy, ldz, localMaxT, this._rayResultOffset)
 
       if (t >= 0) {
         const worldT = t / dirLen
         if (worldT < closestT) {
           closestT = worldT
 
-          // Read face index and local normal from result
+          // Read local normal from result (3 floats)
           const rb = this._rayResultOffset / 4
-          const faceIndex = u32[rb]!
-          const lnx = f32[rb + 1]!
-          const lny = f32[rb + 2]!
-          const lnz = f32[rb + 3]!
+          const lnx = f32[rb]!
+          const lny = f32[rb + 1]!
+          const lnz = f32[rb + 2]!
 
           // Transform normal to world space via inverse-transpose: (M^-1)^T * n
           const wnx = f32[ib]! * lnx + f32[ib + 1]! * lny + f32[ib + 2]! * lnz
@@ -309,7 +298,7 @@ export class Scene {
           result.normalX = nLen > 1e-8 ? wnx / nLen : 0
           result.normalY = nLen > 1e-8 ? wny / nLen : 0
           result.normalZ = nLen > 1e-8 ? wnz / nLen : 0
-          result.faceIndex = faceIndex
+          result.faceIndex = 0
           result.mesh = mesh
         }
       }

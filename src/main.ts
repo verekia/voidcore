@@ -19,7 +19,7 @@ import type { Backend } from './engine/gpu.ts'
 import type { Skeleton, SkinInstance } from './engine/skin.ts'
 
 // Grid configuration
-const GRID_SIZE = 30
+const GRID_SIZE = 20
 const GRID_SPACING = 5
 
 // Animation cycling: each character transitions between anims on a staggered timer
@@ -366,11 +366,13 @@ export const main = async (canvas: HTMLCanvasElement) => {
   })
   document.body.appendChild(toggle)
 
+  // Raycast hit result (reused every frame)
+  const rayHit = createRaycastHit()
+  const edenFilter = (m: Mesh) => m === edenMeshRef
+
   // Animation loop
   let lastTime = performance.now()
   let orbitTime = 0
-  const rayHit = createRaycastHit()
-  const edenFilter = edenMeshRef ? (m: Mesh) => m === edenMeshRef : undefined
 
   const frame = (now: number) => {
     const dt = Math.min((now - lastTime) / 1000, 0.05)
@@ -402,7 +404,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
       updateSkinInstance(inst, animations, dt)
     }
 
-    // Orbit characters around spawn points and raycast against Eden
+    // Orbit characters around spawn points + raycast ground clamping
     for (let i = 0; i < totalChars; i++) {
       const angle = orbitTime * orbitSpeeds[i]! + orbitPhases[i]!
       const cx = spawnX[i]! + Math.cos(angle) * ORBIT_RADIUS
@@ -411,12 +413,15 @@ export const main = async (canvas: HTMLCanvasElement) => {
       const body = bodyMeshes[i]!
       body.position[0] = cx
       body.position[1] = cy
-      body.setDirty()
 
-      // Raycast from z=50 downward to find Eden surface
-      if (edenFilter && scene.raycast(cx, cy, 50, 0, 0, -1, rayHit, edenFilter)) {
+      // Raycast downward to find ground (reset Z each frame to avoid stale values on miss)
+      if (edenMeshRef && scene.raycast(cx, cy, 20, 0, 0, -1, rayHit, edenFilter, 50)) {
         body.position[2] = rayHit.pointZ
+      } else {
+        body.position[2] = -40
       }
+
+      body.setDirty()
 
       // Sync weapon position
       const weapon = weaponMeshes[i]

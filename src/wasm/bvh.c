@@ -1,13 +1,12 @@
 #include "bvh.h"
 
-// Alias for BVH code
 #define MEM(type, byte_offset) WASM_PTR(type, byte_offset)
 
-// Inline min/max to avoid LTO lowering __builtin_fminf to libc calls
+// Inline min/max — avoid LTO lowering __builtin_fminf to libc calls
 static inline f32 bvh_min(f32 a, f32 b) { return a < b ? a : b; }
 static inline f32 bvh_max(f32 a, f32 b) { return a > b ? a : b; }
 
-// --- BVH persistent arena (separate from per-frame arena) ---
+// --- BVH persistent arena ---
 
 static u32 bvh_arena_base;
 static u32 bvh_arena_offset;
@@ -32,19 +31,23 @@ void bvh_arena_reset(void) {
   bvh_arena_offset = 0;
 }
 
-// --- BVH node struct (32 bytes, proper types avoid aliasing issues) ---
+// --- BVH node: 32 bytes ---
+// Bounds are stored as [minX, minY, minZ, maxX, maxY, maxZ] so that
+// the slab test can index by precomputed near/far indices directly.
 
 typedef struct {
-  f32 aabb_min[3];
-  f32 aabb_max[3];
-  u32 child_or_offset; // inner: right-child index, leaf: first triangle offset
-  u32 tri_count;       // 0 = inner node, >0 = leaf
+  f32 bounds[6]; // [minX, minY, minZ, maxX, maxY, maxZ]
+  u32 child_or_offset; // inner: right-child node index, leaf: first tri offset
+  u32 meta;            // inner: split axis (0-2), leaf: count | LEAF_FLAG
 } BVHNode;
 
-#define SAH_BINS 12
+#define LEAF_FLAG    0x80000000u
+#define IS_LEAF(n)   ((n)->meta & LEAF_FLAG)
+#define LEAF_COUNT(n) ((n)->meta & ~LEAF_FLAG)
+#define SPLIT_AXIS(n) ((n)->meta)
+
+#define SAH_BINS 32
 #define MAX_LEAF_TRIS 4
-#define TRAVERSAL_COST 1.0f
-#define INTERSECTION_COST 1.0f
 #define BVH_MAX_STACK 64
 
 typedef struct {
@@ -88,28 +91,38 @@ static f32 ray_triangle(const f32* origin, const f32* dir,
   return -1.0f;
 }
 
-// --- Ray-AABB intersection (slab method) ---
+// --- Ray-AABB: slab test with sign-based swap + early axis rejection ---
+// near_idx/far_idx are precomputed per-ray from inv_dir sign:
+//   axis 0: near=0,far=3 (pos dir) or near=3,far=0 (neg dir)
+//   axis 1: near=1,far=4 or near=4,far=1
+//   axis 2: near=2,far=5 or near=5,far=2
 
-static int ray_aabb(const f32* origin, const f32* inv_dir,
-                    const f32* aabb_min, const f32* aabb_max, f32 max_t) {
-  f32 t1, t2, tmin, tmax;
+static inline int ray_aabb(const f32* origin, const f32* inv_dir,
+                            const f32* bounds,
+                            int near_x, int far_x,
+                            int near_y, int far_y,
+                            int near_z, int far_z,
+                            f32 max_t) {
+  f32 tmin = (bounds[near_x] - origin[0]) * inv_dir[0];
+  f32 tmax = (bounds[far_x]  - origin[0]) * inv_dir[0];
 
-  t1 = (aabb_min[0] - origin[0]) * inv_dir[0];
-  t2 = (aabb_max[0] - origin[0]) * inv_dir[0];
-  tmin = bvh_min(t1, t2);
-  tmax = bvh_max(t1, t2);
+  f32 tymin = (bounds[near_y] - origin[1]) * inv_dir[1];
+  f32 tymax = (bounds[far_y]  - origin[1]) * inv_dir[1];
 
-  t1 = (aabb_min[1] - origin[1]) * inv_dir[1];
-  t2 = (aabb_max[1] - origin[1]) * inv_dir[1];
-  tmin = bvh_max(tmin, bvh_min(t1, t2));
-  tmax = bvh_min(tmax, bvh_max(t1, t2));
+  if (tmin > tymax || tymin > tmax) return 0; // early reject after 2 axes
 
-  t1 = (aabb_min[2] - origin[2]) * inv_dir[2];
-  t2 = (aabb_max[2] - origin[2]) * inv_dir[2];
-  tmin = bvh_max(tmin, bvh_min(t1, t2));
-  tmax = bvh_min(tmax, bvh_max(t1, t2));
+  if (tymin > tmin) tmin = tymin;
+  if (tymax < tmax) tmax = tymax;
 
-  return tmax >= bvh_max(tmin, 0.0f) && tmin < max_t;
+  f32 tzmin = (bounds[near_z] - origin[2]) * inv_dir[2];
+  f32 tzmax = (bounds[far_z]  - origin[2]) * inv_dir[2];
+
+  if (tmin > tzmax || tzmin > tmax) return 0;
+
+  if (tzmin > tmin) tmin = tzmin;
+  if (tzmax < tmax) tmax = tzmax;
+
+  return tmax >= 0.0f && tmin < max_t;
 }
 
 // --- SAH-binned BVH build (recursive, depth-first) ---
@@ -133,17 +146,17 @@ static void bvh_build_recursive(BVHNode* nodes, u32* next_node, u32* tri_indices
     }
   }
 
-  node->aabb_min[0] = node_min[0];
-  node->aabb_min[1] = node_min[1];
-  node->aabb_min[2] = node_min[2];
-  node->aabb_max[0] = node_max[0];
-  node->aabb_max[1] = node_max[1];
-  node->aabb_max[2] = node_max[2];
+  node->bounds[0] = node_min[0];
+  node->bounds[1] = node_min[1];
+  node->bounds[2] = node_min[2];
+  node->bounds[3] = node_max[0];
+  node->bounds[4] = node_max[1];
+  node->bounds[5] = node_max[2];
 
   // Leaf if few enough triangles
   if (count <= MAX_LEAF_TRIS) {
     node->child_or_offset = first;
-    node->tri_count = count;
+    node->meta = count | LEAF_FLAG;
     return;
   }
 
@@ -160,7 +173,7 @@ static void bvh_build_recursive(BVHNode* nodes, u32* next_node, u32* tri_indices
   }
 
   // SAH binning: find best axis and split
-  f32 best_cost = (f32)count * INTERSECTION_COST;
+  f32 best_cost = (f32)count;
   int best_axis = -1;
   int best_split = -1;
 
@@ -191,7 +204,7 @@ static void bvh_build_recursive(BVHNode* nodes, u32* next_node, u32* tri_indices
       bins[bin].count++;
     }
 
-    // Sweep from left
+    // Sweep from left: accumulate left-child area and count
     f32 left_area[SAH_BINS - 1];
     u32 left_count[SAH_BINS - 1];
     f32 run_min[3] = {1e30f, 1e30f, 1e30f};
@@ -217,7 +230,7 @@ static void bvh_build_recursive(BVHNode* nodes, u32* next_node, u32* tri_indices
       }
     }
 
-    // Sweep from right
+    // Sweep from right: evaluate SAH cost for each split
     run_min[0] = run_min[1] = run_min[2] = 1e30f;
     run_max[0] = run_max[1] = run_max[2] = -1e30f;
     run_count = 0;
@@ -240,9 +253,9 @@ static void bvh_build_recursive(BVHNode* nodes, u32* next_node, u32* tri_indices
         right_area = 0.0f;
       }
 
-      f32 cost = TRAVERSAL_COST +
-                 left_area[b - 1] * (f32)left_count[b - 1] * INTERSECTION_COST +
-                 right_area * (f32)run_count * INTERSECTION_COST;
+      f32 cost = 1.0f +
+                 left_area[b - 1] * (f32)left_count[b - 1] +
+                 right_area * (f32)run_count;
 
       if (cost < best_cost) {
         best_cost = cost;
@@ -252,10 +265,10 @@ static void bvh_build_recursive(BVHNode* nodes, u32* next_node, u32* tri_indices
     }
   }
 
-  // No good split found: make leaf
+  // No good split found: make leaf regardless of size
   if (best_axis == -1) {
     node->child_or_offset = first;
-    node->tri_count = count;
+    node->meta = count | LEAF_FLAG;
     return;
   }
 
@@ -266,8 +279,7 @@ static void bvh_build_recursive(BVHNode* nodes, u32* next_node, u32* tri_indices
   u32 mid = first;
   u32 end = first + count - 1;
   while (mid <= end) {
-    u32 ti = tri_indices[mid];
-    if (centroids[ti * 3 + best_axis] < split_pos) {
+    if (centroids[tri_indices[mid] * 3 + best_axis] < split_pos) {
       mid++;
     } else {
       u32 tmp = tri_indices[mid];
@@ -283,19 +295,91 @@ static void bvh_build_recursive(BVHNode* nodes, u32* next_node, u32* tri_indices
     left_n = count / 2;
   }
 
-  // Inner node marker
-  node->tri_count = 0;
+  // Inner node: store split axis
+  node->meta = (u32)best_axis;
 
-  // Build left subtree (left child at next_node = ni+1)
+  // Build left subtree (left child is always ni+1 in depth-first order)
   bvh_build_recursive(nodes, next_node, tri_indices, centroids, tri_aabbs,
                        first, left_n);
 
   // Right child index is wherever next_node is now
   node->child_or_offset = *next_node;
 
-  // Build right subtree
   bvh_build_recursive(nodes, next_node, tri_indices, centroids, tri_aabbs,
                        first + left_n, count - left_n);
+}
+
+// --- Shared traversal core ---
+
+static f32 bvh_traverse(const BVHNode* nodes, const u32* tri_indices,
+                          const f32* positions, const u32* indices,
+                          const f32* origin, const f32* dir, const f32* inv_dir,
+                          f32 max_t, f32* out_normal) {
+  // Precompute near/far bound indices from ray direction sign
+  int near_x = inv_dir[0] >= 0.0f ? 0 : 3;
+  int near_y = inv_dir[1] >= 0.0f ? 1 : 4;
+  int near_z = inv_dir[2] >= 0.0f ? 2 : 5;
+  int far_x = 3 - near_x;
+  int far_y = 5 - near_y;
+  int far_z = 7 - near_z;
+
+  f32 closest_t = max_t;
+  int found = 0;
+
+  u32 stack[BVH_MAX_STACK];
+  int stack_top = 0;
+  stack[stack_top++] = 0;
+
+  while (stack_top > 0) {
+    u32 ni = stack[--stack_top];
+    const BVHNode* node = &nodes[ni];
+
+    if (!ray_aabb(origin, inv_dir, node->bounds,
+                  near_x, far_x, near_y, far_y, near_z, far_z, closest_t))
+      continue;
+
+    if (IS_LEAF(node)) {
+      u32 first_tri = node->child_or_offset;
+      u32 tc = LEAF_COUNT(node);
+      for (u32 i = 0; i < tc; i++) {
+        u32 ti = tri_indices[first_tri + i];
+        u32 i0 = indices[ti * 3];
+        u32 i1 = indices[ti * 3 + 1];
+        u32 i2 = indices[ti * 3 + 2];
+
+        f32 normal[3];
+        f32 t = ray_triangle(origin, dir,
+                              &positions[i0 * 3], &positions[i1 * 3], &positions[i2 * 3],
+                              normal);
+        if (t > 0.0f && t < closest_t) {
+          closest_t = t;
+          out_normal[0] = normal[0];
+          out_normal[1] = normal[1];
+          out_normal[2] = normal[2];
+          found = 1;
+        }
+      }
+    } else {
+      // Near-child-first ordering based on split axis
+      u32 axis = SPLIT_AXIS(node);
+      u32 left = ni + 1;
+      u32 right = node->child_or_offset;
+
+      u32 near_child, far_child;
+      if (dir[axis] >= 0.0f) {
+        near_child = left;
+        far_child = right;
+      } else {
+        near_child = right;
+        far_child = left;
+      }
+
+      if (stack_top < BVH_MAX_STACK) stack[stack_top++] = far_child;
+      if (stack_top < BVH_MAX_STACK) stack[stack_top++] = near_child;
+    }
+  }
+
+  return found ? closest_t : -1.0f;
 }
 
 // --- WASM exports ---
@@ -321,12 +405,10 @@ u32 vc_bvh_build(u32 vertices_offset, u32 indices_offset, u32 index_count,
   }
   u32 vertex_count = max_idx + 1;
 
-  // Allocate BVH header (7 u32 values = 28 bytes)
   u32 header_offset = bvh_arena_alloc(7 * 4, 4);
   if (header_offset == 0) return 0;
   u32* header = MEM(u32, header_offset);
 
-  // Extract positions (3 floats per vertex)
   u32 positions_offset_alloc = bvh_arena_alloc(vertex_count * 3 * 4, 4);
   if (positions_offset_alloc == 0) return 0;
   f32* positions = MEM(f32, positions_offset_alloc);
@@ -338,7 +420,6 @@ u32 vc_bvh_build(u32 vertices_offset, u32 indices_offset, u32 index_count,
     positions[i * 3 + 2] = src_verts[i * stride + 2];
   }
 
-  // Copy indices as u32
   u32 indices_alloc = bvh_arena_alloc(index_count * 4, 4);
   if (indices_alloc == 0) return 0;
   u32* indices_u32 = MEM(u32, indices_alloc);
@@ -351,19 +432,16 @@ u32 vc_bvh_build(u32 vertices_offset, u32 indices_offset, u32 index_count,
     for (u32 i = 0; i < index_count; i++) indices_u32[i] = src[i];
   }
 
-  // Allocate BVH nodes (max 2 * tri_count)
   u32 max_nodes = tri_count * 2;
   u32 nodes_alloc = bvh_arena_alloc(max_nodes * (u32)sizeof(BVHNode), 16);
   if (nodes_alloc == 0) return 0;
   BVHNode* nodes = MEM(BVHNode, nodes_alloc);
 
-  // Allocate triangle reorder indices
   u32 tri_indices_alloc = bvh_arena_alloc(tri_count * 4, 4);
   if (tri_indices_alloc == 0) return 0;
   u32* tri_indices = MEM(u32, tri_indices_alloc);
   for (u32 i = 0; i < tri_count; i++) tri_indices[i] = i;
 
-  // Allocate scratch: centroids and tri AABBs
   u32 centroids_alloc = bvh_arena_alloc(tri_count * 3 * 4, 4);
   if (centroids_alloc == 0) return 0;
   f32* centroids = MEM(f32, centroids_alloc);
@@ -372,7 +450,6 @@ u32 vc_bvh_build(u32 vertices_offset, u32 indices_offset, u32 index_count,
   if (tri_aabbs_alloc == 0) return 0;
   f32* tri_aabbs = MEM(f32, tri_aabbs_alloc);
 
-  // Precompute per-triangle centroid and AABB
   for (u32 t = 0; t < tri_count; t++) {
     u32 i0 = indices_u32[t * 3];
     u32 i1 = indices_u32[t * 3 + 1];
@@ -395,12 +472,10 @@ u32 vc_bvh_build(u32 vertices_offset, u32 indices_offset, u32 index_count,
     tbb[5] = bvh_max(v0[2], bvh_max(v1[2], v2[2]));
   }
 
-  // Build BVH recursively
   u32 next_node = 0;
   bvh_build_recursive(nodes, &next_node, tri_indices, centroids, tri_aabbs,
                        0, tri_count);
 
-  // Write header
   header[0] = nodes_alloc;
   header[1] = next_node;
   header[2] = tri_indices_alloc;
@@ -417,79 +492,26 @@ f32 vc_bvh_raycast(u32 bvh_offset, f32 ox, f32 oy, f32 oz,
                     f32 dx, f32 dy, f32 dz, f32 max_t, u32 result_offset) {
   const u32* header = MEM(const u32, bvh_offset);
 
-  u32 nodes_off   = header[0];
-  u32 tri_idx_off = header[2];
-  u32 pos_off     = header[3];
-  u32 idx_off     = header[4];
-
-  const BVHNode* nodes   = MEM(const BVHNode, nodes_off);
-  const u32* tri_indices = MEM(const u32, tri_idx_off);
-  const f32* positions   = MEM(const f32, pos_off);
-  const u32* indices     = MEM(const u32, idx_off);
+  const BVHNode* nodes   = MEM(const BVHNode, header[0]);
+  const u32* tri_indices = MEM(const u32, header[2]);
+  const f32* positions   = MEM(const f32, header[3]);
+  const u32* indices     = MEM(const u32, header[4]);
 
   f32 origin[3] = {ox, oy, oz};
   f32 dir[3] = {dx, dy, dz};
   f32 inv_dir[3] = {1.0f / dx, 1.0f / dy, 1.0f / dz};
+  f32 normal[3] = {0, 0, 0};
 
-  f32 closest_t = max_t;
-  u32 closest_face = 0xFFFFFFFF;
-  f32 closest_normal[3] = {0, 0, 0};
+  f32 t = bvh_traverse(nodes, tri_indices, positions, indices,
+                        origin, dir, inv_dir, max_t, normal);
 
-  // Stack-based BVH traversal
-  u32 stack[BVH_MAX_STACK];
-  int stack_top = 0;
-  stack[stack_top++] = 0;
-
-  while (stack_top > 0) {
-    u32 ni = stack[--stack_top];
-    const BVHNode* node = &nodes[ni];
-
-    if (!ray_aabb(origin, inv_dir, node->aabb_min, node->aabb_max, closest_t))
-      continue;
-
-    if (node->tri_count > 0) {
-      // Leaf: test each triangle
-      u32 first_tri = node->child_or_offset;
-      u32 tc = node->tri_count;
-      for (u32 i = 0; i < tc; i++) {
-        u32 ti = tri_indices[first_tri + i];
-        u32 i0 = indices[ti * 3];
-        u32 i1 = indices[ti * 3 + 1];
-        u32 i2 = indices[ti * 3 + 2];
-
-        f32 normal[3];
-        f32 t = ray_triangle(origin, dir,
-                              &positions[i0 * 3], &positions[i1 * 3], &positions[i2 * 3],
-                              normal);
-        if (t > 0.0f && t < closest_t) {
-          closest_t = t;
-          closest_face = ti;
-          closest_normal[0] = normal[0];
-          closest_normal[1] = normal[1];
-          closest_normal[2] = normal[2];
-        }
-      }
-    } else {
-      // Inner node: push right first so left is tested first
-      u32 right_child = node->child_or_offset;
-      if (stack_top < BVH_MAX_STACK) stack[stack_top++] = right_child;
-      if (stack_top < BVH_MAX_STACK) stack[stack_top++] = ni + 1;
-    }
+  f32* result_f32 = MEM(f32, result_offset);
+  if (t >= 0.0f) {
+    result_f32[0] = normal[0];
+    result_f32[1] = normal[1];
+    result_f32[2] = normal[2];
   }
-
-  // Write result
-  u32* result_u32 = MEM(u32, result_offset);
-  f32* result_f32 = MEM(f32, result_offset + 4);
-
-  if (closest_face != 0xFFFFFFFF) {
-    result_u32[0] = closest_face;
-    result_f32[0] = closest_normal[0];
-    result_f32[1] = closest_normal[1];
-    result_f32[2] = closest_normal[2];
-    return closest_t;
-  }
-
-  return -1.0f;
+  return t;
 }
 
 __attribute__((export_name("vc_bvh_alloc_reset")))
