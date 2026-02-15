@@ -165,7 +165,11 @@ export const main = async (canvas: HTMLCanvasElement) => {
     }
   }
 
-  console.log(`Spawned ${totalChars} characters${megaxeId !== null && handBoneIdx >= 0 ? ' with megaxes' : ''}`)
+  const totalEntities = totalChars + (megaxeId !== null && handBoneIdx >= 0 ? totalChars : 0)
+
+  console.log(
+    `Spawned ${totalChars} characters (${totalEntities} entities)${megaxeId !== null && handBoneIdx >= 0 ? ' with megaxes' : ''}`,
+  )
 
   // Lighting
   scene.setDirectionalLight([0.5, 0.3, -1], [1, 0.95, 0.9])
@@ -272,7 +276,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
     resize()
     scene.render()
 
-    stats.textContent = `${fps} fps | ${scene.drawCalls} draws | ${scene.visibleCount}/${totalChars} visible | ${totalChars} skinned`
+    stats.textContent = `${fps} fps | ${scene.drawCalls} draws | ${scene.visibleCount}/${totalEntities} visible | ${totalChars} skinned`
 
     requestAnimationFrame(frame)
   }
