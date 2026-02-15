@@ -5,7 +5,7 @@ import { Mesh } from './mesh.ts'
 import { loadWasm } from './wasm.ts'
 
 import type { Geometry } from './geometry.ts'
-import type { DrawEntity } from './renderer.ts'
+import type { BloomConfig, DrawEntity } from './renderer.ts'
 import type { WasmCore } from './wasm.ts'
 
 const FLAG_VISIBLE = 0x02
@@ -122,6 +122,10 @@ export class Scene {
 
   setAmbientLight(color: [number, number, number]) {
     this.ambientColor.set(color)
+  }
+
+  setBloom(config: BloomConfig) {
+    this.renderer.setBloom(config)
   }
 
   render() {
@@ -316,7 +320,7 @@ function computeBoundingSphere(vertices: Float32Array): {
   center: Float32Array
   radius: number
 } {
-  const stride = 9 // pos(3) + normal(3) + color(3)
+  const stride = 10 // pos(3) + normal(3) + color(3) + bloom(1)
   const count = vertices.length / stride
   let cx = 0,
     cy = 0,

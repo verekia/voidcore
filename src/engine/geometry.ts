@@ -1,5 +1,5 @@
 export interface Geometry {
-  vertices: Float32Array // [px, py, pz, nx, ny, nz, cr, cg, cb] per vertex
+  vertices: Float32Array // [px, py, pz, nx, ny, nz, cr, cg, cb, bloom] per vertex
   indices: Uint16Array | Uint32Array
 }
 
@@ -8,39 +8,39 @@ export function createBoxGeometry(w = 1, h = 1, d = 1): Geometry {
     hh = h / 2,
     hd = d / 2
 
-  // 6 faces × 4 vertices = 24 vertices, 9 floats each (pos + normal + color)
+  // 6 faces × 4 vertices = 24 vertices, 10 floats each (pos + normal + color + bloom)
   // prettier-ignore
   const vertices = new Float32Array([
     // +X face
-    hw, -hh, -hd,  1, 0, 0,  1, 1, 1,
-    hw,  hh, -hd,  1, 0, 0,  1, 1, 1,
-    hw,  hh,  hd,  1, 0, 0,  1, 1, 1,
-    hw, -hh,  hd,  1, 0, 0,  1, 1, 1,
+    hw, -hh, -hd,  1, 0, 0,  1, 1, 1, 0,
+    hw,  hh, -hd,  1, 0, 0,  1, 1, 1, 0,
+    hw,  hh,  hd,  1, 0, 0,  1, 1, 1, 0,
+    hw, -hh,  hd,  1, 0, 0,  1, 1, 1, 0,
     // -X face
-   -hw, -hh,  hd, -1, 0, 0,  1, 1, 1,
-   -hw,  hh,  hd, -1, 0, 0,  1, 1, 1,
-   -hw,  hh, -hd, -1, 0, 0,  1, 1, 1,
-   -hw, -hh, -hd, -1, 0, 0,  1, 1, 1,
+   -hw, -hh,  hd, -1, 0, 0,  1, 1, 1, 0,
+   -hw,  hh,  hd, -1, 0, 0,  1, 1, 1, 0,
+   -hw,  hh, -hd, -1, 0, 0,  1, 1, 1, 0,
+   -hw, -hh, -hd, -1, 0, 0,  1, 1, 1, 0,
     // +Y face
-   -hw,  hh, -hd,  0, 1, 0,  1, 1, 1,
-    hw,  hh, -hd,  0, 1, 0,  1, 1, 1,
-    hw,  hh,  hd,  0, 1, 0,  1, 1, 1,  // intentional: not -hw
-   -hw,  hh,  hd,  0, 1, 0,  1, 1, 1,
+   -hw,  hh, -hd,  0, 1, 0,  1, 1, 1, 0,
+    hw,  hh, -hd,  0, 1, 0,  1, 1, 1, 0,
+    hw,  hh,  hd,  0, 1, 0,  1, 1, 1, 0,  // intentional: not -hw
+   -hw,  hh,  hd,  0, 1, 0,  1, 1, 1, 0,
     // -Y face
-   -hw, -hh,  hd,  0, -1, 0,  1, 1, 1,
-    hw, -hh,  hd,  0, -1, 0,  1, 1, 1,
-    hw, -hh, -hd,  0, -1, 0,  1, 1, 1,
-   -hw, -hh, -hd,  0, -1, 0,  1, 1, 1,
+   -hw, -hh,  hd,  0, -1, 0,  1, 1, 1, 0,
+    hw, -hh,  hd,  0, -1, 0,  1, 1, 1, 0,
+    hw, -hh, -hd,  0, -1, 0,  1, 1, 1, 0,
+   -hw, -hh, -hd,  0, -1, 0,  1, 1, 1, 0,
     // +Z face
-   -hw, -hh,  hd,  0, 0, 1,  1, 1, 1,
-    hw, -hh,  hd,  0, 0, 1,  1, 1, 1,
-    hw,  hh,  hd,  0, 0, 1,  1, 1, 1,
-   -hw,  hh,  hd,  0, 0, 1,  1, 1, 1,
+   -hw, -hh,  hd,  0, 0, 1,  1, 1, 1, 0,
+    hw, -hh,  hd,  0, 0, 1,  1, 1, 1, 0,
+    hw,  hh,  hd,  0, 0, 1,  1, 1, 1, 0,
+   -hw,  hh,  hd,  0, 0, 1,  1, 1, 1, 0,
     // -Z face
-    hw, -hh, -hd,  0, 0, -1,  1, 1, 1,
-   -hw, -hh, -hd,  0, 0, -1,  1, 1, 1,
-   -hw,  hh, -hd,  0, 0, -1,  1, 1, 1,
-    hw,  hh, -hd,  0, 0, -1,  1, 1, 1,
+    hw, -hh, -hd,  0, 0, -1,  1, 1, 1, 0,
+   -hw, -hh, -hd,  0, 0, -1,  1, 1, 1, 0,
+   -hw,  hh, -hd,  0, 0, -1,  1, 1, 1, 0,
+    hw,  hh, -hd,  0, 0, -1,  1, 1, 1, 0,
   ])
 
   // prettier-ignore
@@ -72,7 +72,7 @@ export function createSphereGeometry(radius = 0.5, wSegs = 16, hSegs = 12): Geom
       const ny = Math.cos(phi)
       const nz = Math.sin(phi) * Math.sin(theta)
 
-      verts.push(nx * radius, ny * radius, nz * radius, nx, ny, nz, 1, 1, 1)
+      verts.push(nx * radius, ny * radius, nz * radius, nx, ny, nz, 1, 1, 1, 0)
     }
   }
 

@@ -1,6 +1,21 @@
-import { shaderSource, skinnedShaderSource } from './shaders.ts'
+import {
+  shaderSource,
+  skinnedShaderSource,
+  mrtShaderSource,
+  mrtSkinnedShaderSource,
+  fullscreenVertexSource,
+  downsampleSource,
+  upsampleSource,
+  compositeSource,
+} from './shaders.ts'
 
 import type { Backend } from './gpu.ts'
+
+export interface BloomConfig {
+  enabled: boolean
+  intensity?: number
+  radius?: number
+}
 
 export interface DrawEntity {
   worldMatrix: Float32Array
@@ -24,6 +39,7 @@ export interface Renderer {
   updateLighting(dir: Float32Array, dirColor: Float32Array, ambient: Float32Array): void
   draw(entities: DrawEntity[], count: number): void
   resize(width: number, height: number): void
+  setBloom(config: BloomConfig): void
   destroy(): void
 }
 
@@ -34,6 +50,8 @@ const MAX_ENTITIES = 4096
 const MAX_JOINTS = 128
 const JOINT_SLOT_BYTES = MAX_JOINTS * 16 * 4 // 128 joints × 16 floats × 4 bytes = 8192
 const MAX_SKINNED_ENTITIES = 1024
+
+const BLOOM_MIP_LEVELS = 5
 
 interface GeometryBuffers {
   vertexBuffer: GPUBuffer
@@ -106,6 +124,26 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
     bindGroupLayouts: [cameraBindGroupLayout, modelBindGroupLayout, lightBindGroupLayout, jointBindGroupLayout],
   })
 
+  // Vertex buffer layouts
+  const staticVertexBufferLayout: GPUVertexBufferLayout = {
+    arrayStride: 40, // 10 floats × 4 bytes
+    attributes: [
+      { shaderLocation: 0, offset: 0, format: 'float32x3' }, // position
+      { shaderLocation: 1, offset: 12, format: 'float32x3' }, // normal
+      { shaderLocation: 2, offset: 24, format: 'float32x3' }, // vertColor
+      { shaderLocation: 3, offset: 36, format: 'float32' }, // bloom
+    ],
+  }
+
+  const skinBufferLayout: GPUVertexBufferLayout = {
+    // Buffer 1: skin data [joints u8x4, weights f32x4] = 20 bytes
+    arrayStride: 20,
+    attributes: [
+      { shaderLocation: 4, offset: 0, format: 'uint8x4' }, // joints
+      { shaderLocation: 5, offset: 4, format: 'float32x4' }, // weights
+    ],
+  }
+
   // Depth texture
   let depthTexture = device.createTexture({
     size: [canvas.width || 1, canvas.height || 1],
@@ -128,16 +166,7 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
     vertex: {
       module: shaderModule,
       entryPoint: 'vs_main',
-      buffers: [
-        {
-          arrayStride: 36, // 9 floats × 4 bytes
-          attributes: [
-            { shaderLocation: 0, offset: 0, format: 'float32x3' },
-            { shaderLocation: 1, offset: 12, format: 'float32x3' },
-            { shaderLocation: 2, offset: 24, format: 'float32x3' },
-          ],
-        },
-      ],
+      buffers: [staticVertexBufferLayout],
     },
     fragment: {
       module: shaderModule,
@@ -155,25 +184,7 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
     vertex: {
       module: skinnedShaderModule,
       entryPoint: 'vs_main',
-      buffers: [
-        {
-          // Buffer 0: same geometry layout
-          arrayStride: 36,
-          attributes: [
-            { shaderLocation: 0, offset: 0, format: 'float32x3' },
-            { shaderLocation: 1, offset: 12, format: 'float32x3' },
-            { shaderLocation: 2, offset: 24, format: 'float32x3' },
-          ],
-        },
-        {
-          // Buffer 1: skin data [joints u8x4, weights f32x4] = 20 bytes
-          arrayStride: 20,
-          attributes: [
-            { shaderLocation: 3, offset: 0, format: 'uint8x4' },
-            { shaderLocation: 4, offset: 4, format: 'float32x4' },
-          ],
-        },
-      ],
+      buffers: [staticVertexBufferLayout, skinBufferLayout],
     },
     fragment: {
       module: skinnedShaderModule,
@@ -233,6 +244,352 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
   const modelData = new Float32Array((MODEL_UNIFORM_SIZE / 4) * MAX_ENTITIES)
 
   const geometries = new Map<number, GeometryBuffers>()
+
+  // ── Bloom state ──────────────────────────────────────────────────
+  let bloomEnabled = false
+  let bloomIntensity = 1.0
+  let bloomRadius = 1.0
+
+  // MRT pipelines (created lazily)
+  let mrtPipeline: GPURenderPipeline | null = null
+  let mrtSkinnedPipeline: GPURenderPipeline | null = null
+
+  // Post-processing pipelines
+  let downsamplePipeline: GPURenderPipeline | null = null
+  let upsamplePipeline: GPURenderPipeline | null = null
+  let compositePipeline: GPURenderPipeline | null = null
+
+  // Bloom textures
+  let msaaBloomTexture: GPUTexture | null = null
+  let resolvedSceneTexture: GPUTexture | null = null
+  let resolvedBloomTexture: GPUTexture | null = null
+  let bloomMipTextures: GPUTexture[] = []
+  let bloomSampler: GPUSampler | null = null
+
+  // Post-processing bind group layouts
+  let ppTextureBindGroupLayout: GPUBindGroupLayout | null = null
+  let upsampleBindGroupLayout: GPUBindGroupLayout | null = null
+  let compositeBindGroupLayout: GPUBindGroupLayout | null = null
+  let fullscreenShaderModule: GPUShaderModule | null = null
+
+  // Bloom uniform buffers
+  let bloomRadiusBuffer: GPUBuffer | null = null
+  let bloomIntensityBuffer: GPUBuffer | null = null
+
+  // Pre-cached bind groups (recreated on resize)
+  let downsampleBindGroups: GPUBindGroup[] = []
+  let upsampleBindGroups: GPUBindGroup[] = []
+  let compositeBindGroup: GPUBindGroup | null = null
+
+  function createBloomResources() {
+    const w = canvas.width || 1
+    const h = canvas.height || 1
+
+    // Sampler
+    if (!bloomSampler) {
+      bloomSampler = device.createSampler({
+        magFilter: 'linear',
+        minFilter: 'linear',
+        addressModeU: 'clamp-to-edge',
+        addressModeV: 'clamp-to-edge',
+      })
+    }
+
+    // Uniform buffers
+    if (!bloomRadiusBuffer) {
+      bloomRadiusBuffer = device.createBuffer({
+        size: 4,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      })
+    }
+    if (!bloomIntensityBuffer) {
+      bloomIntensityBuffer = device.createBuffer({
+        size: 4,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      })
+    }
+
+    // Destroy old textures
+    msaaBloomTexture?.destroy()
+    resolvedSceneTexture?.destroy()
+    resolvedBloomTexture?.destroy()
+    for (const t of bloomMipTextures) t.destroy()
+
+    // MSAA bloom texture (second MRT target)
+    msaaBloomTexture = device.createTexture({
+      size: [w, h],
+      format,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      sampleCount: 4,
+    })
+
+    // Resolved textures (1x)
+    resolvedSceneTexture = device.createTexture({
+      size: [w, h],
+      format,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    })
+    resolvedBloomTexture = device.createTexture({
+      size: [w, h],
+      format,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    })
+
+    // Mip chain textures for bloom blur
+    bloomMipTextures = []
+    let mw = Math.max(1, w >> 1)
+    let mh = Math.max(1, h >> 1)
+    for (let i = 0; i < BLOOM_MIP_LEVELS; i++) {
+      bloomMipTextures.push(
+        device.createTexture({
+          size: [mw, mh],
+          format,
+          usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+        }),
+      )
+      mw = Math.max(1, mw >> 1)
+      mh = Math.max(1, mh >> 1)
+    }
+
+    rebuildBloomBindGroups()
+  }
+
+  function rebuildBloomBindGroups() {
+    if (!ppTextureBindGroupLayout || !upsampleBindGroupLayout || !compositeBindGroupLayout) return
+    if (!bloomSampler || !resolvedSceneTexture || !resolvedBloomTexture) return
+
+    // Downsample bind groups: mip[0] reads from resolvedBloomTexture, mip[i] reads from mip[i-1]
+    downsampleBindGroups = []
+    for (let i = 0; i < BLOOM_MIP_LEVELS; i++) {
+      const srcTexture = i === 0 ? resolvedBloomTexture : bloomMipTextures[i - 1]!
+      downsampleBindGroups.push(
+        device.createBindGroup({
+          layout: ppTextureBindGroupLayout,
+          entries: [
+            { binding: 0, resource: srcTexture.createView() },
+            { binding: 1, resource: bloomSampler },
+          ],
+        }),
+      )
+    }
+
+    // Upsample bind groups: going from smallest mip back up
+    upsampleBindGroups = []
+    for (let i = BLOOM_MIP_LEVELS - 1; i >= 0; i--) {
+      upsampleBindGroups.push(
+        device.createBindGroup({
+          layout: upsampleBindGroupLayout,
+          entries: [
+            { binding: 0, resource: bloomMipTextures[i]!.createView() },
+            { binding: 1, resource: bloomSampler },
+            { binding: 2, resource: { buffer: bloomRadiusBuffer! } },
+          ],
+        }),
+      )
+    }
+
+    // Composite bind group
+    // The upsample chain writes progressively back up. The final result is in mip[0].
+    compositeBindGroup = device.createBindGroup({
+      layout: compositeBindGroupLayout,
+      entries: [
+        { binding: 0, resource: resolvedSceneTexture.createView() },
+        { binding: 1, resource: bloomMipTextures[0]!.createView() },
+        { binding: 2, resource: bloomSampler },
+        { binding: 3, resource: { buffer: bloomIntensityBuffer! } },
+      ],
+    })
+  }
+
+  function ensureBloomPipelines() {
+    if (mrtPipeline) return
+
+    // MRT shader modules
+    const mrtModule = device.createShaderModule({ code: mrtShaderSource })
+    const mrtSkinnedModule = device.createShaderModule({ code: mrtSkinnedShaderSource })
+    fullscreenShaderModule = device.createShaderModule({ code: fullscreenVertexSource })
+
+    // MRT pipelines (2 color targets)
+    const mrtTargets: GPUColorTargetState[] = [{ format }, { format }]
+
+    mrtPipeline = device.createRenderPipeline({
+      layout: pipelineLayout,
+      vertex: {
+        module: mrtModule,
+        entryPoint: 'vs_main',
+        buffers: [staticVertexBufferLayout],
+      },
+      fragment: {
+        module: mrtModule,
+        entryPoint: 'fs_main',
+        targets: mrtTargets,
+      },
+      primitive: { topology: 'triangle-list', cullMode: 'back' },
+      depthStencil: { depthWriteEnabled: true, depthCompare: 'less', format: 'depth24plus' },
+      multisample: { count: 4 },
+    })
+
+    mrtSkinnedPipeline = device.createRenderPipeline({
+      layout: skinnedPipelineLayout,
+      vertex: {
+        module: mrtSkinnedModule,
+        entryPoint: 'vs_main',
+        buffers: [staticVertexBufferLayout, skinBufferLayout],
+      },
+      fragment: {
+        module: mrtSkinnedModule,
+        entryPoint: 'fs_main',
+        targets: mrtTargets,
+      },
+      primitive: { topology: 'triangle-list', cullMode: 'back' },
+      depthStencil: { depthWriteEnabled: true, depthCompare: 'less', format: 'depth24plus' },
+      multisample: { count: 4 },
+    })
+
+    // Post-processing bind group layouts
+    ppTextureBindGroupLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+      ],
+    })
+
+    upsampleBindGroupLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+      ],
+    })
+
+    compositeBindGroupLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+      ],
+    })
+
+    // Downsample pipeline
+    const downsampleModule = device.createShaderModule({ code: downsampleSource })
+    const downsampleLayout = device.createPipelineLayout({ bindGroupLayouts: [ppTextureBindGroupLayout] })
+    downsamplePipeline = device.createRenderPipeline({
+      layout: downsampleLayout,
+      vertex: { module: fullscreenShaderModule, entryPoint: 'vs_main' },
+      fragment: { module: downsampleModule, entryPoint: 'fs_main', targets: [{ format }] },
+    })
+
+    // Upsample pipeline (additive blending)
+    const upsampleModule = device.createShaderModule({ code: upsampleSource })
+    const upsampleLayout = device.createPipelineLayout({ bindGroupLayouts: [upsampleBindGroupLayout] })
+    upsamplePipeline = device.createRenderPipeline({
+      layout: upsampleLayout,
+      vertex: { module: fullscreenShaderModule, entryPoint: 'vs_main' },
+      fragment: {
+        module: upsampleModule,
+        entryPoint: 'fs_main',
+        targets: [
+          {
+            format,
+            blend: {
+              color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+              alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+            },
+          },
+        ],
+      },
+    })
+
+    // Composite pipeline
+    const compositeModule = device.createShaderModule({ code: compositeSource })
+    const compositeLayout = device.createPipelineLayout({ bindGroupLayouts: [compositeBindGroupLayout] })
+    compositePipeline = device.createRenderPipeline({
+      layout: compositeLayout,
+      vertex: { module: fullscreenShaderModule, entryPoint: 'vs_main' },
+      fragment: { module: compositeModule, entryPoint: 'fs_main', targets: [{ format }] },
+    })
+  }
+
+  function uploadModelUniforms(entities: DrawEntity[], count: number) {
+    for (let i = 0; i < count; i++) {
+      const entity = entities[i]!
+      const base = (MODEL_UNIFORM_SIZE / 4) * i
+      modelData.set(entity.worldMatrix, base)
+      modelData.set(entity.color, base + 16)
+      modelData[base + 20] = entity.unlit ? 1.0 : 0.0
+    }
+    device.queue.writeBuffer(modelBuffer, 0, modelData.buffer, 0, MODEL_UNIFORM_SIZE * count)
+  }
+
+  function uploadJointMatrices(entities: DrawEntity[], count: number): Map<number, number> {
+    let skinSlot = 0
+    const skinSlotMap = new Map<number, number>()
+    for (let i = 0; i < count; i++) {
+      const entity = entities[i]!
+      if (!entity.jointMatrices) continue
+      const geo = geometries.get(entity.geometryId)
+      if (!geo?.skinned) continue
+      device.queue.writeBuffer(
+        jointBuffer,
+        skinSlot * JOINT_SLOT_BYTES,
+        entity.jointMatrices.buffer as ArrayBuffer,
+        entity.jointMatrices.byteOffset,
+        entity.jointMatrices.byteLength,
+      )
+      skinSlotMap.set(i, skinSlot)
+      skinSlot++
+    }
+    return skinSlotMap
+  }
+
+  function drawEntitiesOnPass(
+    renderPass: GPURenderPassEncoder,
+    entities: DrawEntity[],
+    count: number,
+    skinSlotMap: Map<number, number>,
+    useMrt: boolean,
+  ) {
+    const staticPipe = useMrt ? mrtPipeline! : pipeline
+    const skinnedPipe = useMrt ? mrtSkinnedPipeline! : skinnedPipeline
+
+    // Draw non-skinned entities
+    renderPass.setPipeline(staticPipe)
+    renderPass.setBindGroup(0, cameraBindGroup)
+    renderPass.setBindGroup(2, lightBindGroup)
+
+    for (let i = 0; i < count; i++) {
+      const entity = entities[i]!
+      const geo = geometries.get(entity.geometryId)
+      if (!geo || geo.skinned) continue
+
+      renderPass.setBindGroup(1, modelBindGroup, [MODEL_UNIFORM_SIZE * i])
+      renderPass.setVertexBuffer(0, geo.vertexBuffer)
+      renderPass.setIndexBuffer(geo.indexBuffer, geo.indexFormat)
+      renderPass.drawIndexed(geo.indexCount)
+    }
+
+    // Draw skinned entities
+    if (skinSlotMap.size > 0) {
+      renderPass.setPipeline(skinnedPipe)
+      renderPass.setBindGroup(0, cameraBindGroup)
+      renderPass.setBindGroup(2, lightBindGroup)
+
+      for (let i = 0; i < count; i++) {
+        const slot = skinSlotMap.get(i)
+        if (slot === undefined) continue
+        const entity = entities[i]!
+        const geo = geometries.get(entity.geometryId)!
+
+        renderPass.setBindGroup(1, modelBindGroup, [MODEL_UNIFORM_SIZE * i])
+        renderPass.setBindGroup(3, jointBindGroup, [slot * JOINT_SLOT_BYTES])
+        renderPass.setVertexBuffer(0, geo.vertexBuffer)
+        renderPass.setVertexBuffer(1, geo.skinBuffer!)
+        renderPass.setIndexBuffer(geo.indexBuffer, geo.indexFormat)
+        renderPass.drawIndexed(geo.indexCount)
+      }
+    }
+  }
 
   const renderer: Renderer = {
     backend: 'webgpu',
@@ -327,45 +684,60 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
     },
 
     draw(entities, count) {
-      // Pack model uniforms for all entities
-      for (let i = 0; i < count; i++) {
-        const entity = entities[i]!
-        const base = (MODEL_UNIFORM_SIZE / 4) * i
-        modelData.set(entity.worldMatrix, base)
-        modelData.set(entity.color, base + 16)
-        modelData[base + 20] = entity.unlit ? 1.0 : 0.0
-      }
-      device.queue.writeBuffer(modelBuffer, 0, modelData.buffer, 0, MODEL_UNIFORM_SIZE * count)
+      uploadModelUniforms(entities, count)
+      const skinSlotMap = uploadJointMatrices(entities, count)
 
-      // Upload joint matrices for skinned entities
-      let skinSlot = 0
-      const skinSlotMap = new Map<number, number>()
-      for (let i = 0; i < count; i++) {
-        const entity = entities[i]!
-        if (!entity.jointMatrices) continue
-        const geo = geometries.get(entity.geometryId)
-        if (!geo?.skinned) continue
-        device.queue.writeBuffer(
-          jointBuffer,
-          skinSlot * JOINT_SLOT_BYTES,
-          entity.jointMatrices.buffer as ArrayBuffer,
-          entity.jointMatrices.byteOffset,
-          entity.jointMatrices.byteLength,
-        )
-        skinSlotMap.set(i, skinSlot)
-        skinSlot++
+      if (!bloomEnabled) {
+        // ── Original non-bloom path ──
+        const commandEncoder = device.createCommandEncoder()
+        const colorView = msaaTexture.createView()
+        const resolveTarget = context.getCurrentTexture().createView()
+
+        const renderPass = commandEncoder.beginRenderPass({
+          colorAttachments: [
+            {
+              view: colorView,
+              resolveTarget,
+              clearValue: { r: 0.1, g: 0.1, b: 0.1, a: 1 },
+              loadOp: 'clear',
+              storeOp: 'discard',
+            },
+          ],
+          depthStencilAttachment: {
+            view: depthTexture.createView(),
+            depthClearValue: 1.0,
+            depthLoadOp: 'clear',
+            depthStoreOp: 'discard',
+          },
+        })
+
+        drawEntitiesOnPass(renderPass, entities, count, skinSlotMap, false)
+        renderPass.end()
+        device.queue.submit([commandEncoder.finish()])
+        return
       }
+
+      // ── Bloom MRT path ──
+      // Update bloom uniforms
+      device.queue.writeBuffer(bloomRadiusBuffer!, 0, new Float32Array([bloomRadius]))
+      device.queue.writeBuffer(bloomIntensityBuffer!, 0, new Float32Array([bloomIntensity]))
 
       const commandEncoder = device.createCommandEncoder()
-      const colorView = msaaTexture.createView()
-      const resolveTarget = context.getCurrentTexture().createView()
 
-      const renderPass = commandEncoder.beginRenderPass({
+      // 1. MRT render pass → MSAA scene + MSAA bloom → resolve to 1x textures
+      const mrtPass = commandEncoder.beginRenderPass({
         colorAttachments: [
           {
-            view: colorView,
-            resolveTarget,
+            view: msaaTexture.createView(),
+            resolveTarget: resolvedSceneTexture!.createView(),
             clearValue: { r: 0.1, g: 0.1, b: 0.1, a: 1 },
+            loadOp: 'clear',
+            storeOp: 'discard',
+          },
+          {
+            view: msaaBloomTexture!.createView(),
+            resolveTarget: resolvedBloomTexture!.createView(),
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
             loadOp: 'clear',
             storeOp: 'discard',
           },
@@ -378,44 +750,64 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
         },
       })
 
-      // Draw non-skinned entities
-      renderPass.setPipeline(pipeline)
-      renderPass.setBindGroup(0, cameraBindGroup)
-      renderPass.setBindGroup(2, lightBindGroup)
+      drawEntitiesOnPass(mrtPass, entities, count, skinSlotMap, true)
+      mrtPass.end()
 
-      for (let i = 0; i < count; i++) {
-        const entity = entities[i]!
-        const geo = geometries.get(entity.geometryId)
-        if (!geo || geo.skinned) continue
-
-        renderPass.setBindGroup(1, modelBindGroup, [MODEL_UNIFORM_SIZE * i])
-        renderPass.setVertexBuffer(0, geo.vertexBuffer)
-        renderPass.setIndexBuffer(geo.indexBuffer, geo.indexFormat)
-        renderPass.drawIndexed(geo.indexCount)
+      // 2. Downsample bloom through mip chain
+      for (let i = 0; i < BLOOM_MIP_LEVELS; i++) {
+        const dsPass = commandEncoder.beginRenderPass({
+          colorAttachments: [
+            {
+              view: bloomMipTextures[i]!.createView(),
+              clearValue: { r: 0, g: 0, b: 0, a: 0 },
+              loadOp: 'clear',
+              storeOp: 'store',
+            },
+          ],
+        })
+        dsPass.setPipeline(downsamplePipeline!)
+        dsPass.setBindGroup(0, downsampleBindGroups[i]!)
+        dsPass.draw(3)
+        dsPass.end()
       }
 
-      // Draw skinned entities
-      if (skinSlot > 0) {
-        renderPass.setPipeline(skinnedPipeline)
-        renderPass.setBindGroup(0, cameraBindGroup)
-        renderPass.setBindGroup(2, lightBindGroup)
-
-        for (let i = 0; i < count; i++) {
-          const slot = skinSlotMap.get(i)
-          if (slot === undefined) continue
-          const entity = entities[i]!
-          const geo = geometries.get(entity.geometryId)!
-
-          renderPass.setBindGroup(1, modelBindGroup, [MODEL_UNIFORM_SIZE * i])
-          renderPass.setBindGroup(3, jointBindGroup, [slot * JOINT_SLOT_BYTES])
-          renderPass.setVertexBuffer(0, geo.vertexBuffer)
-          renderPass.setVertexBuffer(1, geo.skinBuffer!)
-          renderPass.setIndexBuffer(geo.indexBuffer, geo.indexFormat)
-          renderPass.drawIndexed(geo.indexCount)
-        }
+      // 3. Upsample bloom back up the mip chain (additive blend)
+      // Go from smallest mip (BLOOM_MIP_LEVELS-1) upward to mip 0
+      // upsampleBindGroups[0] reads from mip[BLOOM_MIP_LEVELS-1], renders to mip[BLOOM_MIP_LEVELS-2]
+      for (let i = 0; i < BLOOM_MIP_LEVELS - 1; i++) {
+        const targetMipIdx = BLOOM_MIP_LEVELS - 2 - i
+        const usPass = commandEncoder.beginRenderPass({
+          colorAttachments: [
+            {
+              view: bloomMipTextures[targetMipIdx]!.createView(),
+              loadOp: 'load',
+              storeOp: 'store',
+            },
+          ],
+        })
+        usPass.setPipeline(upsamplePipeline!)
+        usPass.setBindGroup(0, upsampleBindGroups[i]!)
+        usPass.draw(3)
+        usPass.end()
       }
 
-      renderPass.end()
+      // 4. Composite scene + bloom → canvas
+      const canvasView = context.getCurrentTexture().createView()
+      const compPass = commandEncoder.beginRenderPass({
+        colorAttachments: [
+          {
+            view: canvasView,
+            loadOp: 'clear',
+            storeOp: 'store',
+            clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          },
+        ],
+      })
+      compPass.setPipeline(compositePipeline!)
+      compPass.setBindGroup(0, compositeBindGroup!)
+      compPass.draw(3)
+      compPass.end()
+
       device.queue.submit([commandEncoder.finish()])
     },
 
@@ -435,6 +827,19 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
         usage: GPUTextureUsage.RENDER_ATTACHMENT,
         sampleCount: 4,
       })
+      if (bloomEnabled) {
+        createBloomResources()
+      }
+    },
+
+    setBloom(config: BloomConfig) {
+      bloomEnabled = config.enabled
+      bloomIntensity = config.intensity ?? 1.0
+      bloomRadius = config.radius ?? 1.0
+      if (bloomEnabled) {
+        ensureBloomPipelines()
+        createBloomResources()
+      }
     },
 
     destroy() {
@@ -444,6 +849,12 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
       jointBuffer.destroy()
       depthTexture.destroy()
       msaaTexture.destroy()
+      msaaBloomTexture?.destroy()
+      resolvedSceneTexture?.destroy()
+      resolvedBloomTexture?.destroy()
+      for (const t of bloomMipTextures) t.destroy()
+      bloomRadiusBuffer?.destroy()
+      bloomIntensityBuffer?.destroy()
       for (const geo of geometries.values()) {
         geo.vertexBuffer.destroy()
         geo.indexBuffer.destroy()

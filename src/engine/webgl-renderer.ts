@@ -1,6 +1,15 @@
-import { vertexShaderGLSL, fragmentShaderGLSL, skinnedVertexShaderGLSL } from './webgl-shaders.ts'
+import {
+  vertexShaderGLSL,
+  fragmentShaderGLSL,
+  skinnedVertexShaderGLSL,
+  mrtFragmentShaderGLSL,
+  fullscreenVertexGLSL,
+  downsampleFragmentGLSL,
+  upsampleFragmentGLSL,
+  compositeFragmentGLSL,
+} from './webgl-shaders.ts'
 
-import type { DrawEntity, Renderer } from './renderer.ts'
+import type { BloomConfig, DrawEntity, Renderer } from './renderer.ts'
 
 interface GLGeometry {
   vao: WebGLVertexArrayObject
@@ -39,6 +48,7 @@ function createProgram(gl: WebGL2RenderingContext, vsSource: string, fsSource: s
 
 const MAX_JOINTS = 128
 const JOINT_UBO_SIZE = MAX_JOINTS * 64 // 128 mat4 × 64 bytes each = 8192 bytes
+const BLOOM_MIP_LEVELS = 5
 
 export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
   const gl = canvas.getContext('webgl2', { antialias: true })!
@@ -96,57 +106,73 @@ export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
   const geometries = new Map<number, GLGeometry>()
   const modelData = new Float32Array(24) // mat4(16) + vec4(4) + vec4(4)
 
-  const renderer: Renderer = {
-    backend: 'webgl',
+  // Fullscreen triangle VAO (no attributes, vertex_index based)
+  const fullscreenVAO = gl.createVertexArray()!
 
-    registerGeometry(id, vertices, indices) {
-      const vao = gl.createVertexArray()!
-      gl.bindVertexArray(vao)
+  // ── Bloom state ──────────────────────────────────────────────────
+  let bloomEnabled = false
+  let bloomIntensity = 1.0
+  let bloomRadius = 1.0
 
-      const vbo = gl.createBuffer()!
-      gl.bindBuffer(gl.ARRAY_BUFFER, vbo)
-      gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW)
+  // MRT programs (created lazily)
+  let mrtProgram: WebGLProgram | null = null
+  let mrtSkinnedProgram: WebGLProgram | null = null
 
-      // position
-      gl.enableVertexAttribArray(0)
-      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 36, 0)
-      // normal
-      gl.enableVertexAttribArray(1)
-      gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 36, 12)
-      // vertex color
-      gl.enableVertexAttribArray(2)
-      gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 36, 24)
+  // Post-processing programs
+  let downsampleProgram: WebGLProgram | null = null
+  let upsampleProgram: WebGLProgram | null = null
+  let compositeProgram: WebGLProgram | null = null
 
-      const ebo = gl.createBuffer()!
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo)
-      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW)
+  // Bloom FBOs and textures
+  let mrtFBO: WebGLFramebuffer | null = null
+  let mrtColorRB: WebGLRenderbuffer | null = null
+  let mrtBloomRB: WebGLRenderbuffer | null = null
+  let mrtDepthRB: WebGLRenderbuffer | null = null
 
-      gl.bindVertexArray(null)
+  let resolveSceneFBO: WebGLFramebuffer | null = null
+  let resolveBloomFBO: WebGLFramebuffer | null = null
+  let resolvedSceneTexture: WebGLTexture | null = null
+  let resolvedBloomTexture: WebGLTexture | null = null
 
-      geometries.set(id, {
-        vao,
-        indexCount: indices.length,
-        indexType: indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT,
-        skinned: false,
-      })
-    },
+  let bloomMipFBOs: WebGLFramebuffer[] = []
+  let bloomMipTextures: WebGLTexture[] = []
 
-    registerSkinnedGeometry(id, vertices, indices, joints, weights) {
-      const vao = gl.createVertexArray()!
-      gl.bindVertexArray(vao)
+  // Uniform locations (cached)
+  let uDownsampleInput: WebGLUniformLocation | null = null
+  let uUpsampleInput: WebGLUniformLocation | null = null
+  let uUpsampleRadius: WebGLUniformLocation | null = null
+  let uCompositeScene: WebGLUniformLocation | null = null
+  let uCompositeBloom: WebGLUniformLocation | null = null
+  let uCompositeIntensity: WebGLUniformLocation | null = null
 
-      // Buffer 0: geometry [pos, normal, vertColor] = 36 bytes
-      const vbo = gl.createBuffer()!
-      gl.bindBuffer(gl.ARRAY_BUFFER, vbo)
-      gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW)
+  let currentWidth = canvas.width || 1
+  let currentHeight = canvas.height || 1
 
-      gl.enableVertexAttribArray(0)
-      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 36, 0)
-      gl.enableVertexAttribArray(1)
-      gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 36, 12)
-      gl.enableVertexAttribArray(2)
-      gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 36, 24)
+  function setupVAO(
+    vao: WebGLVertexArrayObject,
+    vertices: Float32Array,
+    indices: Uint16Array | Uint32Array,
+    skinned: boolean,
+    joints?: Uint8Array,
+    weights?: Float32Array,
+  ) {
+    gl.bindVertexArray(vao)
 
+    // Buffer 0: geometry [pos, normal, vertColor, bloom] = 40 bytes
+    const vbo = gl.createBuffer()!
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo)
+    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW)
+
+    gl.enableVertexAttribArray(0)
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 40, 0)
+    gl.enableVertexAttribArray(1)
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 40, 12)
+    gl.enableVertexAttribArray(2)
+    gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 40, 24)
+    gl.enableVertexAttribArray(3)
+    gl.vertexAttribPointer(3, 1, gl.FLOAT, false, 40, 36)
+
+    if (skinned && joints && weights) {
       // Buffer 1: skin data [joints u8x4, weights f32x4] = 20 bytes
       const vertexCount = joints.length / 4
       const skinBuf = new ArrayBuffer(vertexCount * 20)
@@ -168,18 +194,193 @@ export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.bufferData(gl.ARRAY_BUFFER, skinBuf, gl.STATIC_DRAW)
 
       // joints as integer attribute (uvec4)
-      gl.enableVertexAttribArray(3)
-      gl.vertexAttribIPointer(3, 4, gl.UNSIGNED_BYTE, 20, 0)
-      // weights as float attribute (vec4)
       gl.enableVertexAttribArray(4)
-      gl.vertexAttribPointer(4, 4, gl.FLOAT, false, 20, 4)
+      gl.vertexAttribIPointer(4, 4, gl.UNSIGNED_BYTE, 20, 0)
+      // weights as float attribute (vec4)
+      gl.enableVertexAttribArray(5)
+      gl.vertexAttribPointer(5, 4, gl.FLOAT, false, 20, 4)
+    }
 
-      const ebo = gl.createBuffer()!
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo)
-      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW)
+    const ebo = gl.createBuffer()!
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo)
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW)
 
-      gl.bindVertexArray(null)
+    gl.bindVertexArray(null)
+  }
 
+  function ensureBloomPrograms() {
+    if (mrtProgram) return
+
+    // MRT programs (use MRT fragment shader)
+    mrtProgram = createProgram(gl, vertexShaderGLSL, mrtFragmentShaderGLSL)
+    const mrtCameraBlockIdx = gl.getUniformBlockIndex(mrtProgram, 'CameraUniforms')
+    const mrtModelBlockIdx = gl.getUniformBlockIndex(mrtProgram, 'ModelUniforms')
+    const mrtLightBlockIdx = gl.getUniformBlockIndex(mrtProgram, 'LightUniforms')
+    gl.uniformBlockBinding(mrtProgram, mrtCameraBlockIdx, 0)
+    gl.uniformBlockBinding(mrtProgram, mrtModelBlockIdx, 1)
+    gl.uniformBlockBinding(mrtProgram, mrtLightBlockIdx, 2)
+
+    mrtSkinnedProgram = createProgram(gl, skinnedVertexShaderGLSL, mrtFragmentShaderGLSL)
+    const mrtSkCameraBlockIdx = gl.getUniformBlockIndex(mrtSkinnedProgram, 'CameraUniforms')
+    const mrtSkModelBlockIdx = gl.getUniformBlockIndex(mrtSkinnedProgram, 'ModelUniforms')
+    const mrtSkLightBlockIdx = gl.getUniformBlockIndex(mrtSkinnedProgram, 'LightUniforms')
+    const mrtSkJointBlockIdx = gl.getUniformBlockIndex(mrtSkinnedProgram, 'JointUniforms')
+    gl.uniformBlockBinding(mrtSkinnedProgram, mrtSkCameraBlockIdx, 0)
+    gl.uniformBlockBinding(mrtSkinnedProgram, mrtSkModelBlockIdx, 1)
+    gl.uniformBlockBinding(mrtSkinnedProgram, mrtSkLightBlockIdx, 2)
+    gl.uniformBlockBinding(mrtSkinnedProgram, mrtSkJointBlockIdx, 3)
+
+    // Post-processing programs
+    downsampleProgram = createProgram(gl, fullscreenVertexGLSL, downsampleFragmentGLSL)
+    uDownsampleInput = gl.getUniformLocation(downsampleProgram, 'u_input')
+
+    upsampleProgram = createProgram(gl, fullscreenVertexGLSL, upsampleFragmentGLSL)
+    uUpsampleInput = gl.getUniformLocation(upsampleProgram, 'u_input')
+    uUpsampleRadius = gl.getUniformLocation(upsampleProgram, 'u_radius')
+
+    compositeProgram = createProgram(gl, fullscreenVertexGLSL, compositeFragmentGLSL)
+    uCompositeScene = gl.getUniformLocation(compositeProgram, 'u_scene')
+    uCompositeBloom = gl.getUniformLocation(compositeProgram, 'u_bloom')
+    uCompositeIntensity = gl.getUniformLocation(compositeProgram, 'u_intensity')
+  }
+
+  function createBloomFBOs() {
+    const w = currentWidth
+    const h = currentHeight
+    const samples = gl.getParameter(gl.MAX_SAMPLES) as number
+    const msaaSamples = Math.min(samples, 4)
+
+    // Clean up old resources
+    if (mrtFBO) gl.deleteFramebuffer(mrtFBO)
+    if (mrtColorRB) gl.deleteRenderbuffer(mrtColorRB)
+    if (mrtBloomRB) gl.deleteRenderbuffer(mrtBloomRB)
+    if (mrtDepthRB) gl.deleteRenderbuffer(mrtDepthRB)
+    if (resolveSceneFBO) gl.deleteFramebuffer(resolveSceneFBO)
+    if (resolveBloomFBO) gl.deleteFramebuffer(resolveBloomFBO)
+    if (resolvedSceneTexture) gl.deleteTexture(resolvedSceneTexture)
+    if (resolvedBloomTexture) gl.deleteTexture(resolvedBloomTexture)
+    for (const fbo of bloomMipFBOs) gl.deleteFramebuffer(fbo)
+    for (const tex of bloomMipTextures) gl.deleteTexture(tex)
+
+    // MSAA MRT FBO with 2 color renderbuffers + depth
+    mrtFBO = gl.createFramebuffer()!
+    gl.bindFramebuffer(gl.FRAMEBUFFER, mrtFBO)
+
+    mrtColorRB = gl.createRenderbuffer()!
+    gl.bindRenderbuffer(gl.RENDERBUFFER, mrtColorRB)
+    gl.renderbufferStorageMultisample(gl.RENDERBUFFER, msaaSamples, gl.RGBA8, w, h)
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, mrtColorRB)
+
+    mrtBloomRB = gl.createRenderbuffer()!
+    gl.bindRenderbuffer(gl.RENDERBUFFER, mrtBloomRB)
+    gl.renderbufferStorageMultisample(gl.RENDERBUFFER, msaaSamples, gl.RGBA8, w, h)
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.RENDERBUFFER, mrtBloomRB)
+
+    mrtDepthRB = gl.createRenderbuffer()!
+    gl.bindRenderbuffer(gl.RENDERBUFFER, mrtDepthRB)
+    gl.renderbufferStorageMultisample(gl.RENDERBUFFER, msaaSamples, gl.DEPTH_COMPONENT24, w, h)
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, mrtDepthRB)
+
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1])
+
+    // Resolve FBOs with textures
+    resolvedSceneTexture = createTexture2D(gl, w, h)
+    resolveSceneFBO = gl.createFramebuffer()!
+    gl.bindFramebuffer(gl.FRAMEBUFFER, resolveSceneFBO)
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, resolvedSceneTexture, 0)
+
+    resolvedBloomTexture = createTexture2D(gl, w, h)
+    resolveBloomFBO = gl.createFramebuffer()!
+    gl.bindFramebuffer(gl.FRAMEBUFFER, resolveBloomFBO)
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, resolvedBloomTexture, 0)
+
+    // Mip chain for bloom blur
+    bloomMipFBOs = []
+    bloomMipTextures = []
+    let mw = Math.max(1, w >> 1)
+    let mh = Math.max(1, h >> 1)
+    for (let i = 0; i < BLOOM_MIP_LEVELS; i++) {
+      const tex = createTexture2D(gl, mw, mh)
+      const fbo = gl.createFramebuffer()!
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo)
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0)
+      bloomMipFBOs.push(fbo)
+      bloomMipTextures.push(tex)
+      mw = Math.max(1, mw >> 1)
+      mh = Math.max(1, mh >> 1)
+    }
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+  }
+
+  function drawScene(entities: DrawEntity[], count: number, useMrt: boolean) {
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, cameraUBO)
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, 2, lightUBO)
+
+    // Draw non-skinned entities
+    gl.useProgram(useMrt ? mrtProgram : program)
+    for (let i = 0; i < count; i++) {
+      const entity = entities[i]!
+      const geo = geometries.get(entity.geometryId)
+      if (!geo || geo.skinned) continue
+
+      modelData.set(entity.worldMatrix, 0)
+      modelData.set(entity.color, 16)
+      modelData[20] = entity.unlit ? 1.0 : 0.0
+      gl.bindBuffer(gl.UNIFORM_BUFFER, modelUBO)
+      gl.bufferSubData(gl.UNIFORM_BUFFER, 0, modelData)
+      gl.bindBufferBase(gl.UNIFORM_BUFFER, 1, modelUBO)
+
+      gl.bindVertexArray(geo.vao)
+      gl.drawElements(gl.TRIANGLES, geo.indexCount, geo.indexType, 0)
+    }
+
+    // Draw skinned entities
+    gl.useProgram(useMrt ? mrtSkinnedProgram : skinnedProgram)
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, cameraUBO)
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, 2, lightUBO)
+
+    for (let i = 0; i < count; i++) {
+      const entity = entities[i]!
+      const geo = geometries.get(entity.geometryId)
+      if (!geo?.skinned || !entity.jointMatrices) continue
+
+      modelData.set(entity.worldMatrix, 0)
+      modelData.set(entity.color, 16)
+      modelData[20] = entity.unlit ? 1.0 : 0.0
+      gl.bindBuffer(gl.UNIFORM_BUFFER, modelUBO)
+      gl.bufferSubData(gl.UNIFORM_BUFFER, 0, modelData)
+      gl.bindBufferBase(gl.UNIFORM_BUFFER, 1, modelUBO)
+
+      // Upload joint matrices
+      gl.bindBuffer(gl.UNIFORM_BUFFER, jointUBO)
+      gl.bufferSubData(gl.UNIFORM_BUFFER, 0, entity.jointMatrices)
+      gl.bindBufferBase(gl.UNIFORM_BUFFER, 3, jointUBO)
+
+      gl.bindVertexArray(geo.vao)
+      gl.drawElements(gl.TRIANGLES, geo.indexCount, geo.indexType, 0)
+    }
+
+    gl.bindVertexArray(null)
+  }
+
+  const renderer: Renderer = {
+    backend: 'webgl',
+
+    registerGeometry(id, vertices, indices) {
+      const vao = gl.createVertexArray()!
+      setupVAO(vao, vertices, indices, false)
+      geometries.set(id, {
+        vao,
+        indexCount: indices.length,
+        indexType: indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT,
+        skinned: false,
+      })
+    },
+
+    registerSkinnedGeometry(id, vertices, indices, joints, weights) {
+      const vao = gl.createVertexArray()!
+      setupVAO(vao, vertices, indices, true, joints, weights)
       geometries.set(id, {
         vao,
         indexCount: indices.length,
@@ -206,61 +407,151 @@ export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
     },
 
     draw(entities: DrawEntity[], count: number) {
-      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
-
-      gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, cameraUBO)
-      gl.bindBufferBase(gl.UNIFORM_BUFFER, 2, lightUBO)
-
-      // Draw non-skinned entities
-      gl.useProgram(program)
-      for (let i = 0; i < count; i++) {
-        const entity = entities[i]!
-        const geo = geometries.get(entity.geometryId)
-        if (!geo || geo.skinned) continue
-
-        modelData.set(entity.worldMatrix, 0)
-        modelData.set(entity.color, 16)
-        modelData[20] = entity.unlit ? 1.0 : 0.0
-        gl.bindBuffer(gl.UNIFORM_BUFFER, modelUBO)
-        gl.bufferSubData(gl.UNIFORM_BUFFER, 0, modelData)
-        gl.bindBufferBase(gl.UNIFORM_BUFFER, 1, modelUBO)
-
-        gl.bindVertexArray(geo.vao)
-        gl.drawElements(gl.TRIANGLES, geo.indexCount, geo.indexType, 0)
+      if (!bloomEnabled) {
+        // ── Original non-bloom path ──
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+        gl.viewport(0, 0, currentWidth, currentHeight)
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+        drawScene(entities, count, false)
+        return
       }
 
-      // Draw skinned entities
-      gl.useProgram(skinnedProgram)
-      gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, cameraUBO)
-      gl.bindBufferBase(gl.UNIFORM_BUFFER, 2, lightUBO)
+      // ── Bloom MRT path ──
 
-      for (let i = 0; i < count; i++) {
-        const entity = entities[i]!
-        const geo = geometries.get(entity.geometryId)
-        if (!geo?.skinned || !entity.jointMatrices) continue
+      // 1. Render to MRT FBO
+      gl.bindFramebuffer(gl.FRAMEBUFFER, mrtFBO)
+      gl.viewport(0, 0, currentWidth, currentHeight)
+      // Clear each attachment separately: scene to dark gray, bloom to black
+      gl.clearBufferfv(gl.COLOR, 0, [0.1, 0.1, 0.1, 1.0])
+      gl.clearBufferfv(gl.COLOR, 1, [0.0, 0.0, 0.0, 0.0])
+      gl.clear(gl.DEPTH_BUFFER_BIT)
+      drawScene(entities, count, true)
 
-        modelData.set(entity.worldMatrix, 0)
-        modelData.set(entity.color, 16)
-        modelData[20] = entity.unlit ? 1.0 : 0.0
-        gl.bindBuffer(gl.UNIFORM_BUFFER, modelUBO)
-        gl.bufferSubData(gl.UNIFORM_BUFFER, 0, modelData)
-        gl.bindBufferBase(gl.UNIFORM_BUFFER, 1, modelUBO)
+      // 2. Resolve MSAA → textures via blitFramebuffer
+      // Resolve scene (attachment 0)
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, mrtFBO)
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, resolveSceneFBO)
+      gl.readBuffer(gl.COLOR_ATTACHMENT0)
+      gl.blitFramebuffer(
+        0,
+        0,
+        currentWidth,
+        currentHeight,
+        0,
+        0,
+        currentWidth,
+        currentHeight,
+        gl.COLOR_BUFFER_BIT,
+        gl.NEAREST,
+      )
 
-        // Upload joint matrices
-        gl.bindBuffer(gl.UNIFORM_BUFFER, jointUBO)
-        gl.bufferSubData(gl.UNIFORM_BUFFER, 0, entity.jointMatrices)
-        gl.bindBufferBase(gl.UNIFORM_BUFFER, 3, jointUBO)
+      // Resolve bloom (attachment 1)
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, mrtFBO)
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, resolveBloomFBO)
+      gl.readBuffer(gl.COLOR_ATTACHMENT1)
+      gl.blitFramebuffer(
+        0,
+        0,
+        currentWidth,
+        currentHeight,
+        0,
+        0,
+        currentWidth,
+        currentHeight,
+        gl.COLOR_BUFFER_BIT,
+        gl.NEAREST,
+      )
 
-        gl.bindVertexArray(geo.vao)
-        gl.drawElements(gl.TRIANGLES, geo.indexCount, geo.indexType, 0)
+      // Disable depth for post-processing
+      gl.disable(gl.DEPTH_TEST)
+      gl.disable(gl.CULL_FACE)
+
+      // 3. Downsample bloom through mip chain
+      gl.useProgram(downsampleProgram)
+      gl.bindVertexArray(fullscreenVAO)
+
+      let srcW = currentWidth
+      let srcH = currentHeight
+      for (let i = 0; i < BLOOM_MIP_LEVELS; i++) {
+        const dstW = Math.max(1, srcW >> 1)
+        const dstH = Math.max(1, srcH >> 1)
+        gl.bindFramebuffer(gl.FRAMEBUFFER, bloomMipFBOs[i]!)
+        gl.viewport(0, 0, dstW, dstH)
+
+        gl.activeTexture(gl.TEXTURE0)
+        gl.bindTexture(gl.TEXTURE_2D, i === 0 ? resolvedBloomTexture : bloomMipTextures[i - 1]!)
+        gl.uniform1i(uDownsampleInput, 0)
+
+        gl.drawArrays(gl.TRIANGLES, 0, 3)
+        srcW = dstW
+        srcH = dstH
       }
+
+      // 4. Upsample bloom back up (additive blend)
+      gl.useProgram(upsampleProgram)
+      gl.enable(gl.BLEND)
+      gl.blendFunc(gl.ONE, gl.ONE)
+
+      for (let i = BLOOM_MIP_LEVELS - 1; i > 0; i--) {
+        const targetIdx = i - 1
+        const targetW = bloomMipTextures[targetIdx] ? getMipSize(currentWidth, targetIdx) : currentWidth
+        const targetH = bloomMipTextures[targetIdx] ? getMipSize(currentHeight, targetIdx) : currentHeight
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, bloomMipFBOs[targetIdx]!)
+        gl.viewport(0, 0, targetW, targetH)
+
+        gl.activeTexture(gl.TEXTURE0)
+        gl.bindTexture(gl.TEXTURE_2D, bloomMipTextures[i]!)
+        gl.uniform1i(uUpsampleInput, 0)
+        gl.uniform1f(uUpsampleRadius, bloomRadius)
+
+        gl.drawArrays(gl.TRIANGLES, 0, 3)
+      }
+
+      gl.disable(gl.BLEND)
+
+      // 5. Composite scene + bloom → default framebuffer
+      gl.useProgram(compositeProgram)
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+      gl.viewport(0, 0, currentWidth, currentHeight)
+
+      gl.activeTexture(gl.TEXTURE0)
+      gl.bindTexture(gl.TEXTURE_2D, resolvedSceneTexture)
+      gl.uniform1i(uCompositeScene, 0)
+
+      gl.activeTexture(gl.TEXTURE1)
+      gl.bindTexture(gl.TEXTURE_2D, bloomMipTextures[0]!)
+      gl.uniform1i(uCompositeBloom, 1)
+
+      gl.uniform1f(uCompositeIntensity, bloomIntensity)
+
+      gl.drawArrays(gl.TRIANGLES, 0, 3)
 
       gl.bindVertexArray(null)
+
+      // Restore state
+      gl.enable(gl.DEPTH_TEST)
+      gl.enable(gl.CULL_FACE)
     },
 
     resize(width, height) {
       if (width === 0 || height === 0) return
+      currentWidth = width
+      currentHeight = height
       gl.viewport(0, 0, width, height)
+      if (bloomEnabled) {
+        createBloomFBOs()
+      }
+    },
+
+    setBloom(config: BloomConfig) {
+      bloomEnabled = config.enabled
+      bloomIntensity = config.intensity ?? 1.0
+      bloomRadius = config.radius ?? 1.0
+      if (bloomEnabled) {
+        ensureBloomPrograms()
+        createBloomFBOs()
+      }
     },
 
     destroy() {
@@ -270,6 +561,22 @@ export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
       gl.deleteBuffer(jointUBO)
       gl.deleteProgram(program)
       gl.deleteProgram(skinnedProgram)
+      gl.deleteVertexArray(fullscreenVAO)
+      if (mrtProgram) gl.deleteProgram(mrtProgram)
+      if (mrtSkinnedProgram) gl.deleteProgram(mrtSkinnedProgram)
+      if (downsampleProgram) gl.deleteProgram(downsampleProgram)
+      if (upsampleProgram) gl.deleteProgram(upsampleProgram)
+      if (compositeProgram) gl.deleteProgram(compositeProgram)
+      if (mrtFBO) gl.deleteFramebuffer(mrtFBO)
+      if (mrtColorRB) gl.deleteRenderbuffer(mrtColorRB)
+      if (mrtBloomRB) gl.deleteRenderbuffer(mrtBloomRB)
+      if (mrtDepthRB) gl.deleteRenderbuffer(mrtDepthRB)
+      if (resolveSceneFBO) gl.deleteFramebuffer(resolveSceneFBO)
+      if (resolveBloomFBO) gl.deleteFramebuffer(resolveBloomFBO)
+      if (resolvedSceneTexture) gl.deleteTexture(resolvedSceneTexture)
+      if (resolvedBloomTexture) gl.deleteTexture(resolvedBloomTexture)
+      for (const fbo of bloomMipFBOs) gl.deleteFramebuffer(fbo)
+      for (const tex of bloomMipTextures) gl.deleteTexture(tex)
       for (const geo of geometries.values()) {
         gl.deleteVertexArray(geo.vao)
       }
@@ -277,4 +584,19 @@ export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
   }
 
   return renderer
+}
+
+function createTexture2D(gl: WebGL2RenderingContext, width: number, height: number): WebGLTexture {
+  const tex = gl.createTexture()!
+  gl.bindTexture(gl.TEXTURE_2D, tex)
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+  return tex
+}
+
+function getMipSize(baseSize: number, mipLevel: number): number {
+  return Math.max(1, baseSize >> (mipLevel + 1))
 }

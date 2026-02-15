@@ -16,9 +16,27 @@ export {
   type GltfAnimationChannel,
   type GltfNodeTransform,
 } from './gltf.ts'
-export { shaderSource, skinnedShaderSource } from './shaders.ts'
-export { vertexShaderGLSL, fragmentShaderGLSL, skinnedVertexShaderGLSL } from './webgl-shaders.ts'
-export { type DrawEntity } from './renderer.ts'
+export {
+  shaderSource,
+  skinnedShaderSource,
+  mrtShaderSource,
+  mrtSkinnedShaderSource,
+  fullscreenVertexSource,
+  downsampleSource,
+  upsampleSource,
+  compositeSource,
+} from './shaders.ts'
+export {
+  vertexShaderGLSL,
+  fragmentShaderGLSL,
+  skinnedVertexShaderGLSL,
+  mrtFragmentShaderGLSL,
+  fullscreenVertexGLSL,
+  downsampleFragmentGLSL,
+  upsampleFragmentGLSL,
+  compositeFragmentGLSL,
+} from './webgl-shaders.ts'
+export { type BloomConfig, type DrawEntity } from './renderer.ts'
 export {
   createSkeleton,
   createSkinInstance,

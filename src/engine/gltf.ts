@@ -52,6 +52,7 @@ export interface GLTFResult {
 export interface GLTFOptions {
   dracoDecoderPath?: string
   materialColors?: Map<number, [number, number, number]>
+  materialBloom?: Map<number, number>
 }
 
 // glTF 2.0 JSON schema types (subset)
@@ -410,10 +411,11 @@ function interleaveVertices(
   vertexCount: number,
   materialIndices?: Uint8Array,
   materialColors?: Map<number, [number, number, number]>,
+  materialBloom?: Map<number, number>,
 ): Float32Array {
-  const vertices = new Float32Array(vertexCount * 9)
+  const vertices = new Float32Array(vertexCount * 10)
   for (let i = 0; i < vertexCount; i++) {
-    const vi = i * 9
+    const vi = i * 10
     vertices[vi] = positions[i * 3]!
     vertices[vi + 1] = positions[i * 3 + 1]!
     vertices[vi + 2] = positions[i * 3 + 2]!
@@ -431,6 +433,13 @@ function interleaveVertices(
       vertices[vi + 6] = 1
       vertices[vi + 7] = 1
       vertices[vi + 8] = 1
+    }
+
+    // Bloom value from material index
+    if (materialIndices && materialBloom) {
+      vertices[vi + 9] = materialBloom.get(materialIndices[i]!) ?? 0
+    } else {
+      vertices[vi + 9] = 0
     }
   }
   return vertices
@@ -601,6 +610,7 @@ function parseSkinAttributes(
 export async function loadGLTF(url: string, options?: GLTFOptions): Promise<GLTFResult> {
   const decoderPath = options?.dracoDecoderPath ?? '/draco-1.5.7/'
   const materialColors = options?.materialColors
+  const materialBloom = options?.materialBloom
 
   const response = await fetch(url)
   if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`)
@@ -813,8 +823,8 @@ export async function loadGLTF(url: string, options?: GLTFOptions): Promise<GLTF
         normals = computeFlatNormals(positions, indices)
       }
 
-      // Interleave into VoidCore vertex format [px, py, pz, nx, ny, nz, cr, cg, cb]
-      const vertices = interleaveVertices(positions, normals, vertexCount, matIndices, materialColors)
+      // Interleave into VoidCore vertex format [px, py, pz, nx, ny, nz, cr, cg, cb, bloom]
+      const vertices = interleaveVertices(positions, normals, vertexCount, matIndices, materialColors, materialBloom)
 
       // Extract material color
       let color: [number, number, number, number] | undefined

@@ -15,8 +15,8 @@ import type { Backend } from './engine/gpu.ts'
 import type { Skeleton, SkinInstance } from './engine/skin.ts'
 
 // Grid configuration
-const GRID_SIZE = 10
-const GRID_SPACING = 8
+const GRID_SIZE = 30
+const GRID_SPACING = 5
 
 // Animation cycling: each character transitions between anims on a staggered timer
 const ANIM_CYCLE_BASE = 3.0 // seconds between animation transitions
@@ -35,14 +35,18 @@ export const main = async (canvas: HTMLCanvasElement) => {
     [2, [0, 0.9, 0.8]],
   ])
 
+  const megaxeBloom = new Map<number, number>([
+    [2, 1.0], // Material index 2 (teal parts) gets bloom
+  ])
+
   let megaxeId: number | null = null
   try {
-    const gltf = await loadGLTF('/static-bundle.glb', { materialColors: megaxeColors })
+    const gltf = await loadGLTF('/static-bundle.glb', { materialColors: megaxeColors, materialBloom: megaxeBloom })
     const megaxeMesh = gltf.meshes.find(m => m.name === 'megaxe')
     if (megaxeMesh && megaxeMesh.primitives.length > 0) {
       const prim = megaxeMesh.primitives[0]!
       megaxeId = scene.registerGeometry(prim.geometry)
-      console.log(`Loaded megaxe mesh (${prim.geometry.vertices.length / 9} vertices)`)
+      console.log(`Loaded megaxe mesh (${prim.geometry.vertices.length / 10} vertices)`)
     }
   } catch (e) {
     console.warn('Failed to load static-bundle.glb:', e)
@@ -90,7 +94,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
       }
 
       console.log(
-        `Loaded player (${prim.geometry.vertices.length / 9} verts, ${skeleton.jointCount} joints, ${animations.length} anims: ${animations.map(a => a.name).join(', ')})`,
+        `Loaded player (${prim.geometry.vertices.length / 10} verts, ${skeleton.jointCount} joints, ${animations.length} anims: ${animations.map(a => a.name).join(', ')})`,
       )
     }
   } catch (e) {
@@ -177,15 +181,18 @@ export const main = async (canvas: HTMLCanvasElement) => {
   scene.setDirectionalLight([0.5, 0.3, -1], [1, 0.95, 0.9])
   scene.setAmbientLight([0.15, 0.15, 0.2])
 
+  // Bloom
+  scene.setBloom({ enabled: true, intensity: 5.0, radius: 1.0 })
+
   // Camera
   const camera = scene.camera
   camera.fov = Math.PI / 4
   camera.near = 0.1
   camera.far = 500
 
-  const orbitRadius = GRID_SIZE * GRID_SPACING * 2
+  const orbitRadius = GRID_SIZE * GRID_SPACING * 1.1
   camera.eye[0] = 0
-  camera.eye[1] = orbitRadius
+  camera.eye[1] = -orbitRadius
   camera.eye[2] = orbitRadius * 0.4
   camera.target[0] = 0
   camera.target[1] = 0
