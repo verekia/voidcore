@@ -46,8 +46,9 @@ export class Scene {
   // Scratch offsets for frustum planes (6 planes × 4 floats = 96 bytes)
   private planesOffset = 0
 
-  // Temp mat4 for bone attachment world matrix computation
+  // Temp mat4s for bone attachment world matrix computation
   private _tempWorldMat = new Float32Array(16)
+  private _tempRSMat = new Float32Array(16)
 
   private constructor(canvas: HTMLCanvasElement, config: SceneConfig) {
     this.canvas = canvas
@@ -127,29 +128,53 @@ export class Scene {
     const { wasm, renderer, camera, activeCount } = this
     const aspect = this.canvas.width / this.canvas.height
 
-    // 1. Compute world matrices for dirty entities
+    // 1. Mark bone-attached entities dirty so their base TRS is recomputed each frame
+    for (let i = 0; i < activeCount; i++) {
+      const mesh = this.meshes[i]
+      if (mesh?.boneAttachment) mesh.setDirty()
+    }
+
+    // 2. Compute world matrices for dirty entities
     wasm.exports.vc_compute_world_matrices(activeCount)
 
-    // 2. Update camera
+    // 3. Update camera
     camera.update(wasm, aspect)
 
-    // 3. Apply bone attachments (override world matrices)
+    // 4. Apply bone attachments (override world matrices)
+    // final = T(position) * boneGlobal * RS(rotation, scale)
+    // This ensures rotation/scale are applied relative to the bone, not the entity origin
     for (let i = 0; i < activeCount; i++) {
       const mesh = this.meshes[i]
       if (!mesh?.boneAttachment) continue
       const { skinInstance, boneNodeIndex } = mesh.boneAttachment
       const boneGlobal = skinInstance.globalMatrices
-      // worldMatrix = entityWorldMatrix * boneGlobalMatrix
-      m4Multiply(this._tempWorldMat, 0, mesh.worldMatrix, 0, boneGlobal, boneNodeIndex * 16)
+
+      // Extract RS part (zero out translation from entity world matrix)
+      this._tempRSMat.set(mesh.worldMatrix)
+      const tx = this._tempRSMat[12]!
+      const ty = this._tempRSMat[13]!
+      const tz = this._tempRSMat[14]!
+      this._tempRSMat[12] = 0
+      this._tempRSMat[13] = 0
+      this._tempRSMat[14] = 0
+
+      // temp = boneGlobal * RS
+      m4Multiply(this._tempWorldMat, 0, boneGlobal, boneNodeIndex * 16, this._tempRSMat, 0)
+
+      // final = T(pos) * temp (pre-multiplying by pure translation just adds to column 3)
+      this._tempWorldMat[12] = this._tempWorldMat[12]! + tx
+      this._tempWorldMat[13] = this._tempWorldMat[13]! + ty
+      this._tempWorldMat[14] = this._tempWorldMat[14]! + tz
+
       mesh.worldMatrix.set(this._tempWorldMat)
     }
 
-    // 4. Update bounding spheres for all meshes
+    // 5. Update bounding spheres for all meshes
     for (let i = 0; i < activeCount; i++) {
       this.meshes[i]?.updateBsphere()
     }
 
-    // 5. Frustum culling (if available in WASM)
+    // 6. Frustum culling (if available in WASM)
     let visibleIndices: number[]
     let visibleCount: number
 
@@ -167,7 +192,7 @@ export class Scene {
         wasm.visibleIndicesPtr,
       )
 
-      // 6. Sort draw calls (if available)
+      // 7. Sort draw calls (if available)
       if (wasm.exports.vc_build_sort_keys && wasm.exports.vc_sort_draw_calls) {
         wasm.exports.vc_build_sort_keys(visibleCount, wasm.visibleIndicesPtr, wasm.geometryIdsPtr, wasm.sortKeysPtr)
         wasm.exports.vc_sort_draw_calls(visibleCount, wasm.sortKeysPtr, wasm.visibleIndicesPtr)

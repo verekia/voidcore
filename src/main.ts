@@ -1,5 +1,6 @@
 import { loadGLTF } from './engine/gltf.ts'
 import { Mesh } from './engine/mesh.ts'
+import { OrbitControls } from './engine/orbit-controls.ts'
 import { Scene } from './engine/scene.ts'
 import {
   createSkeleton,
@@ -14,8 +15,8 @@ import type { Backend } from './engine/gpu.ts'
 import type { Skeleton, SkinInstance } from './engine/skin.ts'
 
 // Grid configuration
-const GRID_SIZE = 20 // 20x20 = 400 characters
-const GRID_SPACING = 2.5
+const GRID_SIZE = 10
+const GRID_SPACING = 8
 
 // Animation cycling: each character transitions between anims on a staggered timer
 const ANIM_CYCLE_BASE = 3.0 // seconds between animation transitions
@@ -71,9 +72,9 @@ export const main = async (canvas: HTMLCanvasElement) => {
       // Find animation clip indices
       for (let i = 0; i < animations.length; i++) {
         const name = animations[i]!.name.toLowerCase()
-        if (name.includes('idle')) idleIdx = i
-        else if (name.includes('run')) runIdx = i
-        else if (name.includes('slash')) slashIdx = i
+        if (name === 'jump') idleIdx = i
+        else if (name === 'run') runIdx = i
+        else if (name === 'slash') slashIdx = i
       }
 
       // Register skinned geometry (shared by all characters)
@@ -152,6 +153,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
           new Mesh({
             geometryId: megaxeId,
             position: [x, y, 0],
+            rotation: [0, 0, Math.PI],
             color: [1, 1, 1, 1],
             scale: [1, 1, 1],
             boneAttachment: { skinInstance: inst, boneNodeIndex: handBoneIdx },
@@ -175,12 +177,21 @@ export const main = async (canvas: HTMLCanvasElement) => {
   scene.setDirectionalLight([0.5, 0.3, -1], [1, 0.95, 0.9])
   scene.setAmbientLight([0.15, 0.15, 0.2])
 
-  // Camera orbit
+  // Camera
   const camera = scene.camera
   camera.fov = Math.PI / 4
   camera.near = 0.1
   camera.far = 500
 
+  const orbitRadius = GRID_SIZE * GRID_SPACING * 2
+  camera.eye[0] = 0
+  camera.eye[1] = orbitRadius
+  camera.eye[2] = orbitRadius * 0.4
+  camera.target[0] = 0
+  camera.target[1] = 0
+  camera.target[2] = 0
+
+  let controls = new OrbitControls(camera, canvas)
   let currentCanvas = canvas
 
   const resize = () => {
@@ -224,6 +235,8 @@ export const main = async (canvas: HTMLCanvasElement) => {
     currentCanvas = newCanvas
     await scene.switchBackend(newCanvas, target)
     localStorage.setItem('voidcore-backend', target)
+    controls.dispose()
+    controls = new OrbitControls(camera, newCanvas)
     resize()
     updateToggle()
     switching = false
@@ -262,17 +275,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
       updateSkinInstance(inst, animations, dt)
     }
 
-    // Orbit camera (Z-up)
-    const time = now / 1000
-    const orbitRadius = GRID_SIZE * GRID_SPACING * 0.7
-    const orbitSpeed = 0.15
-    camera.eye[0] = Math.sin(time * orbitSpeed) * orbitRadius
-    camera.eye[1] = Math.cos(time * orbitSpeed) * orbitRadius
-    camera.eye[2] = orbitRadius * 0.4 + Math.sin(time * 0.2) * 3
-    camera.target[0] = 0
-    camera.target[1] = 0
-    camera.target[2] = 1
-
+    controls.update()
     resize()
     scene.render()
 

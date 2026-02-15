@@ -447,6 +447,8 @@ async function decodeDracoPrimitive(
   indices: Uint16Array | Uint32Array
   vertexCount: number
   materialIndices: Uint8Array | undefined
+  skinJoints: Uint8Array | undefined
+  skinWeights: Float32Array | undefined
 }> {
   const draco = await initDracoDecoder(decoderPath)
   const ext = primitive.extensions!.KHR_draco_mesh_compression!
@@ -513,6 +515,20 @@ async function decodeDracoPrimitive(
     }
   }
 
+  // Extract skin attributes (JOINTS_0 / WEIGHTS_0) if present
+  let skinJoints: Uint8Array | undefined
+  let skinWeights: Float32Array | undefined
+  if (ext.attributes.JOINTS_0 !== undefined && ext.attributes.WEIGHTS_0 !== undefined) {
+    const jointsAttr = decoder.GetAttributeByUniqueId(dracoMesh, ext.attributes.JOINTS_0)
+    const jointsFloat = extractFloat32Attribute(jointsAttr)
+    skinJoints = new Uint8Array(jointsFloat.length)
+    for (let i = 0; i < jointsFloat.length; i++) {
+      skinJoints[i] = Math.round(jointsFloat[i]!)
+    }
+    const weightsAttr = decoder.GetAttributeByUniqueId(dracoMesh, ext.attributes.WEIGHTS_0)
+    skinWeights = extractFloat32Attribute(weightsAttr)
+  }
+
   // Extract indices (always use uint32 then downcast — matches three.js approach)
   const indexCount = faceCount * 3
   const idxByteLength = indexCount * Uint32Array.BYTES_PER_ELEMENT
@@ -527,7 +543,7 @@ async function decodeDracoPrimitive(
   draco.destroy(decoder)
   draco.destroy(decoderBuffer)
 
-  return { positions, normals, indices, vertexCount, materialIndices }
+  return { positions, normals, indices, vertexCount, materialIndices, skinJoints, skinWeights }
 }
 
 function parsePrimitive(
@@ -772,6 +788,8 @@ export async function loadGLTF(url: string, options?: GLTFOptions): Promise<GLTF
       let indices: Uint16Array | Uint32Array
       let vertexCount: number
       let matIndices: Uint8Array | undefined
+      let dracoSkinJoints: Uint8Array | undefined
+      let dracoSkinWeights: Float32Array | undefined
 
       if (usesDraco && jsonPrim.extensions?.KHR_draco_mesh_compression) {
         const result = await decodeDracoPrimitive(json, jsonPrim, buffers, decoderPath)
@@ -780,6 +798,8 @@ export async function loadGLTF(url: string, options?: GLTFOptions): Promise<GLTF
         indices = result.indices
         vertexCount = result.vertexCount
         matIndices = result.materialIndices
+        dracoSkinJoints = result.skinJoints
+        dracoSkinWeights = result.skinWeights
       } else {
         const result = parsePrimitive(json, jsonPrim, buffers)
         positions = result.positions
@@ -809,10 +829,15 @@ export async function loadGLTF(url: string, options?: GLTFOptions): Promise<GLTF
       // Extract skin attributes if this mesh has a skin
       const prim: GLTFPrimitive = { geometry: { vertices, indices }, color, materialIndices: matIndices }
       if (hasSkin) {
-        const skinData = parseSkinAttributes(json, jsonPrim, buffers)
-        if (skinData) {
-          prim.skinJoints = skinData.skinJoints
-          prim.skinWeights = skinData.skinWeights
+        if (dracoSkinJoints && dracoSkinWeights) {
+          prim.skinJoints = dracoSkinJoints
+          prim.skinWeights = dracoSkinWeights
+        } else {
+          const skinData = parseSkinAttributes(json, jsonPrim, buffers)
+          if (skinData) {
+            prim.skinJoints = skinData.skinJoints
+            prim.skinWeights = skinData.skinWeights
+          }
         }
       }
 
