@@ -103,10 +103,11 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
       entryPoint: 'vs_main',
       buffers: [
         {
-          arrayStride: 24, // 6 floats × 4 bytes
+          arrayStride: 36, // 9 floats × 4 bytes
           attributes: [
             { shaderLocation: 0, offset: 0, format: 'float32x3' }, // position
             { shaderLocation: 1, offset: 12, format: 'float32x3' }, // normal
+            { shaderLocation: 2, offset: 24, format: 'float32x3' }, // vertex color
           ],
         },
       ],

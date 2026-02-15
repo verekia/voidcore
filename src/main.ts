@@ -20,17 +20,21 @@ export const main = async (canvas: HTMLCanvasElement) => {
   const sphereId = scene.registerGeometry(sphereGeo)
   const groundId = scene.registerGeometry(groundGeo)
 
-  // Load megaxe mesh from GLB
+  // Load megaxe mesh from GLB with material colors
+  const megaxeColors = new Map<number, [number, number, number]>([
+    [0, [0.95, 0.95, 0.95]], // near white
+    [1, [0.1, 0.1, 0.1]], // near black
+    [2, [0, 0.9, 0.8]], // bright teal
+  ])
+
   let megaxeId: number | null = null
-  let megaxeColor: [number, number, number, number] | undefined
   try {
-    const gltf = await loadGLTF('/static-bundle.glb')
+    const gltf = await loadGLTF('/static-bundle.glb', { materialColors: megaxeColors })
     const megaxeMesh = gltf.meshes.find(m => m.name === 'megaxe')
     if (megaxeMesh && megaxeMesh.primitives.length > 0) {
       const prim = megaxeMesh.primitives[0]!
       megaxeId = scene.registerGeometry(prim.geometry)
-      megaxeColor = prim.color
-      console.log(`Loaded megaxe mesh (${prim.geometry.vertices.length / 6} vertices)`)
+      console.log(`Loaded megaxe mesh (${prim.geometry.vertices.length / 9} vertices)`)
     } else {
       console.warn('megaxe mesh not found in static-bundle.glb')
     }
@@ -65,7 +69,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
     const mesh = new Mesh({
       geometryId: isMegaxe ? megaxeId! : isSphere ? sphereId : boxId,
       position: [x, y, z],
-      color: isMegaxe ? (megaxeColor ?? [r, g, b, 1]) : [r, g, b, 1],
+      color: isMegaxe ? [1, 1, 1, 1] : [r, g, b, 1],
       scale: isMegaxe
         ? [1, 1, 1]
         : isSphere

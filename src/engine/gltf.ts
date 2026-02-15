@@ -3,6 +3,7 @@ import type { Geometry } from './geometry.ts'
 export interface GLTFPrimitive {
   geometry: Geometry
   color?: [number, number, number, number]
+  materialIndices?: Uint8Array
 }
 
 export interface GLTFMesh {
@@ -16,6 +17,7 @@ export interface GLTFResult {
 
 export interface GLTFOptions {
   dracoDecoderPath?: string
+  materialColors?: Map<number, [number, number, number]>
 }
 
 // glTF 2.0 JSON schema types (subset)
@@ -300,15 +302,34 @@ function computeFlatNormals(positions: Float32Array, indices: Uint16Array | Uint
   return normals
 }
 
-function interleaveVertices(positions: Float32Array, normals: Float32Array, vertexCount: number): Float32Array {
-  const vertices = new Float32Array(vertexCount * 6)
+function interleaveVertices(
+  positions: Float32Array,
+  normals: Float32Array,
+  vertexCount: number,
+  materialIndices?: Uint8Array,
+  materialColors?: Map<number, [number, number, number]>,
+): Float32Array {
+  const vertices = new Float32Array(vertexCount * 9)
   for (let i = 0; i < vertexCount; i++) {
-    vertices[i * 6] = positions[i * 3]!
-    vertices[i * 6 + 1] = positions[i * 3 + 1]!
-    vertices[i * 6 + 2] = positions[i * 3 + 2]!
-    vertices[i * 6 + 3] = normals[i * 3]!
-    vertices[i * 6 + 4] = normals[i * 3 + 1]!
-    vertices[i * 6 + 5] = normals[i * 3 + 2]!
+    const vi = i * 9
+    vertices[vi] = positions[i * 3]!
+    vertices[vi + 1] = positions[i * 3 + 1]!
+    vertices[vi + 2] = positions[i * 3 + 2]!
+    vertices[vi + 3] = normals[i * 3]!
+    vertices[vi + 4] = normals[i * 3 + 1]!
+    vertices[vi + 5] = normals[i * 3 + 2]!
+
+    if (materialIndices && materialColors) {
+      const idx = materialIndices[i]!
+      const c = materialColors.get(idx) ?? [1, 1, 1]
+      vertices[vi + 6] = c[0]
+      vertices[vi + 7] = c[1]
+      vertices[vi + 8] = c[2]
+    } else {
+      vertices[vi + 6] = 1
+      vertices[vi + 7] = 1
+      vertices[vi + 8] = 1
+    }
   }
   return vertices
 }
@@ -323,6 +344,7 @@ async function decodeDracoPrimitive(
   normals: Float32Array | null
   indices: Uint16Array | Uint32Array
   vertexCount: number
+  materialIndices: Uint8Array | undefined
 }> {
   const draco = await initDracoDecoder(decoderPath)
   const ext = primitive.extensions!.KHR_draco_mesh_compression!
@@ -377,6 +399,18 @@ async function decodeDracoPrimitive(
     normals = extractFloat32Attribute(normAttr)
   }
 
+  // Extract _materialindex (if present)
+  const matIdxKey = Object.keys(ext.attributes).find(k => k.toLowerCase() === '_materialindex')
+  let materialIndices: Uint8Array | undefined
+  if (matIdxKey !== undefined) {
+    const matIdxAttr = decoder.GetAttributeByUniqueId(dracoMesh, ext.attributes[matIdxKey]!)
+    const matIdxFloat = extractFloat32Attribute(matIdxAttr)
+    materialIndices = new Uint8Array(vertexCount)
+    for (let i = 0; i < vertexCount; i++) {
+      materialIndices[i] = Math.round(matIdxFloat[i]!)
+    }
+  }
+
   // Extract indices (always use uint32 then downcast — matches three.js approach)
   const indexCount = faceCount * 3
   const idxByteLength = indexCount * Uint32Array.BYTES_PER_ELEMENT
@@ -391,7 +425,7 @@ async function decodeDracoPrimitive(
   draco.destroy(decoder)
   draco.destroy(decoderBuffer)
 
-  return { positions, normals, indices, vertexCount }
+  return { positions, normals, indices, vertexCount, materialIndices }
 }
 
 function parsePrimitive(
@@ -435,6 +469,7 @@ function parsePrimitive(
 
 export async function loadGLTF(url: string, options?: GLTFOptions): Promise<GLTFResult> {
   const decoderPath = options?.dracoDecoderPath ?? '/draco-1.5.7/'
+  const materialColors = options?.materialColors
 
   const response = await fetch(url)
   if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`)
@@ -516,6 +551,7 @@ export async function loadGLTF(url: string, options?: GLTFOptions): Promise<GLTF
       let normals: Float32Array | null
       let indices: Uint16Array | Uint32Array
       let vertexCount: number
+      let matIndices: Uint8Array | undefined
 
       if (usesDraco && jsonPrim.extensions?.KHR_draco_mesh_compression) {
         const result = await decodeDracoPrimitive(json, jsonPrim, buffers, decoderPath)
@@ -523,6 +559,7 @@ export async function loadGLTF(url: string, options?: GLTFOptions): Promise<GLTF
         normals = result.normals
         indices = result.indices
         vertexCount = result.vertexCount
+        matIndices = result.materialIndices
       } else {
         const result = parsePrimitive(json, jsonPrim, buffers)
         positions = result.positions
@@ -536,8 +573,8 @@ export async function loadGLTF(url: string, options?: GLTFOptions): Promise<GLTF
         normals = computeFlatNormals(positions, indices)
       }
 
-      // Interleave into VoidCore vertex format [px, py, pz, nx, ny, nz]
-      const vertices = interleaveVertices(positions, normals, vertexCount)
+      // Interleave into VoidCore vertex format [px, py, pz, nx, ny, nz, cr, cg, cb]
+      const vertices = interleaveVertices(positions, normals, vertexCount, matIndices, materialColors)
 
       // Extract material color
       let color: [number, number, number, number] | undefined
@@ -549,7 +586,7 @@ export async function loadGLTF(url: string, options?: GLTFOptions): Promise<GLTF
         }
       }
 
-      primitives.push({ geometry: { vertices, indices }, color })
+      primitives.push({ geometry: { vertices, indices }, color, materialIndices: matIndices })
     }
 
     meshes.push({ name: jsonMesh.name, primitives })
