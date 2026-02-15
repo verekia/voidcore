@@ -37,6 +37,26 @@ export interface WasmExports {
   ) => number
   vc_build_sort_keys: (count: number, visibleOffset: number, geoIdsOffset: number, keysOutOffset: number) => void
   vc_sort_draw_calls: (count: number, keysOffset: number, indicesOffset: number) => void
+  vc_m4_invert: (outOffset: number, mOffset: number) => void
+  vc_bvh_build: (
+    verticesOffset: number,
+    indicesOffset: number,
+    indexCount: number,
+    stride: number,
+    isU32Indices: number,
+  ) => number
+  vc_bvh_raycast: (
+    bvhOffset: number,
+    ox: number,
+    oy: number,
+    oz: number,
+    dx: number,
+    dy: number,
+    dz: number,
+    maxT: number,
+    resultOffset: number,
+  ) => number
+  vc_bvh_alloc_reset: () => void
 }
 
 export interface WasmCore {

@@ -19,8 +19,8 @@ void vc_sort_draw_calls_impl(u32 count, u32* sort_keys, u32* indices) {
   u32 temp_indices_offset = arena_alloc(count * 4, 4);
   if (temp_keys_offset == 0 || temp_indices_offset == 0) return;
 
-  u32* temp_keys = (u32*)((unsigned char*)0 + temp_keys_offset);
-  u32* temp_indices = (u32*)((unsigned char*)0 + temp_indices_offset);
+  u32* temp_keys = WASM_PTR(u32, temp_keys_offset);
+  u32* temp_indices = WASM_PTR(u32, temp_indices_offset);
 
   // 4-pass radix sort (8 bits per pass)
   u32* src_keys = sort_keys;
@@ -71,9 +71,9 @@ __attribute__((export_name("vc_build_sort_keys")))
 void vc_build_sort_keys(u32 count, u32 visible_offset, u32 geo_ids_offset, u32 keys_out_offset) {
   vc_build_sort_keys_impl(
     count,
-    (const u32*)((unsigned char*)0 + visible_offset),
-    (const u32*)((unsigned char*)0 + geo_ids_offset),
-    (u32*)((unsigned char*)0 + keys_out_offset)
+    WASM_PTR(const u32, visible_offset),
+    WASM_PTR(const u32, geo_ids_offset),
+    WASM_PTR(u32, keys_out_offset)
   );
 }
 
@@ -81,7 +81,7 @@ __attribute__((export_name("vc_sort_draw_calls")))
 void vc_sort_draw_calls(u32 count, u32 keys_offset, u32 indices_offset) {
   vc_sort_draw_calls_impl(
     count,
-    (u32*)((unsigned char*)0 + keys_offset),
-    (u32*)((unsigned char*)0 + indices_offset)
+    WASM_PTR(u32, keys_offset),
+    WASM_PTR(u32, indices_offset)
   );
 }

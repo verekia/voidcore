@@ -4,6 +4,7 @@ import { m4Multiply } from './math.ts'
 import { Mesh } from './mesh.ts'
 import { loadWasm } from './wasm.ts'
 
+import type { BVH, RaycastHit } from './bvh.ts'
 import type { Geometry } from './geometry.ts'
 import type { BloomConfig, DrawEntity } from './renderer.ts'
 import type { WasmCore } from './wasm.ts'
@@ -63,6 +64,11 @@ export class Scene {
   private _tempWorldMat = new Float32Array(16)
   private _tempRSMat = new Float32Array(16)
 
+  // BVH cache and scratch offsets for raycasting
+  private _bvhCache = new Map<number, BVH>()
+  private _rayResultOffset = 0 // scratch offset for raycast result (16 bytes)
+  private _invMatOffset = 0 // scratch offset for inverse matrix (64 bytes)
+
   private constructor(canvas: HTMLCanvasElement, config: SceneConfig) {
     this.canvas = canvas
     this.config = config
@@ -76,6 +82,9 @@ export class Scene {
     scene.camera = new Camera(scene.wasm.scratchOffset)
     // Planes offset: after camera's 3 mat4s (192 bytes)
     scene.planesOffset = scene.wasm.scratchOffset + 192
+    // Raycast scratch: after frustum planes (96 bytes)
+    scene._rayResultOffset = scene.planesOffset + 96
+    scene._invMatOffset = scene._rayResultOffset + 16
     return scene
   }
 
@@ -154,6 +163,159 @@ export class Scene {
   setBloom(config: BloomConfig) {
     this.bloomConfig = config
     this.renderer.setBloom(config)
+  }
+
+  buildBVH(geometryId: number) {
+    if (this._bvhCache.has(geometryId)) return
+
+    const reg = this.geometryRegistry.get(geometryId)
+    if (!reg) return
+
+    const { vertices, indices } = reg.geometry
+    const stride = 10 // floats per vertex
+
+    // Write geometry data to frame arena region (temporary, used only during build)
+    const frameBase = 16 * 1024 * 1024
+    const vertOffset = frameBase
+    const vertBytes = vertices.byteLength
+    const idxOffset = (frameBase + vertBytes + 3) & ~3 // align to 4 bytes
+
+    // Copy vertices into WASM memory
+    new Float32Array(this.wasm.memory.buffer, vertOffset, vertices.length).set(vertices)
+
+    // Copy indices into WASM memory
+    const isU32 = indices instanceof Uint32Array ? 1 : 0
+    if (isU32) {
+      new Uint32Array(this.wasm.memory.buffer, idxOffset, indices.length).set(indices as Uint32Array)
+    } else {
+      new Uint16Array(this.wasm.memory.buffer, idxOffset, indices.length).set(indices as Uint16Array)
+    }
+
+    const bvhOffset = this.wasm.exports.vc_bvh_build(vertOffset, idxOffset, indices.length, stride, isU32)
+
+    if (bvhOffset > 0) {
+      // Validate BVH header
+      const hdr = this.wasm.u32
+      const hb = bvhOffset / 4
+      const nodesOff = hdr[hb]!
+      const nodeCount = hdr[hb + 1]!
+      const triIdxOff = hdr[hb + 2]!
+      const posOff = hdr[hb + 3]!
+      const idxOff = hdr[hb + 4]!
+      const triCount = hdr[hb + 6]!
+      console.log(
+        `BVH built: header@${bvhOffset} nodes@${nodesOff}(${nodeCount}) triIdx@${triIdxOff} pos@${posOff} idx@${idxOff} tris=${triCount}`,
+      )
+
+      this._bvhCache.set(geometryId, {
+        offset: bvhOffset,
+        triCount: Math.floor(indices.length / 3),
+      })
+    } else {
+      console.warn(`BVH build failed for geometry ${geometryId} (returned 0)`)
+    }
+  }
+
+  raycast(
+    ox: number,
+    oy: number,
+    oz: number,
+    dx: number,
+    dy: number,
+    dz: number,
+    result: RaycastHit,
+    meshFilter?: (mesh: Mesh) => boolean,
+  ): boolean {
+    const { wasm } = this
+    const { f32, u32 } = wasm
+
+    result.hit = false
+    result.distance = Infinity
+    result.mesh = null
+
+    let closestT = Infinity
+
+    for (let i = 0; i < this.activeCount; i++) {
+      const mesh = this.meshes[i]
+      if (!mesh) continue
+      if (!mesh.visible) continue
+      if (mesh.skinInstance) continue
+      if (meshFilter && !meshFilter(mesh)) continue
+
+      // Get or lazy-build BVH
+      let bvh = this._bvhCache.get(mesh.geometryId)
+      if (!bvh) {
+        this.buildBVH(mesh.geometryId)
+        bvh = this._bvhCache.get(mesh.geometryId)
+        if (!bvh) continue
+      }
+
+      // Invert the mesh's world matrix
+      const wmByteOffset = wasm.worldMatricesPtr + mesh.entityId * 64
+      wasm.exports.vc_m4_invert(this._invMatOffset, wmByteOffset)
+
+      const ib = this._invMatOffset / 4
+      // Transform ray origin to local space: localOrigin = M^-1 * worldOrigin (w=1)
+      const lox = f32[ib]! * ox + f32[ib + 4]! * oy + f32[ib + 8]! * oz + f32[ib + 12]!
+      const loy = f32[ib + 1]! * ox + f32[ib + 5]! * oy + f32[ib + 9]! * oz + f32[ib + 13]!
+      const loz = f32[ib + 2]! * ox + f32[ib + 6]! * oy + f32[ib + 10]! * oz + f32[ib + 14]!
+
+      // Transform ray direction to local space (w=0, no translation)
+      const ldx = f32[ib]! * dx + f32[ib + 4]! * dy + f32[ib + 8]! * dz
+      const ldy = f32[ib + 1]! * dx + f32[ib + 5]! * dy + f32[ib + 9]! * dz
+      const ldz = f32[ib + 2]! * dx + f32[ib + 6]! * dy + f32[ib + 10]! * dz
+
+      // Local direction length (for converting local t to world t)
+      const dirLen = Math.sqrt(ldx * ldx + ldy * ldy + ldz * ldz)
+      if (dirLen < 1e-8) continue
+      const localMaxT = closestT * dirLen
+
+      let t: number
+      try {
+        t = wasm.exports.vc_bvh_raycast(bvh.offset, lox, loy, loz, ldx, ldy, ldz, localMaxT, this._rayResultOffset)
+      } catch (e) {
+        console.error('BVH raycast failed:', e, {
+          bvhOffset: bvh.offset,
+          ray: [lox, loy, loz, ldx, ldy, ldz],
+          maxT: localMaxT,
+          resultOff: this._rayResultOffset,
+        })
+        continue
+      }
+
+      if (t >= 0) {
+        const worldT = t / dirLen
+        if (worldT < closestT) {
+          closestT = worldT
+
+          // Read face index and local normal from result
+          const rb = this._rayResultOffset / 4
+          const faceIndex = u32[rb]!
+          const lnx = f32[rb + 1]!
+          const lny = f32[rb + 2]!
+          const lnz = f32[rb + 3]!
+
+          // Transform normal to world space via inverse-transpose: (M^-1)^T * n
+          const wnx = f32[ib]! * lnx + f32[ib + 1]! * lny + f32[ib + 2]! * lnz
+          const wny = f32[ib + 4]! * lnx + f32[ib + 5]! * lny + f32[ib + 6]! * lnz
+          const wnz = f32[ib + 8]! * lnx + f32[ib + 9]! * lny + f32[ib + 10]! * lnz
+          const nLen = Math.sqrt(wnx * wnx + wny * wny + wnz * wnz)
+
+          result.hit = true
+          result.distance = worldT
+          result.pointX = ox + dx * worldT
+          result.pointY = oy + dy * worldT
+          result.pointZ = oz + dz * worldT
+          result.normalX = nLen > 1e-8 ? wnx / nLen : 0
+          result.normalY = nLen > 1e-8 ? wny / nLen : 0
+          result.normalZ = nLen > 1e-8 ? wnz / nLen : 0
+          result.faceIndex = faceIndex
+          result.mesh = mesh
+        }
+      }
+    }
+
+    return result.hit
   }
 
   render() {

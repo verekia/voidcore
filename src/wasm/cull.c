@@ -90,8 +90,8 @@ u32 vc_frustum_cull_impl(u32 count, const f32* planes, const f32* bspheres,
 __attribute__((export_name("vc_extract_frustum_planes")))
 void vc_extract_frustum_planes(u32 vp_offset, u32 planes_offset) {
   vc_extract_frustum_planes_impl(
-    (const f32*)((unsigned char*)0 + vp_offset),
-    (f32*)((unsigned char*)0 + planes_offset)
+    WASM_PTR(const f32, vp_offset),
+    WASM_PTR(f32, planes_offset)
   );
 }
 
@@ -100,9 +100,9 @@ u32 vc_frustum_cull(u32 count, u32 planes_offset, u32 bspheres_offset,
                     u32 flags_offset, u32 visible_out_offset) {
   return vc_frustum_cull_impl(
     count,
-    (const f32*)((unsigned char*)0 + planes_offset),
-    (const f32*)((unsigned char*)0 + bspheres_offset),
-    (const u32*)((unsigned char*)0 + flags_offset),
-    (u32*)((unsigned char*)0 + visible_out_offset)
+    WASM_PTR(const f32, planes_offset),
+    WASM_PTR(const f32, bspheres_offset),
+    WASM_PTR(const u32, flags_offset),
+    WASM_PTR(u32, visible_out_offset)
   );
 }

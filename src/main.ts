@@ -1,3 +1,4 @@
+import { createRaycastHit } from './engine/bvh.ts'
 import { mergeGeometries } from './engine/geometry.ts'
 import { loadGLTF } from './engine/gltf.ts'
 import { createRenderer } from './engine/gpu.ts'
@@ -25,6 +26,10 @@ const GRID_SPACING = 5
 const ANIM_CYCLE_BASE = 3.0 // seconds between animation transitions
 const ANIM_CYCLE_JITTER = 2.0 // random extra seconds
 const CROSSFADE_DURATION = 0.2 // 200ms crossfade
+
+// Orbit motion
+const ORBIT_RADIUS = 2.5
+const BASE_ORBIT_SPEED = 0.5 // radians per second
 
 export const main = async (canvas: HTMLCanvasElement) => {
   const savedBackend = localStorage.getItem('voidcore-backend') as Backend | null
@@ -186,8 +191,9 @@ export const main = async (canvas: HTMLCanvasElement) => {
   if (slashIdx >= 0) availableAnims.push(slashIdx)
 
   // Add Eden map mesh
+  let edenMeshRef: Mesh | null = null
   if (edenGeoId !== null) {
-    scene.add(
+    edenMeshRef = scene.add(
       new Mesh({
         geometryId: edenGeoId,
         position: [-53.5, -69.5, 0],
@@ -197,12 +203,19 @@ export const main = async (canvas: HTMLCanvasElement) => {
         aoIntensity: 2,
       }),
     )
+    scene.buildBVH(edenGeoId)
   }
 
   // Spawn grid of characters
   const skinInstances: SkinInstance[] = []
   const animTimers: number[] = [] // time until next transition
   const currentAnimSlot: number[] = [] // index into availableAnims
+  const bodyMeshes: Mesh[] = []
+  const weaponMeshes: (Mesh | null)[] = []
+  const spawnX: number[] = []
+  const spawnY: number[] = []
+  const orbitSpeeds: number[] = []
+  const orbitPhases: number[] = []
 
   const totalChars = GRID_SIZE * GRID_SIZE
   const gridOffset = ((GRID_SIZE - 1) * GRID_SPACING) / 2
@@ -227,9 +240,13 @@ export const main = async (canvas: HTMLCanvasElement) => {
 
       const x = col * GRID_SPACING - gridOffset
       const y = row * GRID_SPACING - gridOffset
+      spawnX.push(x)
+      spawnY.push(y)
+      orbitSpeeds.push(BASE_ORBIT_SPEED + (charIdx % 7) * 0.1)
+      orbitPhases.push(charIdx * 1.37)
 
       // Add skinned body mesh
-      scene.add(
+      const body = scene.add(
         new Mesh({
           geometryId: skinnedGeoId,
           position: [x, y, -40],
@@ -238,10 +255,11 @@ export const main = async (canvas: HTMLCanvasElement) => {
           skinInstance: inst,
         }),
       )
+      bodyMeshes.push(body)
 
       // Attach megaxe to hand bone
       if (megaxeId !== null && handBoneIdx >= 0) {
-        scene.add(
+        const weapon = scene.add(
           new Mesh({
             geometryId: megaxeId,
             position: [x, y, -40],
@@ -251,6 +269,9 @@ export const main = async (canvas: HTMLCanvasElement) => {
             boneAttachment: { skinInstance: inst, boneNodeIndex: handBoneIdx },
           }),
         )
+        weaponMeshes.push(weapon)
+      } else {
+        weaponMeshes.push(null)
       }
 
       // Stagger transition timers so they don't all switch at once
@@ -347,10 +368,14 @@ export const main = async (canvas: HTMLCanvasElement) => {
 
   // Animation loop
   let lastTime = performance.now()
+  let orbitTime = 0
+  const rayHit = createRaycastHit()
+  const edenFilter = edenMeshRef ? (m: Mesh) => m === edenMeshRef : undefined
 
   const frame = (now: number) => {
     const dt = Math.min((now - lastTime) / 1000, 0.05)
     lastTime = now
+    orbitTime += dt
 
     // FPS counter
     frameCount++
@@ -375,6 +400,31 @@ export const main = async (canvas: HTMLCanvasElement) => {
     // Update all skin instances
     for (const inst of skinInstances) {
       updateSkinInstance(inst, animations, dt)
+    }
+
+    // Orbit characters around spawn points and raycast against Eden
+    for (let i = 0; i < totalChars; i++) {
+      const angle = orbitTime * orbitSpeeds[i]! + orbitPhases[i]!
+      const cx = spawnX[i]! + Math.cos(angle) * ORBIT_RADIUS
+      const cy = spawnY[i]! + Math.sin(angle) * ORBIT_RADIUS
+
+      const body = bodyMeshes[i]!
+      body.position[0] = cx
+      body.position[1] = cy
+      body.setDirty()
+
+      // Raycast from z=50 downward to find Eden surface
+      if (edenFilter && scene.raycast(cx, cy, 50, 0, 0, -1, rayHit, edenFilter)) {
+        body.position[2] = rayHit.pointZ
+      }
+
+      // Sync weapon position
+      const weapon = weaponMeshes[i]
+      if (weapon) {
+        weapon.position[0] = cx
+        weapon.position[1] = cy
+        weapon.position[2] = body.position[2]!
+      }
     }
 
     controls.update()

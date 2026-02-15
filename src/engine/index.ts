@@ -1,3 +1,4 @@
+export { createRaycastHit, type BVH, type RaycastHit } from './bvh.ts'
 export { loadWasm, type WasmCore, type WasmExports } from './wasm.ts'
 export { Scene, type SceneConfig } from './scene.ts'
 export { Mesh, type MeshOptions } from './mesh.ts'

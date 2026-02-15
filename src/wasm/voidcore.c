@@ -1,5 +1,6 @@
 #include "math.h"
 #include "arena.h"
+#include "bvh.h"
 
 extern unsigned char __heap_base;
 
@@ -26,8 +27,8 @@ static u32 frame_arena_size;
 #define FLAG_VISIBLE  0x02
 
 // Helper to access WASM linear memory as f32/u32 arrays
-#define F32_AT(byte_offset) ((f32*)((unsigned char*)0 + (byte_offset)))
-#define U32_AT(byte_offset) ((u32*)((unsigned char*)0 + (byte_offset)))
+#define F32_AT(byte_offset) WASM_PTR(f32, byte_offset)
+#define U32_AT(byte_offset) WASM_PTR(u32, byte_offset)
 
 __attribute__((export_name("vc_init")))
 u32 vc_init(u32 memory_pages) {
@@ -69,8 +70,15 @@ u32 vc_init(u32 memory_pages) {
     col[i * 4 + 3] = 1.0f;
   }
 
-  // Scratch region starts after SoA arrays (JS uses this for camera/planes temp data)
+  // Scratch region starts after SoA arrays (JS uses this for camera/planes/raycast temp data)
+  // Reserve 4KB for scratch: camera (192) + planes (96) + ray result (16) + inv matrix (64) + padding
   u32 scratch_start = offset;
+  offset += 4096;
+
+  // Set up BVH persistent arena (after scratch, before frame arena)
+  u32 bvh_start = (offset + 15) & ~15;
+  u32 bvh_end = 16 * 1024 * 1024;
+  bvh_arena_init(bvh_start, bvh_end - bvh_start);
 
   // Set up per-frame arena in upper half of memory (16MB..32MB)
   frame_arena_base = 16 * 1024 * 1024;
@@ -152,6 +160,11 @@ u32 vc_compute_world_matrices(u32 count) {
     }
   }
   return processed;
+}
+
+__attribute__((export_name("vc_m4_invert")))
+void vc_m4_invert_export(u32 out_offset, u32 m_offset) {
+  m4_invert(F32_AT(out_offset), F32_AT(m_offset));
 }
 
 __attribute__((export_name("vc_frame_reset")))
