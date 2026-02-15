@@ -89,10 +89,13 @@ export function createWebGLRenderer(canvas: HTMLCanvasElement): Renderer {
 
       // position
       gl.enableVertexAttribArray(0)
-      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0)
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 36, 0)
       // normal
       gl.enableVertexAttribArray(1)
-      gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12)
+      gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 36, 12)
+      // vertex color
+      gl.enableVertexAttribArray(2)
+      gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 36, 24)
 
       const ebo = gl.createBuffer()!
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo)

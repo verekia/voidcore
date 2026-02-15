@@ -253,7 +253,7 @@ function computeBoundingSphere(vertices: Float32Array): {
   center: Float32Array
   radius: number
 } {
-  const stride = 6 // pos(3) + normal(3)
+  const stride = 9 // pos(3) + normal(3) + color(3)
   const count = vertices.length / stride
   let cx = 0,
     cy = 0,

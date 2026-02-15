@@ -25,6 +25,7 @@ struct LightUniforms {
 struct VertexInput {
   @location(0) position: vec3f,
   @location(1) normal: vec3f,
+  @location(2) vertColor: vec3f,
 }
 
 struct VertexOutput {
@@ -32,6 +33,7 @@ struct VertexOutput {
   @location(0) worldNormal: vec3f,
   @location(1) color: vec4f,
   @location(2) unlit: f32,
+  @location(3) vertColor: vec3f,
 }
 
 @vertex
@@ -50,6 +52,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
   output.worldNormal = normalize(normalMat * input.normal);
   output.color = model.color;
   output.unlit = model.flags.x;
+  output.vertColor = input.vertColor;
 
   return output;
 }
@@ -66,9 +69,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
 
   var finalColor: vec3f;
   if (input.unlit > 0.5) {
-    finalColor = input.color.rgb;
+    finalColor = input.color.rgb * input.vertColor;
   } else {
-    finalColor = input.color.rgb * (diffuse + ambient);
+    finalColor = input.color.rgb * input.vertColor * (diffuse + ambient);
   }
 
   return vec4f(finalColor, input.color.a);
