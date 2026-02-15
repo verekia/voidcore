@@ -2,6 +2,8 @@
 
 High-performance WebGPU/WebGL game engine with a C/WASM compute core. Zero dependencies in the C layer — no Emscripten, no libc. JS handles GPU API calls and scene management, C/WASM handles math, transforms, culling, and sorting. Shared memory via typed array views — no serialization overhead.
 
+☠ **DO NOT USE**: It is highly experimental and custom built for [**Mana Blade**](https://manablade.com/) exclusively. It is only open source for people who want to look at the code.
+
 ## Quick Start
 
 ```ts
@@ -65,7 +67,10 @@ requestAnimationFrame(frame)
 - **Lambert lighting** — directional + ambient, per-entity unlit flag
 - **MSAA 4x** — multisample anti-aliasing (WebGPU), canvas antialiasing (WebGL)
 - **Skeletal animation** — glTF skinned meshes with linear blend skinning (up to 128 joints), crossfade transitions, bone attachments
-- **glTF 2.0 / GLB import** — load external 3D models with skins, animations, and optional Draco mesh compression
+- **Selective bloom** — per-vertex bloom values with MRT pipeline (downsample/upsample/composite), configurable intensity and radius
+- **Texture support** — KTX2/Basis Universal loader, AO maps with adjustable per-mesh intensity, color maps (reserved for future use)
+- **Orbit controls** — mouse/touch orbit camera with zoom and pan
+- **glTF 2.0 / GLB import** — load external 3D models with skins, animations, UVs, and optional Draco mesh compression
 - **Primitive geometry** — box and sphere generators with normals
 - **Z-up right-handed** coordinate system (Blender convention)
 - **Zero-copy JS↔WASM** — typed array views directly into WASM linear memory
@@ -189,6 +194,72 @@ transitionTo(inst, 1, 0.2) // crossfade to clip 1 over 200ms
 ```
 
 Linear blend skinning with up to 128 joints per skeleton. Joint matrices are computed in JS (quaternion SLERP + hierarchical traversal) and uploaded per-entity. Crossfade blending interpolates between two animation clips.
+
+### Textures (AO Maps)
+
+```ts
+import { loadKTX2, mergeGeometries } from 'voidcore'
+
+// Load KTX2 texture (Basis Universal transcoder)
+const aoTex = await loadKTX2('/textures/ao.ktx2', '/basis-1.50/')
+const aoTexId = scene.registerTexture(aoTex.data, aoTex.width, aoTex.height)
+
+// Register textured geometry (vertices + UVs from glTF)
+const merged = mergeGeometries(
+  mesh.primitives.map((prim, i) => ({
+    vertices: prim.geometry.vertices,
+    indices: prim.geometry.indices,
+    color: colors[i],
+    uvs: prim.uvs, // TEXCOORD_0 extracted from glTF/Draco
+  })),
+)
+const geoId = scene.registerTexturedGeometry(merged, merged.uvs!)
+
+// Add mesh with AO map
+scene.add(
+  new Mesh({
+    geometryId: geoId,
+    aoMap: aoTexId,
+    aoIntensity: 1.5, // 0 = no AO, 1 = normal, >1 = exaggerated
+  }),
+)
+```
+
+KTX2 textures are transcoded to RGBA8 via the Basis Universal transcoder (loaded lazily via script tag). AO maps modulate both diffuse and ambient lighting. Intensity is controllable per-mesh via `aoIntensity` (uses `model.flags.y` in the shader).
+
+### Selective Bloom
+
+```ts
+// Enable bloom (MRT pipeline: scene + bloom render targets)
+scene.setBloom({ enabled: true, intensity: 5.0, radius: 1.0 })
+
+// Per-vertex bloom is baked into vertex data (10th float per vertex)
+// In mergeGeometries, set bloom per primitive:
+mergeGeometries(
+  primitives.map((prim, i) => ({
+    vertices: prim.geometry.vertices,
+    indices: prim.geometry.indices,
+    color: colors[i],
+    bloom: i === glowPrimIdx ? 1.0 : undefined, // only this primitive glows
+  })),
+)
+```
+
+Bloom uses a dual-render-target MRT pass, followed by a 5-level downsample/upsample mip chain with additive blending, then a final composite pass. Per-vertex bloom values allow selective glow on specific geometry parts.
+
+### Orbit Controls
+
+```ts
+import { OrbitControls } from 'voidcore'
+
+const controls = new OrbitControls(scene.camera, canvas)
+
+// In render loop
+controls.update()
+
+// On cleanup
+controls.dispose()
+```
 
 ### Camera
 

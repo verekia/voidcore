@@ -54,17 +54,20 @@ src/
     gpu.ts                  createRenderer() factory (picks WebGPU or WebGL)
     renderer.ts             WebGPU renderer + Renderer interface
     webgl-renderer.ts       WebGL2 fallback renderer
-    geometry.ts             createBoxGeometry, createSphereGeometry
-    gltf.ts                 glTF 2.0 / GLB loader (skins, animations, Draco compression)
+    geometry.ts             createBoxGeometry, createSphereGeometry, mergeGeometries (with UV support)
+    gltf.ts                 glTF 2.0 / GLB loader (skins, animations, Draco compression, TEXCOORD_0 UVs)
+    ktx2.ts                 KTX2 texture loader (Basis Universal transcoder, RGBA8 output)
     skin.ts                 Skeletal animation (skeleton, skin instances, crossfade, bone attachment)
     math.ts                 Animation math (vec3 lerp, quat slerp, mat4 from TRS, mat4 multiply)
-    shaders.ts              WGSL shaders (WebGPU) — static + skinned pipelines
-    webgl-shaders.ts        GLSL 300 es shaders (WebGL2) — static + skinned pipelines
+    orbit-controls.ts       Orbit camera controls (mouse/touch)
+    shaders.ts              WGSL shaders (WebGPU) — static, skinned, and textured pipelines
+    webgl-shaders.ts        GLSL 300 es shaders (WebGL2) — static, skinned, and textured pipelines
     index.ts                Barrel exports
-  main.ts                   Demo app (20×20 skinned characters with animation cycling)
+  main.ts                   Demo app (30×30 skinned characters with animation cycling + textured city)
 public/
   voidcore.wasm             Build artifact (gitignored)
   draco-1.5.7/              Draco WASM decoder (used by gltf.ts for compressed meshes)
+  basis-1.50/               Basis Universal transcoder (used by ktx2.ts for KTX2 textures)
 ```
 
 ## WASM Memory Layout (32 MB fixed, no growth)
@@ -89,12 +92,16 @@ Key exports: `vc_init`, `vc_compute_world_matrices`, `vc_perspective`, `vc_look_
 
 - **Lighting**: Lambert diffuse (directional + ambient), per-entity unlit flag
 - **Geometry**: Box and sphere primitives + glTF/GLB import (with optional Draco compression), supports Uint16 and Uint32 indices
-  - Static vertex format: `[px, py, pz, nx, ny, nz]` (24 bytes/vertex)
+  - Static vertex format: `[px, py, pz, nx, ny, nz, cr, cg, cb, bloom]` (40 bytes/vertex)
   - Skinned vertex format: static + `[joints(u8×4), weights(f32×4)]` (20 bytes/vertex in separate buffer)
+  - Textured vertex format: static + `[u, v]` (8 bytes/vertex in separate buffer)
 - **Skinned meshes**: Linear blend skinning (4 weights/vertex, 128 max joints), crossfade animation blending, bone attachments
+- **Textures**: KTX2/Basis Universal loader, AO maps (per-mesh with adjustable intensity via `aoIntensity`), color maps (field reserved for future use)
+- **Selective bloom**: Per-vertex bloom value baked into vertex data + MRT bloom pipeline (downsample/upsample/composite), configurable intensity and radius
+- **Orbit controls**: Mouse/touch orbit camera with zoom and pan
 - **WebGPU**: MSAA 4x, depth24plus, dynamic offset model uniforms (256-byte aligned)
 - **WebGL2**: UBOs for camera/model/light, `antialias: true` canvas
-- **Bind groups**: Group 0 = camera (view + projection), Group 1 = model (world + color + flags), Group 2 = light (direction + color + ambient), Group 3 = joints (skinned meshes only)
+- **Bind groups**: Group 0 = camera (view + projection), Group 1 = model (world + color + flags), Group 2 = light (direction + color + ambient), Group 3 = joints (skinned) OR texture+sampler (textured)
 
 ## Entity Flags (bitfield in u32)
 
@@ -110,6 +117,6 @@ Key exports: `vc_init`, `vc_compute_world_matrices`, `vc_perspective`, `vc_look_
 4. Update bounding spheres
 5. `vc_extract_frustum_planes` + `vc_frustum_cull` — bounding sphere test
 6. `vc_build_sort_keys` + `vc_sort_draw_calls` — radix sort by geometry ID
-7. Build draw entity list from visible indices (attach joint matrices for skinned entities)
-8. `renderer.draw` — submit GPU draw calls (separate pipeline for skinned vs static)
+7. Build draw entity list from visible indices (attach joint matrices for skinned entities, texture IDs for textured entities)
+8. `renderer.draw` — submit GPU draw calls (separate pipelines for static, skinned, and textured)
 9. `vc_frame_reset` — reset per-frame arena
