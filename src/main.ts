@@ -1,30 +1,37 @@
-import { createBoxGeometry, createSphereGeometry } from './engine/geometry.ts'
 import { loadGLTF } from './engine/gltf.ts'
 import { Mesh } from './engine/mesh.ts'
 import { Scene } from './engine/scene.ts'
+import {
+  createSkeleton,
+  createSkinInstance,
+  updateSkinInstance,
+  transitionTo,
+  findBoneNodeIndex,
+} from './engine/skin.ts'
 
+import type { GltfAnimation } from './engine/gltf.ts'
 import type { Backend } from './engine/gpu.ts'
+import type { Skeleton, SkinInstance } from './engine/skin.ts'
+
+// Grid configuration
+const GRID_SIZE = 20 // 20x20 = 400 characters
+const GRID_SPACING = 2.5
+
+// Animation cycling: each character transitions between anims on a staggered timer
+const ANIM_CYCLE_BASE = 3.0 // seconds between animation transitions
+const ANIM_CYCLE_JITTER = 2.0 // random extra seconds
+const CROSSFADE_DURATION = 0.2 // 200ms crossfade
 
 export const main = async (canvas: HTMLCanvasElement) => {
-  // Create scene (restore saved backend preference, or auto-pick)
   const savedBackend = localStorage.getItem('voidcore-backend') as Backend | null
   const scene = await Scene.create(canvas, { backend: savedBackend ?? undefined })
   console.log(`VoidCore renderer: ${scene.renderer.backend}`)
 
-  // Register geometries
-  const boxGeo = createBoxGeometry(1, 1, 1)
-  const sphereGeo = createSphereGeometry(0.5, 16, 12)
-  const groundGeo = createBoxGeometry(40, 40, 0.2)
-
-  const boxId = scene.registerGeometry(boxGeo)
-  const sphereId = scene.registerGeometry(sphereGeo)
-  const groundId = scene.registerGeometry(groundGeo)
-
-  // Load megaxe mesh from GLB with material colors
+  // Load megaxe mesh from static bundle
   const megaxeColors = new Map<number, [number, number, number]>([
-    [0, [0.95, 0.95, 0.95]], // near white
-    [1, [0.1, 0.1, 0.1]], // near black
-    [2, [0, 0.9, 0.8]], // bright teal
+    [0, [0.95, 0.95, 0.95]],
+    [1, [0.1, 0.1, 0.1]],
+    [2, [0, 0.9, 0.8]],
   ])
 
   let megaxeId: number | null = null
@@ -35,54 +42,134 @@ export const main = async (canvas: HTMLCanvasElement) => {
       const prim = megaxeMesh.primitives[0]!
       megaxeId = scene.registerGeometry(prim.geometry)
       console.log(`Loaded megaxe mesh (${prim.geometry.vertices.length / 9} vertices)`)
-    } else {
-      console.warn('megaxe mesh not found in static-bundle.glb')
     }
   } catch (e) {
     console.warn('Failed to load static-bundle.glb:', e)
   }
 
-  // Ground plane
-  scene.add(
-    new Mesh({
-      geometryId: groundId,
-      position: [0, 0, -0.1],
-      color: [0.3, 0.3, 0.35, 1],
-    }),
-  )
+  // Load player character (skinned mesh)
+  let skeleton: Skeleton | undefined
+  let animations: GltfAnimation[] = []
+  let skinnedGeoId: number | undefined
+  let handBoneIdx = -1
 
-  // Random cubes, spheres, and megaxes
-  const animatedMeshes: Mesh[] = []
-  const entityCount = 1000
+  // Animation clip indices
+  let idleIdx = 0
+  let runIdx = -1
+  let slashIdx = -1
 
-  for (let i = 0; i < entityCount; i++) {
-    const roll = Math.random()
-    const isSphere = roll < 0.33
-    const isMegaxe = roll >= 0.33 && roll < 0.66 && megaxeId !== null
-    const x = (Math.random() - 0.5) * 30
-    const y = (Math.random() - 0.5) * 30
-    const z = Math.random() * 5 + 0.5
-    const r = Math.random() * 0.8 + 0.2
-    const g = Math.random() * 0.8 + 0.2
-    const b = Math.random() * 0.8 + 0.2
+  try {
+    const playerGltf = await loadGLTF('/player-bundle.glb')
+    const bodyMesh = playerGltf.meshes.find(m => m.name === 'Body' && m.skinIndex !== undefined)
 
-    const mesh = new Mesh({
-      geometryId: isMegaxe ? megaxeId! : isSphere ? sphereId : boxId,
-      position: [x, y, z],
-      color: isMegaxe ? [1, 1, 1, 1] : [r, g, b, 1],
-      scale: isMegaxe
-        ? [1, 1, 1]
-        : isSphere
-          ? [0.5 + Math.random(), 0.5 + Math.random(), 0.5 + Math.random()]
-          : [0.5 + Math.random() * 1.5, 0.5 + Math.random() * 1.5, 0.5 + Math.random() * 1.5],
-    })
+    if (bodyMesh && bodyMesh.primitives.length > 0) {
+      const prim = bodyMesh.primitives[0]!
+      const skin = playerGltf.skins[bodyMesh.skinIndex!]!
+      skeleton = createSkeleton(skin, playerGltf.nodeTransforms)
+      animations = playerGltf.animations
 
-    scene.add(mesh)
+      // Find animation clip indices
+      for (let i = 0; i < animations.length; i++) {
+        const name = animations[i]!.name.toLowerCase()
+        if (name.includes('idle')) idleIdx = i
+        else if (name.includes('run')) runIdx = i
+        else if (name.includes('slash')) slashIdx = i
+      }
 
-    if (Math.random() > 0.7) {
-      animatedMeshes.push(mesh)
+      // Register skinned geometry (shared by all characters)
+      skinnedGeoId = scene.registerSkinnedGeometry(prim.geometry, prim.skinJoints!, prim.skinWeights!)
+
+      // Find hand bone for megaxe attachment
+      if (megaxeId !== null) {
+        try {
+          handBoneIdx = findBoneNodeIndex(skeleton, 'Hand.R')
+        } catch {
+          console.warn('Hand.R bone not found')
+        }
+      }
+
+      console.log(
+        `Loaded player (${prim.geometry.vertices.length / 9} verts, ${skeleton.jointCount} joints, ${animations.length} anims: ${animations.map(a => a.name).join(', ')})`,
+      )
+    }
+  } catch (e) {
+    console.warn('Failed to load player-bundle.glb:', e)
+  }
+
+  if (!skeleton || skinnedGeoId === undefined) {
+    console.error('Failed to load player assets')
+    return
+  }
+
+  // Build list of available animation indices for cycling
+  const availableAnims: number[] = [idleIdx]
+  if (runIdx >= 0) availableAnims.push(runIdx)
+  if (slashIdx >= 0) availableAnims.push(slashIdx)
+
+  // Spawn grid of characters
+  const skinInstances: SkinInstance[] = []
+  const animTimers: number[] = [] // time until next transition
+  const currentAnimSlot: number[] = [] // index into availableAnims
+
+  const totalChars = GRID_SIZE * GRID_SIZE
+  const gridOffset = ((GRID_SIZE - 1) * GRID_SPACING) / 2
+
+  for (let row = 0; row < GRID_SIZE; row++) {
+    for (let col = 0; col < GRID_SIZE; col++) {
+      const charIdx = row * GRID_SIZE + col
+
+      // Staggered starting animation
+      const startAnimSlot = charIdx % availableAnims.length
+      const startClipIdx = availableAnims[startAnimSlot]!
+
+      const inst = createSkinInstance(skeleton, startClipIdx)
+
+      // Offset animation time so characters aren't all in sync
+      const clipDuration = animations[startClipIdx]!.duration
+      inst.time = clipDuration > 0 ? (charIdx * 0.13) % clipDuration : 0
+
+      // Initial pose
+      updateSkinInstance(inst, animations, 0)
+      skinInstances.push(inst)
+
+      const x = col * GRID_SPACING - gridOffset
+      const y = row * GRID_SPACING - gridOffset
+
+      // Add skinned body mesh
+      scene.add(
+        new Mesh({
+          geometryId: skinnedGeoId,
+          position: [x, y, 0],
+          color: [1, 1, 1, 1],
+          scale: [1, 1, 1],
+          skinInstance: inst,
+        }),
+      )
+
+      // Attach megaxe to hand bone
+      if (megaxeId !== null && handBoneIdx >= 0) {
+        scene.add(
+          new Mesh({
+            geometryId: megaxeId,
+            position: [x, y, 0],
+            color: [1, 1, 1, 1],
+            scale: [1, 1, 1],
+            boneAttachment: { skinInstance: inst, boneNodeIndex: handBoneIdx },
+          }),
+        )
+      }
+
+      // Stagger transition timers so they don't all switch at once
+      animTimers.push(ANIM_CYCLE_BASE + Math.random() * ANIM_CYCLE_JITTER + charIdx * 0.01)
+      currentAnimSlot.push(startAnimSlot)
     }
   }
+
+  const totalEntities = totalChars + (megaxeId !== null && handBoneIdx >= 0 ? totalChars : 0)
+
+  console.log(
+    `Spawned ${totalChars} characters (${totalEntities} entities)${megaxeId !== null && handBoneIdx >= 0 ? ' with megaxes' : ''}`,
+  )
 
   // Lighting
   scene.setDirectionalLight([0.5, 0.3, -1], [1, 0.95, 0.9])
@@ -94,10 +181,8 @@ export const main = async (canvas: HTMLCanvasElement) => {
   camera.near = 0.1
   camera.far = 500
 
-  // Track current canvas for resize
   let currentCanvas = canvas
 
-  // Handle resize
   const resize = () => {
     const dpr = window.devicePixelRatio || 1
     const w = Math.floor(currentCanvas.clientWidth * dpr)
@@ -134,7 +219,6 @@ export const main = async (canvas: HTMLCanvasElement) => {
     switching = true
     toggle.textContent = 'Switching...'
     const target: Backend = scene.renderer.backend === 'webgpu' ? 'webgl' : 'webgpu'
-    // Create a new canvas (can't reuse a canvas that already has a different context)
     const newCanvas = document.createElement('canvas')
     currentCanvas.replaceWith(newCanvas)
     currentCanvas = newCanvas
@@ -147,40 +231,52 @@ export const main = async (canvas: HTMLCanvasElement) => {
   document.body.appendChild(toggle)
 
   // Animation loop
-  let time = 0
+  let lastTime = performance.now()
 
-  const frame = () => {
-    time += 0.016
+  const frame = (now: number) => {
+    const dt = Math.min((now - lastTime) / 1000, 0.05)
+    lastTime = now
 
     // FPS counter
     frameCount++
-    const now = performance.now()
     if (now - lastFpsTime >= 1000) {
       fps = frameCount
       frameCount = 0
       lastFpsTime = now
     }
 
+    // Update animation timers and transitions
+    for (let i = 0; i < totalChars; i++) {
+      animTimers[i]! -= dt
+      if (animTimers[i]! <= 0) {
+        // Cycle to next animation
+        currentAnimSlot[i] = (currentAnimSlot[i]! + 1) % availableAnims.length
+        const nextClip = availableAnims[currentAnimSlot[i]!]!
+        transitionTo(skinInstances[i]!, nextClip, CROSSFADE_DURATION)
+        animTimers[i] = ANIM_CYCLE_BASE + Math.random() * ANIM_CYCLE_JITTER
+      }
+    }
+
+    // Update all skin instances
+    for (const inst of skinInstances) {
+      updateSkinInstance(inst, animations, dt)
+    }
+
     // Orbit camera (Z-up)
-    const orbitRadius = 20
-    const orbitSpeed = 0.2
+    const time = now / 1000
+    const orbitRadius = GRID_SIZE * GRID_SPACING * 0.7
+    const orbitSpeed = 0.15
     camera.eye[0] = Math.sin(time * orbitSpeed) * orbitRadius
     camera.eye[1] = Math.cos(time * orbitSpeed) * orbitRadius
-    camera.eye[2] = 8 + Math.sin(time * 0.3) * 3
+    camera.eye[2] = orbitRadius * 0.4 + Math.sin(time * 0.2) * 3
     camera.target[0] = 0
     camera.target[1] = 0
     camera.target[2] = 1
 
-    // Animate some meshes
-    for (const mesh of animatedMeshes) {
-      mesh.rotation[2] = (mesh.rotation[2] ?? 0) + 0.02
-      mesh.setDirty()
-    }
-
     resize()
     scene.render()
 
-    stats.textContent = `${fps} fps | ${scene.drawCalls} draws | ${scene.visibleCount}/${entityCount + 1} visible`
+    stats.textContent = `${fps} fps | ${scene.drawCalls} draws | ${scene.visibleCount}/${totalEntities} visible | ${totalChars} skinned`
 
     requestAnimationFrame(frame)
   }

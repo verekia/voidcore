@@ -1,9 +1,11 @@
 import { Camera } from './camera.ts'
 import { createRenderer, type Backend, type Renderer } from './gpu.ts'
+import { m4Multiply } from './math.ts'
 import { Mesh } from './mesh.ts'
 import { loadWasm } from './wasm.ts'
 
 import type { Geometry } from './geometry.ts'
+import type { DrawEntity } from './renderer.ts'
 import type { WasmCore } from './wasm.ts'
 
 const FLAG_VISIBLE = 0x02
@@ -11,6 +13,13 @@ const FLAG_UNLIT = 0x04
 
 export interface SceneConfig {
   backend?: Backend
+}
+
+interface RegisteredGeometry {
+  geometry: Geometry
+  skinned: boolean
+  joints?: Uint8Array
+  weights?: Float32Array
 }
 
 export class Scene {
@@ -21,7 +30,7 @@ export class Scene {
 
   private meshes: (Mesh | null)[] = []
   private activeCount = 0
-  private geometryRegistry = new Map<number, Geometry>()
+  private geometryRegistry = new Map<number, RegisteredGeometry>()
   private nextGeometryId = 0
   private config: SceneConfig
 
@@ -36,6 +45,9 @@ export class Scene {
 
   // Scratch offsets for frustum planes (6 planes × 4 floats = 96 bytes)
   private planesOffset = 0
+
+  // Temp mat4 for bone attachment world matrix computation
+  private _tempWorldMat = new Float32Array(16)
 
   private constructor(canvas: HTMLCanvasElement, config: SceneConfig) {
     this.canvas = canvas
@@ -55,8 +67,15 @@ export class Scene {
 
   registerGeometry(geometry: Geometry): number {
     const id = this.nextGeometryId++
-    this.geometryRegistry.set(id, geometry)
+    this.geometryRegistry.set(id, { geometry, skinned: false })
     this.renderer.registerGeometry(id, geometry.vertices, geometry.indices)
+    return id
+  }
+
+  registerSkinnedGeometry(geometry: Geometry, joints: Uint8Array, weights: Float32Array): number {
+    const id = this.nextGeometryId++
+    this.geometryRegistry.set(id, { geometry, skinned: true, joints, weights })
+    this.renderer.registerSkinnedGeometry(id, geometry.vertices, geometry.indices, joints, weights)
     return id
   }
 
@@ -66,9 +85,9 @@ export class Scene {
     this.meshes[entityId] = mesh
 
     // Compute bounding sphere from geometry
-    const geo = this.geometryRegistry.get(mesh.geometryId)
-    if (geo) {
-      const { center, radius } = computeBoundingSphere(geo.vertices)
+    const reg = this.geometryRegistry.get(mesh.geometryId)
+    if (reg) {
+      const { center, radius } = computeBoundingSphere(reg.geometry.vertices)
       mesh.bsphereRadius = radius
       mesh.bsphereCenterOffset.set(center)
       mesh.updateBsphere()
@@ -114,12 +133,23 @@ export class Scene {
     // 2. Update camera
     camera.update(wasm, aspect)
 
-    // 3. Update bounding spheres for all meshes
+    // 3. Apply bone attachments (override world matrices)
+    for (let i = 0; i < activeCount; i++) {
+      const mesh = this.meshes[i]
+      if (!mesh?.boneAttachment) continue
+      const { skinInstance, boneNodeIndex } = mesh.boneAttachment
+      const boneGlobal = skinInstance.globalMatrices
+      // worldMatrix = entityWorldMatrix * boneGlobalMatrix
+      m4Multiply(this._tempWorldMat, 0, mesh.worldMatrix, 0, boneGlobal, boneNodeIndex * 16)
+      mesh.worldMatrix.set(this._tempWorldMat)
+    }
+
+    // 4. Update bounding spheres for all meshes
     for (let i = 0; i < activeCount; i++) {
       this.meshes[i]?.updateBsphere()
     }
 
-    // 4. Frustum culling (if available in WASM)
+    // 5. Frustum culling (if available in WASM)
     let visibleIndices: number[]
     let visibleCount: number
 
@@ -137,7 +167,7 @@ export class Scene {
         wasm.visibleIndicesPtr,
       )
 
-      // 5. Sort draw calls (if available)
+      // 6. Sort draw calls (if available)
       if (wasm.exports.vc_build_sort_keys && wasm.exports.vc_sort_draw_calls) {
         wasm.exports.vc_build_sort_keys(visibleCount, wasm.visibleIndicesPtr, wasm.geometryIdsPtr, wasm.sortKeysPtr)
         wasm.exports.vc_sort_draw_calls(visibleCount, wasm.sortKeysPtr, wasm.visibleIndicesPtr)
@@ -164,26 +194,30 @@ export class Scene {
 
     this.visibleCount = visibleCount
 
-    // 6. Build draw entity list
-    const drawEntities = []
+    // 7. Build draw entity list
+    const drawEntities: DrawEntity[] = []
     for (const idx of visibleIndices) {
       const mesh = this.meshes[idx]
       if (!mesh) continue
-      drawEntities.push({
+      const entity: DrawEntity = {
         worldMatrix: mesh.worldMatrix,
         color: mesh.color,
         geometryId: mesh.geometryId,
         unlit: (wasm.u32[wasm.flagsPtr / 4 + idx]! & FLAG_UNLIT) !== 0,
-      })
+      }
+      if (mesh.skinInstance) {
+        entity.jointMatrices = mesh.skinInstance.jointMatrices
+      }
+      drawEntities.push(entity)
     }
 
-    // 7. Render
+    // 8. Render
     renderer.updateCamera(camera.view, camera.projection)
     renderer.updateLighting(this.lightDir, this.lightColor, this.ambientColor)
     renderer.draw(drawEntities, drawEntities.length)
     this.drawCalls = drawEntities.length
 
-    // 8. Reset per-frame arena
+    // 9. Reset per-frame arena
     wasm.exports.vc_frame_reset()
   }
 
@@ -199,8 +233,12 @@ export class Scene {
     this.renderer = await createRenderer(canvas, backend)
 
     // Re-register all geometries
-    for (const [id, geo] of this.geometryRegistry) {
-      this.renderer.registerGeometry(id, geo.vertices, geo.indices)
+    for (const [id, reg] of this.geometryRegistry) {
+      if (reg.skinned && reg.joints && reg.weights) {
+        this.renderer.registerSkinnedGeometry(id, reg.geometry.vertices, reg.geometry.indices, reg.joints, reg.weights)
+      } else {
+        this.renderer.registerGeometry(id, reg.geometry.vertices, reg.geometry.indices)
+      }
     }
   }
 

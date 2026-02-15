@@ -1,4 +1,4 @@
-import { shaderSource } from './shaders.ts'
+import { shaderSource, skinnedShaderSource } from './shaders.ts'
 
 import type { Backend } from './gpu.ts'
 
@@ -7,11 +7,19 @@ export interface DrawEntity {
   color: Float32Array
   geometryId: number
   unlit: boolean
+  jointMatrices?: Float32Array
 }
 
 export interface Renderer {
   backend: Backend
   registerGeometry(id: number, vertices: Float32Array, indices: Uint16Array | Uint32Array): void
+  registerSkinnedGeometry(
+    id: number,
+    vertices: Float32Array,
+    indices: Uint16Array | Uint32Array,
+    joints: Uint8Array,
+    weights: Float32Array,
+  ): void
   updateCamera(view: Float32Array, projection: Float32Array): void
   updateLighting(dir: Float32Array, dirColor: Float32Array, ambient: Float32Array): void
   draw(entities: DrawEntity[], count: number): void
@@ -23,11 +31,17 @@ export interface Renderer {
 const MODEL_UNIFORM_SIZE = 256
 const MAX_ENTITIES = 4096
 
+const MAX_JOINTS = 128
+const JOINT_SLOT_BYTES = MAX_JOINTS * 16 * 4 // 128 joints × 16 floats × 4 bytes = 8192
+const MAX_SKINNED_ENTITIES = 1024
+
 interface GeometryBuffers {
   vertexBuffer: GPUBuffer
   indexBuffer: GPUBuffer
   indexCount: number
   indexFormat: GPUIndexFormat
+  skinned: boolean
+  skinBuffer?: GPUBuffer
 }
 
 export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<Renderer> {
@@ -39,10 +53,9 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
   const format = navigator.gpu.getPreferredCanvasFormat()
   context.configure({ device, format, alphaMode: 'premultiplied' })
 
-  // Shader module
-  const shaderModule = device.createShaderModule({
-    code: shaderSource,
-  })
+  // Shader modules
+  const shaderModule = device.createShaderModule({ code: shaderSource })
+  const skinnedShaderModule = device.createShaderModule({ code: skinnedShaderSource })
 
   // Bind group layouts
   const cameraBindGroupLayout = device.createBindGroupLayout({
@@ -75,8 +88,22 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
     ],
   })
 
+  const jointBindGroupLayout = device.createBindGroupLayout({
+    entries: [
+      {
+        binding: 0,
+        visibility: GPUShaderStage.VERTEX,
+        buffer: { type: 'read-only-storage', hasDynamicOffset: true },
+      },
+    ],
+  })
+
   const pipelineLayout = device.createPipelineLayout({
     bindGroupLayouts: [cameraBindGroupLayout, modelBindGroupLayout, lightBindGroupLayout],
+  })
+
+  const skinnedPipelineLayout = device.createPipelineLayout({
+    bindGroupLayouts: [cameraBindGroupLayout, modelBindGroupLayout, lightBindGroupLayout, jointBindGroupLayout],
   })
 
   // Depth texture
@@ -95,7 +122,7 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
     sampleCount: 4,
   })
 
-  // Pipeline
+  // Non-skinned pipeline
   const pipeline = device.createRenderPipeline({
     layout: pipelineLayout,
     vertex: {
@@ -105,9 +132,9 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
         {
           arrayStride: 36, // 9 floats × 4 bytes
           attributes: [
-            { shaderLocation: 0, offset: 0, format: 'float32x3' }, // position
-            { shaderLocation: 1, offset: 12, format: 'float32x3' }, // normal
-            { shaderLocation: 2, offset: 24, format: 'float32x3' }, // vertex color
+            { shaderLocation: 0, offset: 0, format: 'float32x3' },
+            { shaderLocation: 1, offset: 12, format: 'float32x3' },
+            { shaderLocation: 2, offset: 24, format: 'float32x3' },
           ],
         },
       ],
@@ -117,15 +144,44 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
       entryPoint: 'fs_main',
       targets: [{ format }],
     },
-    primitive: {
-      topology: 'triangle-list',
-      cullMode: 'back',
+    primitive: { topology: 'triangle-list', cullMode: 'back' },
+    depthStencil: { depthWriteEnabled: true, depthCompare: 'less', format: 'depth24plus' },
+    multisample: { count: 4 },
+  })
+
+  // Skinned pipeline (two vertex buffers + joint storage)
+  const skinnedPipeline = device.createRenderPipeline({
+    layout: skinnedPipelineLayout,
+    vertex: {
+      module: skinnedShaderModule,
+      entryPoint: 'vs_main',
+      buffers: [
+        {
+          // Buffer 0: same geometry layout
+          arrayStride: 36,
+          attributes: [
+            { shaderLocation: 0, offset: 0, format: 'float32x3' },
+            { shaderLocation: 1, offset: 12, format: 'float32x3' },
+            { shaderLocation: 2, offset: 24, format: 'float32x3' },
+          ],
+        },
+        {
+          // Buffer 1: skin data [joints u8x4, weights f32x4] = 20 bytes
+          arrayStride: 20,
+          attributes: [
+            { shaderLocation: 3, offset: 0, format: 'uint8x4' },
+            { shaderLocation: 4, offset: 4, format: 'float32x4' },
+          ],
+        },
+      ],
     },
-    depthStencil: {
-      depthWriteEnabled: true,
-      depthCompare: 'less',
-      format: 'depth24plus',
+    fragment: {
+      module: skinnedShaderModule,
+      entryPoint: 'fs_main',
+      targets: [{ format }],
     },
+    primitive: { topology: 'triangle-list', cullMode: 'back' },
+    depthStencil: { depthWriteEnabled: true, depthCompare: 'less', format: 'depth24plus' },
     multisample: { count: 4 },
   })
 
@@ -148,12 +204,7 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
 
   const modelBindGroup = device.createBindGroup({
     layout: modelBindGroupLayout,
-    entries: [
-      {
-        binding: 0,
-        resource: { buffer: modelBuffer, size: MODEL_UNIFORM_SIZE },
-      },
-    ],
+    entries: [{ binding: 0, resource: { buffer: modelBuffer, size: MODEL_UNIFORM_SIZE } }],
   })
 
   // Light uniform buffer (3 × vec4 = 48 bytes)
@@ -165,6 +216,17 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
   const lightBindGroup = device.createBindGroup({
     layout: lightBindGroupLayout,
     entries: [{ binding: 0, resource: { buffer: lightBuffer } }],
+  })
+
+  // Joint matrices storage buffer (for skinned meshes)
+  const jointBuffer = device.createBuffer({
+    size: JOINT_SLOT_BYTES * MAX_SKINNED_ENTITIES,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  })
+
+  const jointBindGroup = device.createBindGroup({
+    layout: jointBindGroupLayout,
+    entries: [{ binding: 0, resource: { buffer: jointBuffer, size: JOINT_SLOT_BYTES } }],
   })
 
   // Temp buffer for model uniforms
@@ -197,6 +259,56 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
         indexBuffer,
         indexCount: indices.length,
         indexFormat: indices instanceof Uint32Array ? 'uint32' : 'uint16',
+        skinned: false,
+      })
+    },
+
+    registerSkinnedGeometry(id, vertices, indices, joints, weights) {
+      const vertexBuffer = device.createBuffer({
+        size: vertices.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      })
+      device.queue.writeBuffer(vertexBuffer, 0, new Float32Array(vertices))
+
+      const indexBuffer = device.createBuffer({
+        size: indices.byteLength,
+        usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+      })
+      device.queue.writeBuffer(
+        indexBuffer,
+        0,
+        indices instanceof Uint16Array ? new Uint16Array(indices) : new Uint32Array(indices),
+      )
+
+      // Interleave skin data: [joints u8x4, weights f32x4] = 20 bytes per vertex
+      const vertexCount = joints.length / 4
+      const skinBuf = new ArrayBuffer(vertexCount * 20)
+      const skinView = new DataView(skinBuf)
+      for (let i = 0; i < vertexCount; i++) {
+        const o = i * 20
+        skinView.setUint8(o, joints[i * 4]!)
+        skinView.setUint8(o + 1, joints[i * 4 + 1]!)
+        skinView.setUint8(o + 2, joints[i * 4 + 2]!)
+        skinView.setUint8(o + 3, joints[i * 4 + 3]!)
+        skinView.setFloat32(o + 4, weights[i * 4]!, true)
+        skinView.setFloat32(o + 8, weights[i * 4 + 1]!, true)
+        skinView.setFloat32(o + 12, weights[i * 4 + 2]!, true)
+        skinView.setFloat32(o + 16, weights[i * 4 + 3]!, true)
+      }
+
+      const skinBuffer = device.createBuffer({
+        size: skinBuf.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      })
+      device.queue.writeBuffer(skinBuffer, 0, skinBuf)
+
+      geometries.set(id, {
+        vertexBuffer,
+        indexBuffer,
+        indexCount: indices.length,
+        indexFormat: indices instanceof Uint32Array ? 'uint32' : 'uint16',
+        skinned: true,
+        skinBuffer,
       })
     },
 
@@ -215,8 +327,36 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
     },
 
     draw(entities, count) {
-      const commandEncoder = device.createCommandEncoder()
+      // Pack model uniforms for all entities
+      for (let i = 0; i < count; i++) {
+        const entity = entities[i]!
+        const base = (MODEL_UNIFORM_SIZE / 4) * i
+        modelData.set(entity.worldMatrix, base)
+        modelData.set(entity.color, base + 16)
+        modelData[base + 20] = entity.unlit ? 1.0 : 0.0
+      }
+      device.queue.writeBuffer(modelBuffer, 0, modelData.buffer, 0, MODEL_UNIFORM_SIZE * count)
 
+      // Upload joint matrices for skinned entities
+      let skinSlot = 0
+      const skinSlotMap = new Map<number, number>()
+      for (let i = 0; i < count; i++) {
+        const entity = entities[i]!
+        if (!entity.jointMatrices) continue
+        const geo = geometries.get(entity.geometryId)
+        if (!geo?.skinned) continue
+        device.queue.writeBuffer(
+          jointBuffer,
+          skinSlot * JOINT_SLOT_BYTES,
+          entity.jointMatrices.buffer as ArrayBuffer,
+          entity.jointMatrices.byteOffset,
+          entity.jointMatrices.byteLength,
+        )
+        skinSlotMap.set(i, skinSlot)
+        skinSlot++
+      }
+
+      const commandEncoder = device.createCommandEncoder()
       const colorView = msaaTexture.createView()
       const resolveTarget = context.getCurrentTexture().createView()
 
@@ -238,29 +378,41 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
         },
       })
 
+      // Draw non-skinned entities
       renderPass.setPipeline(pipeline)
       renderPass.setBindGroup(0, cameraBindGroup)
       renderPass.setBindGroup(2, lightBindGroup)
 
-      // Pack model uniforms
-      for (let i = 0; i < count; i++) {
-        const entity = entities[i]!
-        const base = (MODEL_UNIFORM_SIZE / 4) * i
-        modelData.set(entity.worldMatrix, base) // mat4 at offset 0
-        modelData.set(entity.color, base + 16) // vec4 at offset 64
-        modelData[base + 20] = entity.unlit ? 1.0 : 0.0 // flags.x at offset 80
-      }
-      device.queue.writeBuffer(modelBuffer, 0, modelData.buffer, 0, MODEL_UNIFORM_SIZE * count)
-
       for (let i = 0; i < count; i++) {
         const entity = entities[i]!
         const geo = geometries.get(entity.geometryId)
-        if (!geo) continue
+        if (!geo || geo.skinned) continue
 
         renderPass.setBindGroup(1, modelBindGroup, [MODEL_UNIFORM_SIZE * i])
         renderPass.setVertexBuffer(0, geo.vertexBuffer)
         renderPass.setIndexBuffer(geo.indexBuffer, geo.indexFormat)
         renderPass.drawIndexed(geo.indexCount)
+      }
+
+      // Draw skinned entities
+      if (skinSlot > 0) {
+        renderPass.setPipeline(skinnedPipeline)
+        renderPass.setBindGroup(0, cameraBindGroup)
+        renderPass.setBindGroup(2, lightBindGroup)
+
+        for (let i = 0; i < count; i++) {
+          const slot = skinSlotMap.get(i)
+          if (slot === undefined) continue
+          const entity = entities[i]!
+          const geo = geometries.get(entity.geometryId)!
+
+          renderPass.setBindGroup(1, modelBindGroup, [MODEL_UNIFORM_SIZE * i])
+          renderPass.setBindGroup(3, jointBindGroup, [slot * JOINT_SLOT_BYTES])
+          renderPass.setVertexBuffer(0, geo.vertexBuffer)
+          renderPass.setVertexBuffer(1, geo.skinBuffer!)
+          renderPass.setIndexBuffer(geo.indexBuffer, geo.indexFormat)
+          renderPass.drawIndexed(geo.indexCount)
+        }
       }
 
       renderPass.end()
@@ -289,11 +441,13 @@ export async function createWebGPURenderer(canvas: HTMLCanvasElement): Promise<R
       cameraBuffer.destroy()
       modelBuffer.destroy()
       lightBuffer.destroy()
+      jointBuffer.destroy()
       depthTexture.destroy()
       msaaTexture.destroy()
       for (const geo of geometries.values()) {
         geo.vertexBuffer.destroy()
         geo.indexBuffer.destroy()
+        geo.skinBuffer?.destroy()
       }
       device.destroy()
     },
