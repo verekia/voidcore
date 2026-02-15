@@ -1,5 +1,7 @@
 FROM oven/bun:1.3.9-alpine AS builder
 
+RUN apk add --no-cache make llvm clang binaryen
+
 WORKDIR /app
 
 COPY package.json bun.lock .

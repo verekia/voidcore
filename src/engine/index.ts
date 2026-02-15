@@ -1,0 +1,8 @@
+export { loadWasm, type WasmCore, type WasmExports } from './wasm.ts'
+export { Scene, type SceneConfig } from './scene.ts'
+export { Mesh, type MeshOptions } from './mesh.ts'
+export { Camera } from './camera.ts'
+export { createRenderer, type Backend, type Renderer } from './gpu.ts'
+export { createBoxGeometry, createSphereGeometry, type Geometry } from './geometry.ts'
+export { shaderSource } from './shaders.ts'
+export { vertexShaderGLSL, fragmentShaderGLSL } from './webgl-shaders.ts'

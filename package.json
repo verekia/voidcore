@@ -14,9 +14,10 @@
   "scripts": {
     "dev": "bun run --parallel 'dev:*'",
     "dev:example": "next dev",
-    "build": "bun run --parallel 'build:*'",
-    "build:example": "next build",
+    "build": "bun run --sequential 'build:*'",
+    "build:wasm": "make -C src/wasm",
     "build:library": "tsup",
+    "build:example": "next build",
     "start": "serve out",
     "postinstall": "bun typegen",
     "typegen": "next typegen",
