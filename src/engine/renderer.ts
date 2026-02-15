@@ -33,7 +33,7 @@ const MAX_ENTITIES = 4096
 
 const MAX_JOINTS = 128
 const JOINT_SLOT_BYTES = MAX_JOINTS * 16 * 4 // 128 joints × 16 floats × 4 bytes = 8192
-const MAX_SKINNED_ENTITIES = 128
+const MAX_SKINNED_ENTITIES = 1024
 
 interface GeometryBuffers {
   vertexBuffer: GPUBuffer
