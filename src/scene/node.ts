@@ -94,24 +94,22 @@ export const propagateDirty = (node: Node): void => {
   }
 }
 
-export const updateWorldMatrices = (node: Node): void => {
+export const updateWorldMatrices = (node: Node, parentDirty = false): void => {
   if (node._dirtyLocal) {
     mat4Compose(node._localMatrix, node.position, node.rotation, node.scale)
     node._dirtyLocal = false
-    node._dirtyWorld = true
+    parentDirty = true
   }
-  if (node._dirtyWorld) {
+  if (parentDirty || node._dirtyWorld) {
     if (node.parent) {
       mat4Multiply(node._worldMatrix, node.parent._worldMatrix, node._localMatrix)
     } else {
       mat4Copy(node._worldMatrix, node._localMatrix)
     }
     node._dirtyWorld = false
-    for (let i = 0; i < node.children.length; i++) {
-      node.children[i]!._dirtyWorld = true
-    }
+    parentDirty = true
   }
   for (let i = 0; i < node.children.length; i++) {
-    updateWorldMatrices(node.children[i]!)
+    updateWorldMatrices(node.children[i]!, parentDirty)
   }
 }

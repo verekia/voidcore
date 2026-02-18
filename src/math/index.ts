@@ -657,40 +657,42 @@ export const aabbFromPoints = (out: AABB, positions: Float32Array, count: number
   return out
 }
 
+const _aabbCorners = new Float32Array(24)
+const _aabbTv = new Float32Array(3)
+
 export const aabbTransform = (out: AABB, a: AABB, m: Mat4): AABB => {
-  const corners = [
-    a[0]!,
-    a[1]!,
-    a[2]!,
-    a[3]!,
-    a[1]!,
-    a[2]!,
-    a[0]!,
-    a[4]!,
-    a[2]!,
-    a[3]!,
-    a[4]!,
-    a[2]!,
-    a[0]!,
-    a[1]!,
-    a[5]!,
-    a[3]!,
-    a[1]!,
-    a[5]!,
-    a[0]!,
-    a[4]!,
-    a[5]!,
-    a[3]!,
-    a[4]!,
-    a[5]!,
-  ]
+  const corners = _aabbCorners
+  corners[0] = a[0]!
+  corners[1] = a[1]!
+  corners[2] = a[2]!
+  corners[3] = a[3]!
+  corners[4] = a[1]!
+  corners[5] = a[2]!
+  corners[6] = a[0]!
+  corners[7] = a[4]!
+  corners[8] = a[2]!
+  corners[9] = a[3]!
+  corners[10] = a[4]!
+  corners[11] = a[2]!
+  corners[12] = a[0]!
+  corners[13] = a[1]!
+  corners[14] = a[5]!
+  corners[15] = a[3]!
+  corners[16] = a[1]!
+  corners[17] = a[5]!
+  corners[18] = a[0]!
+  corners[19] = a[4]!
+  corners[20] = a[5]!
+  corners[21] = a[3]!
+  corners[22] = a[4]!
+  corners[23] = a[5]!
   out[0] = Infinity
   out[1] = Infinity
   out[2] = Infinity
   out[3] = -Infinity
   out[4] = -Infinity
   out[5] = -Infinity
-  const tv = vec3Create()
+  const tv = _aabbTv
   for (let i = 0; i < 8; i++) {
     vec3Set(tv, corners[i * 3]!, corners[i * 3 + 1]!, corners[i * 3 + 2]!)
     vec3TransformMat4(tv, tv, m)

@@ -172,6 +172,9 @@ export class WebGPURenderer implements Renderer {
   private _objectCapacity: number
   private _skinnedCapacity: number
 
+  // Traversal
+  private _traversalStack: Node[] = []
+
   // Scratch matrices
   private _vpMatrix: Mat4 = mat4Create()
   private _invWorldMatrix: Mat4 = mat4Create()
@@ -185,6 +188,10 @@ export class WebGPURenderer implements Renderer {
   // Reusable typed arrays for uniform writes
   private _frameData = new Float32Array(FRAME_UB_SIZE / 4)
   private _materialData = new Float32Array(MATERIAL_UB_SIZE / 4)
+
+  // Cached canvas dimensions
+  private _displayW = 0
+  private _displayH = 0
 
   // Stats
   private _lastFrameTime = 0
@@ -279,6 +286,14 @@ export class WebGPURenderer implements Renderer {
       layout: frameBGL,
       entries: [{ binding: 0, resource: { buffer: frameUB } }],
     })
+
+    // Cache canvas dimensions
+    this._displayW = canvas.clientWidth
+    this._displayH = canvas.clientHeight
+    new ResizeObserver(() => {
+      this._displayW = this.canvas.clientWidth
+      this._displayH = this.canvas.clientHeight
+    }).observe(canvas)
   }
 
   static async create(canvas: HTMLCanvasElement, config: RendererConfig = {}): Promise<WebGPURenderer> {
@@ -920,8 +935,8 @@ export class WebGPURenderer implements Renderer {
 
     // Resize canvas if needed
     const dpr = Math.min(window.devicePixelRatio, 2)
-    const displayW = Math.floor(this.canvas.clientWidth * dpr)
-    const displayH = Math.floor(this.canvas.clientHeight * dpr)
+    const displayW = Math.floor(this._displayW * dpr)
+    const displayH = Math.floor(this._displayH * dpr)
     if (this.canvas.width !== displayW || this.canvas.height !== displayH) {
       this.canvas.width = displayW
       this.canvas.height = displayH
@@ -944,22 +959,33 @@ export class WebGPURenderer implements Renderer {
     meshes.length = 0
     let culledCount = 0
     let dirLight: DirectionalLight | null = null
-    scene.traverse((node: Node) => {
-      if (!node.visible) return
-      if (node instanceof Mesh) {
-        if (node.frustumCulled) {
-          aabbTransform(this._worldAABB, node.geometry.aabb, node._worldMatrix)
+    const stack = this._traversalStack
+    stack.length = 0
+    stack.push(scene)
+    while (stack.length > 0) {
+      const node = stack.pop()!
+      if (!node.visible) continue
+      if (node.type === 'mesh') {
+        const mesh = node as Mesh
+        if (mesh.frustumCulled) {
+          aabbTransform(this._worldAABB, mesh.geometry.aabb, mesh._worldMatrix)
           if (!frustumContainsAABB(this._frustumPlanes, this._worldAABB)) {
             culledCount++
-            return
+          } else {
+            meshes.push(mesh)
           }
+        } else {
+          meshes.push(mesh)
         }
-        meshes.push(node)
       }
       if (!dirLight && node.type === 'directionalLight') {
         dirLight = node as DirectionalLight
       }
-    })
+      const children = node.children
+      for (let i = children.length - 1; i >= 0; i--) {
+        stack.push(children[i]!)
+      }
+    }
 
     // Compute light direction
     const lightDir = this._lightDir

@@ -32,6 +32,7 @@ export class AnimationAction {
   _fadeDuration = 0
   _fadeElapsed = 0
   _fading = false
+  _cachedIndices: number[] | null = null
 
   constructor(clip: AnimationClip) {
     this.clip = clip
@@ -40,6 +41,7 @@ export class AnimationAction {
   play(): this {
     this.playing = true
     this.time = 0
+    this._cachedIndices = null
     return this
   }
 
@@ -103,6 +105,8 @@ export class AnimationMixer {
   private _q4a = new Float32Array(4)
   private _q4b = new Float32Array(4)
 
+  private _active: AnimationAction[] = []
+
   constructor(skeleton: Skeleton) {
     this.skeleton = skeleton
     const n = skeleton.bones.length
@@ -143,7 +147,8 @@ export class AnimationMixer {
 
   update(dt: number) {
     // 1. Advance times, update fades, collect active actions
-    const active: AnimationAction[] = []
+    const active = this._active
+    active.length = 0
     let totalWeight = 0
 
     for (let i = 0; i < this._actions.length; i++) {
@@ -211,7 +216,7 @@ export class AnimationMixer {
       this._samplePos.set(this._restPos)
       this._sampleRot.set(this._restRot)
       this._sampleScale.set(this._restScale)
-      this._sampleClipInto(action.clip, action.time)
+      this._sampleClipInto(action.clip, action.time, action)
 
       if (ai === 0) {
         // First action: copy directly
@@ -274,12 +279,20 @@ export class AnimationMixer {
       bone.scale[2] = this._blendedScale[p + 2]!
       bone._dirtyLocal = true
     }
+    this.skeleton._dirty = true
   }
 
   // ─── Internal clip sampling ─────────────────────────────────────
 
-  private _sampleClipInto(clip: AnimationClip, time: number) {
+  private _sampleClipInto(clip: AnimationClip, time: number, action: AnimationAction) {
     const t = clip.duration > 0 ? time % clip.duration : 0
+
+    // Lazily allocate cached indices array
+    let cached = action._cachedIndices
+    if (!cached) {
+      cached = Array.from({ length: clip.tracks.length }, () => 0)
+      action._cachedIndices = cached
+    }
 
     for (let ti = 0; ti < clip.tracks.length; ti++) {
       const track = clip.tracks[ti]!
@@ -301,7 +314,16 @@ export class AnimationMixer {
         idx1 = numKf - 1
         alpha = 0
       } else {
-        idx1 = binarySearch(times, t)
+        // Try cached index first
+        const ci = cached[ti]!
+        if (ci < numKf && ci > 0 && times[ci - 1]! <= t && t < times[ci]!) {
+          idx1 = ci
+        } else if (ci + 1 < numKf && ci >= 0 && times[ci]! <= t && t < times[ci + 1]!) {
+          idx1 = ci + 1
+        } else {
+          idx1 = binarySearch(times, t)
+        }
+        cached[ti] = idx1
         idx0 = idx1 - 1
         if (idx0 < 0) {
           idx0 = 0
