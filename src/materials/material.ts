@@ -7,7 +7,10 @@ export interface PaletteEntry {
 
 export type MaterialType = 'basic' | 'lambert'
 
+let _nextMaterialId = 0
+
 export class Material {
+  readonly _id: number
   type: MaterialType
   color: [number, number, number]
   opacity: number
@@ -21,8 +24,10 @@ export class Material {
 
   // Computed
   _hasEmissive = false
+  needsUpdate = true
 
   constructor(type: MaterialType, opts: MaterialOptions = {}) {
+    this._id = _nextMaterialId++
     this.type = type
     this.color = opts.color ?? [1, 1, 1]
     this.opacity = opts.opacity ?? 1.0

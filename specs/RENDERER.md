@@ -60,29 +60,30 @@ Dynamic offsets on bind group 2 allow a single bind group with different offsets
 
 ## Draw Call Sorting
 
-### 64-Bit Radix Sort
+### 32-Bit Radix Sort
 
 Sort key layout (most significant bits first):
 
 ```
-Bits 63-62: Layer (2b)           — opaque=0, transparent=1, overlay=2
-Bits 61-60: Pass (2b)            — shadow=0, main=1, post=2
-Bit  59:    Transparent (1b)     — 0=opaque, 1=transparent
-Bits 58-48: Pipeline ID (11b)    — shader variant + blend/depth state (up to 2048 unique)
-Bits 47-32: Material ID (16b)    — material + texture binding (up to 65536 unique)
-Bits 31-0:  Depth (32b)          — front-to-back (opaque) or back-to-front (transparent)
+Bits 31-30: Layer (2b)        — opaque=0, transparent=1, overlay=2
+Bits 29-22: Pipeline ID (8b)  — shader variant + blend/depth state (up to 256 unique)
+Bits 21-10: Material ID (12b) — material + texture binding (up to 4096 unique)
+Bits 9-0:   Depth (10b)       — front-to-back (opaque) or back-to-front (transparent)
 ```
 
 **Why this ordering:** Pipeline switches are the most expensive GPU state change (~50μs each on mobile). They occupy the highest bits so draws sharing a pipeline are adjacent. Material/texture switches (~10μs) are medium cost. Depth ordering within the same material enables early-Z rejection for opaque and visual correctness for transparent.
 
+**Why 32 bits:** Pass bits (shadow/main/post) are unnecessary because those are already separate render passes. The transparent flag is redundant with the layer field. 256 pipelines, 4096 materials, and 1024 depth buckets are well beyond what a 2000-draw-call scene needs (typical scenes use 10-30 pipelines and 10-100 materials). Using a single `Uint32Array` avoids `BigUint64Array` / BigInt, which are 10-100× slower than native 32-bit integer operations in JavaScript.
+
 ### Radix Sort Implementation
 
-Two-pass LSD radix sort over 32-bit halves of the 64-bit key:
+Single-pass 32-bit radix sort over a `Uint32Array`:
 
 ```typescript
-// Pass 1: sort by lower 32 bits (depth)
-// Pass 2: sort by upper 32 bits (pipeline + material)
-// Total: O(n) for 2000 draws — ~0.05ms
+// Key composition: all native 32-bit bitwise ops
+sortKeys[i] = (layer << 30) | (pipelineId << 22) | (materialId << 10) | depth
+
+// Single-pass radix sort: O(n) for 2000 draws — ~0.05ms
 ```
 
 Radix sort is O(n) vs O(n log n) for comparison sorts. For 2000 draws, it completes in ~0.05ms. Stable, predictable, no worst-case degradation. Pre-allocated count and output arrays are reused across frames (zero allocations).

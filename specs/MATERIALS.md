@@ -209,7 +209,7 @@ When no texture is provided, a **1×1 white pixel** texture is bound. This avoid
 
 ## Transparency Routing
 
-Materials with `transparent: true` or `opacity < 1.0` (or palette entries with opacity < 1.0) are automatically routed to the WBOIT pass. The transparent bit is encoded in the 64-bit sort key so transparent objects are always drawn after all opaque geometry.
+Materials with `transparent: true` or `opacity < 1.0` (or palette entries with opacity < 1.0) are automatically routed to the WBOIT pass. The layer bits are encoded in the 32-bit sort key so transparent objects are always drawn after all opaque geometry.
 
 ## Pipeline State Mapping
 

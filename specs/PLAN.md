@@ -32,7 +32,7 @@
 | Assets               | glTF 2.0 + Draco + KTX2/Basis                                   | Standard pipeline, user-provided decoders                     |
 | React bindings       | Custom reconciler at `voidcore/react`                           | R3F-style declarative scene, same package                     |
 | Math                 | Custom Float32Array-backed, functional API                      | Zero-alloc, Z-up baked in, GPU-uploadable                     |
-| Draw call sorting    | 64-bit radix sort                                               | O(n), stable, predictable                                     |
+| Draw call sorting    | 32-bit radix sort (`Uint32Array`)                               | O(n), stable, no BigInt overhead                              |
 | Uniforms             | Dynamic offsets on shared buffer                                | Minimal binding overhead                                      |
 | Instancing           | None                                                            | Per-draw overhead <2-3μs makes it unnecessary at 2000 draws   |
 

@@ -16,14 +16,18 @@ import {
 import type { AnimationClip, AnimationAction } from './index.ts'
 
 // ─── Configuration ──────────────────────────────────────────────────
-const CHARACTER_COUNT = 1000
+const CHARACTER_COUNT = 1500
 const GRID_SPACING = 5
 
 export const main = async (canvas: HTMLCanvasElement) => {
   // ─── Engine ─────────────────────────────────────────────────────
+  const params = new URLSearchParams(window.location.search)
+  const forceWebGL = params.has('webgl')
+
   const engine = await createEngine(canvas, {
     antialias: true,
     bloom: { intensity: 0.8 },
+    backend: forceWebGL ? 'webgl2' : 'auto',
   })
 
   // ─── Scene ──────────────────────────────────────────────────────
@@ -41,7 +45,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
   // ─── Camera + Orbit Controls ────────────────────────────────────
   const camera = createPerspectiveCamera({ fov: 55, near: 0.1, far: 500 })
   camera.position[0] = 0
-  camera.position[1] = -170
+  camera.position[1] = -230
   camera.position[2] = 60
   camera._dirtyLocal = true
   camera._dirtyWorld = true
@@ -50,7 +54,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
     target: [0, 0, 1.5],
     dampingFactor: 0.08,
     minDistance: 2,
-    maxDistance: 200,
+    maxDistance: 230,
   })
 
   // ─── Load assets ───────────────────────────────────────────────
@@ -203,6 +207,14 @@ export const main = async (canvas: HTMLCanvasElement) => {
     'position:fixed;top:10px;left:10px;color:#fff;font:14px monospace;background:rgba(0,0,0,0.6);padding:8px 12px;border-radius:4px;z-index:1000;pointer-events:none'
   document.body.appendChild(statsDiv)
 
+  const switchLink = document.createElement('a')
+  const isWebGPU = engine.backend === 'webgpu'
+  switchLink.textContent = `Switch to ${isWebGPU ? 'WebGL2' : 'WebGPU'}`
+  switchLink.href = isWebGPU ? '?webgl=1' : '/'
+  switchLink.style.cssText =
+    'position:fixed;top:10px;right:10px;color:#fff;font:14px monospace;background:rgba(0,0,0,0.6);padding:8px 12px;border-radius:4px;z-index:1000;text-decoration:underline;cursor:pointer'
+  document.body.appendChild(switchLink)
+
   // ─── Render Loop ──────────────────────────────────────────────
   let elapsed = 0
   engine.onFrame(dt => {
@@ -223,7 +235,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
     }
 
     const stats = engine.getStats()
-    statsDiv.textContent = `Draw calls: ${stats.drawCalls}`
+    statsDiv.textContent = `${engine.backend.toUpperCase()} | ${Math.round(stats.fps)} FPS | Draw calls: ${stats.drawCalls}`
   })
 
   engine.start(scene, camera)

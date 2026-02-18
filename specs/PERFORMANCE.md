@@ -12,7 +12,7 @@
 
 ### 1. Draw Call Sorting (Highest Impact)
 
-**64-bit radix sort by pipeline > material > depth.**
+**32-bit radix sort by pipeline > material > depth.**
 
 State changes are the dominant CPU-side cost:
 
@@ -24,7 +24,7 @@ With 2000 draws and ~20 unique pipelines, unsorted submission causes ~200 pipeli
 
 Overall state change reduction: **90-99%** (from ~2000 to ~10-200).
 
-The sort is O(n) radix sort over 64-bit keys. For 2000 draws: ~0.05ms.
+The sort is O(n) radix sort over 32-bit keys (`Uint32Array`). For 2000 draws: ~0.05ms. Using 32-bit keys avoids `BigUint64Array` / BigInt, which are 10-100× slower than native integer operations.
 
 ### 2. Frustum Culling
 
@@ -123,7 +123,7 @@ Contiguous typed arrays for renderer-facing data:
 worldMatrices: Float32Array(maxObjects * 16) // 16 floats per mat4
 aabbPool: Float32Array(maxObjects * 6) // 6 floats per AABB
 visibilityFlags: Uint8Array(maxObjects) // 1 byte per object
-sortKeys: BigUint64Array(maxObjects) // 8 bytes per key
+sortKeys: Uint32Array(maxObjects) // 4 bytes per key
 
 // Public API: wrapper objects index into arrays
 mesh.position.set(1, 2, 3) // Writes to internal pool at node's index
@@ -228,7 +228,7 @@ GPU timing via:
 | Per-draw overhead | 2-3μs                        | ~15-50μs (5-20× slower)                     |
 | GC pressure       | Zero (render loop)           | High (frame spikes from alloc)              |
 | Matrix updates    | Dirty-only (2-5% per frame)  | Every object every frame                    |
-| Draw call sorting | 64-bit radix sort (O(n))     | No sorting (random state changes)           |
+| Draw call sorting | 32-bit radix sort (O(n))     | No sorting (random state changes)           |
 | Uniform upload    | Single UBO + dynamic offsets | Individual `gl.uniform*` calls              |
 | Transparency      | WBOIT (no sorting needed)    | Manual sort-based (broken in complex cases) |
 
@@ -237,7 +237,7 @@ GPU timing via:
 The following patterns are **banned** in hot paths:
 
 - `new` allocations (use pre-allocated pools)
-- `Array.sort` (use radix sort)
+- `Array.sort` (use 32-bit radix sort over `Uint32Array`)
 - `Map`/`Set` iteration (use flat typed arrays)
 - Closure creation (use module-level functions)
 - String concatenation for shader keys (use integer bitmasks)

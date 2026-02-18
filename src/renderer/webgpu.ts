@@ -20,6 +20,7 @@ import {
   BLOOM_UP_WGSL,
   BLIT_WGSL,
 } from './shaders-wgsl.ts'
+import { createSortState, sortMeshes } from './sort.ts'
 
 import type { Geometry } from '../geometry/geometry.ts'
 import type { PaletteEntry } from '../materials/material.ts'
@@ -29,6 +30,7 @@ import type { PerspectiveCamera } from '../scene/camera.ts'
 import type { DirectionalLight } from '../scene/light.ts'
 import type { Scene } from '../scene/scene.ts'
 import type { Renderer, RendererConfig, FrameStats } from './renderer.ts'
+import type { SortState } from './sort.ts'
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -45,11 +47,6 @@ interface GeoBufs {
 }
 
 interface MatCache {
-  buffer: GPUBuffer
-  bindGroup: GPUBindGroup
-}
-
-interface MeshCache {
   buffer: GPUBuffer
   bindGroup: GPUBindGroup
 }
@@ -161,8 +158,19 @@ export class WebGPURenderer implements Renderer {
   // Cached GPU resources
   private _geoCache = new WeakMap<Geometry, GeoBufs>()
   private _matCache = new WeakMap<Material, MatCache>()
-  private _meshCache = new WeakMap<Mesh, MeshCache>()
-  private _skinnedMeshCache = new WeakMap<Mesh, MeshCache>()
+
+  // Dynamic uniform buffers
+  private _alignment: number
+  private _alignedObjectSize: number
+  private _alignedSkinnedSize: number
+  private _objectDynBuf!: GPUBuffer
+  private _skinnedDynBuf!: GPUBuffer
+  private _objectDynBG!: GPUBindGroup
+  private _skinnedDynBG!: GPUBindGroup
+  private _objectBatchData!: Float32Array
+  private _skinnedBatchData!: Float32Array
+  private _objectCapacity: number
+  private _skinnedCapacity: number
 
   // Scratch matrices
   private _vpMatrix: Mat4 = mat4Create()
@@ -170,10 +178,12 @@ export class WebGPURenderer implements Renderer {
   private _normalMatrix: Mat4 = mat4Create()
   private _frustumPlanes = new Float32Array(24)
   private _worldAABB: AABB = new Float32Array(6)
+  private _lightDir = vec3Create()
+  private _tempVec3 = new Float32Array(3)
+  private _meshes: Mesh[] = []
+  private _sortState: SortState = createSortState(4096)
   // Reusable typed arrays for uniform writes
   private _frameData = new Float32Array(FRAME_UB_SIZE / 4)
-  private _objectData = new Float32Array(OBJECT_UB_SIZE / 4)
-  private _skinnedObjectData = new Float32Array(SKINNED_OBJECT_UB_SIZE / 4)
   private _materialData = new Float32Array(MATERIAL_UB_SIZE / 4)
 
   // Stats
@@ -243,6 +253,14 @@ export class WebGPURenderer implements Renderer {
     this.bloomEnabled = bloomEnabled
     this.bloomIntensity = bloomIntensity
     this.bloomLevels = bloomLevels
+
+    // Dynamic uniform buffer setup
+    this._alignment = device.limits.minUniformBufferOffsetAlignment
+    this._alignedObjectSize = Math.ceil(OBJECT_UB_SIZE / this._alignment) * this._alignment
+    this._alignedSkinnedSize = Math.ceil(SKINNED_OBJECT_UB_SIZE / this._alignment) * this._alignment
+    this._objectCapacity = 2048
+    this._skinnedCapacity = 2048
+    this.createDynamicBuffers()
 
     // Create bloom uniform buffers
     for (let i = 0; i < bloomLevels; i++) {
@@ -317,7 +335,7 @@ export class WebGPURenderer implements Renderer {
     })
 
     const objectBGL = device.createBindGroupLayout({
-      entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } }],
+      entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform', hasDynamicOffset: true } }],
     })
 
     const skinnedObjectBGL = device.createBindGroupLayout({
@@ -325,7 +343,7 @@ export class WebGPURenderer implements Renderer {
         {
           binding: 0,
           visibility: GPUShaderStage.VERTEX,
-          buffer: { type: 'uniform', minBindingSize: SKINNED_OBJECT_UB_SIZE },
+          buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: SKINNED_OBJECT_UB_SIZE },
         },
       ],
     })
@@ -831,70 +849,57 @@ export class WebGPURenderer implements Renderer {
     this.device.queue.writeBuffer(cache.buffer, 0, data.buffer, data.byteOffset, data.byteLength)
   }
 
-  private ensureMeshCache(mesh: Mesh): MeshCache {
-    const cached = this._meshCache.get(mesh)
-    if (cached) return cached
-
+  private createDynamicBuffers() {
     const d = this.device
-    const buffer = d.createBuffer({
-      size: OBJECT_UB_SIZE,
+    this._objectDynBuf = d.createBuffer({
+      size: this._objectCapacity * this._alignedObjectSize,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
-    const bindGroup = d.createBindGroup({
+    this._objectBatchData = new Float32Array((this._objectCapacity * this._alignedObjectSize) / 4)
+    this._objectDynBG = d.createBindGroup({
       layout: this.objectBGL,
-      entries: [{ binding: 0, resource: { buffer } }],
+      entries: [{ binding: 0, resource: { buffer: this._objectDynBuf, size: OBJECT_UB_SIZE } }],
     })
 
-    const cache: MeshCache = { buffer, bindGroup }
-    this._meshCache.set(mesh, cache)
-    return cache
-  }
-
-  private writeObjectBuffer(mesh: Mesh, cache: MeshCache) {
-    const data = this._objectData
-    // World matrix (16 floats)
-    data.set(mesh._worldMatrix, 0)
-    // Normal matrix = transpose(inverse(worldMatrix)) (16 floats)
-    if (mat4Invert(this._invWorldMatrix, mesh._worldMatrix)) {
-      mat4Transpose(this._normalMatrix, this._invWorldMatrix)
-    }
-    data.set(this._normalMatrix, 16)
-
-    this.device.queue.writeBuffer(cache.buffer, 0, data.buffer, data.byteOffset, data.byteLength)
-  }
-
-  private ensureSkinnedMeshCache(mesh: Mesh): MeshCache {
-    const cached = this._skinnedMeshCache.get(mesh)
-    if (cached) return cached
-
-    const d = this.device
-    const buffer = d.createBuffer({
-      size: SKINNED_OBJECT_UB_SIZE,
+    this._skinnedDynBuf = d.createBuffer({
+      size: this._skinnedCapacity * this._alignedSkinnedSize,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
-    const bindGroup = d.createBindGroup({
+    this._skinnedBatchData = new Float32Array((this._skinnedCapacity * this._alignedSkinnedSize) / 4)
+    this._skinnedDynBG = d.createBindGroup({
       layout: this.skinnedObjectBGL,
-      entries: [{ binding: 0, resource: { buffer } }],
+      entries: [{ binding: 0, resource: { buffer: this._skinnedDynBuf, size: SKINNED_OBJECT_UB_SIZE } }],
     })
-
-    const cache: MeshCache = { buffer, bindGroup }
-    this._skinnedMeshCache.set(mesh, cache)
-    return cache
   }
 
-  private writeSkinnedObjectBuffer(mesh: Mesh, cache: MeshCache) {
-    const data = this._skinnedObjectData
-    // World matrix (16 floats)
-    data.set(mesh._worldMatrix, 0)
-    // Normal matrix = transpose(inverse(worldMatrix)) (16 floats)
-    if (mat4Invert(this._invWorldMatrix, mesh._worldMatrix)) {
-      mat4Transpose(this._normalMatrix, this._invWorldMatrix)
+  private ensureDynamicCapacity(count: number, type: 'object' | 'skinned') {
+    if (type === 'object') {
+      if (count <= this._objectCapacity) return
+      this._objectDynBuf.destroy()
+      this._objectCapacity = Math.max(count, this._objectCapacity * 2)
+      this._objectDynBuf = this.device.createBuffer({
+        size: this._objectCapacity * this._alignedObjectSize,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      })
+      this._objectBatchData = new Float32Array((this._objectCapacity * this._alignedObjectSize) / 4)
+      this._objectDynBG = this.device.createBindGroup({
+        layout: this.objectBGL,
+        entries: [{ binding: 0, resource: { buffer: this._objectDynBuf, size: OBJECT_UB_SIZE } }],
+      })
+    } else {
+      if (count <= this._skinnedCapacity) return
+      this._skinnedDynBuf.destroy()
+      this._skinnedCapacity = Math.max(count, this._skinnedCapacity * 2)
+      this._skinnedDynBuf = this.device.createBuffer({
+        size: this._skinnedCapacity * this._alignedSkinnedSize,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      })
+      this._skinnedBatchData = new Float32Array((this._skinnedCapacity * this._alignedSkinnedSize) / 4)
+      this._skinnedDynBG = this.device.createBindGroup({
+        layout: this.skinnedObjectBGL,
+        entries: [{ binding: 0, resource: { buffer: this._skinnedDynBuf, size: SKINNED_OBJECT_UB_SIZE } }],
+      })
     }
-    data.set(this._normalMatrix, 16)
-    // Bone matrices (32 * 16 = 512 floats starting at offset 32)
-    data.set(mesh.skeleton!.boneMatrices, 32)
-
-    this.device.queue.writeBuffer(cache.buffer, 0, data.buffer, data.byteOffset, data.byteLength)
   }
 
   // ─── Render ──────────────────────────────────────────────────────
@@ -934,9 +939,11 @@ export class WebGPURenderer implements Renderer {
     // Frustum culling
     frustumFromViewProjection(this._frustumPlanes, this._vpMatrix)
 
-    // Collect visible meshes
-    const meshes: Mesh[] = []
+    // Collect visible meshes + find directional light in single traversal
+    const meshes = this._meshes
+    meshes.length = 0
     let culledCount = 0
+    let dirLight: DirectionalLight | null = null
     scene.traverse((node: Node) => {
       if (!node.visible) return
       if (node instanceof Mesh) {
@@ -949,25 +956,27 @@ export class WebGPURenderer implements Renderer {
         }
         meshes.push(node)
       }
-    })
-
-    // Find directional light
-    let dirLight: DirectionalLight | null = null
-    scene.traverse((node: Node) => {
-      if (node.type === 'directionalLight' && !dirLight) {
+      if (!dirLight && node.type === 'directionalLight') {
         dirLight = node as DirectionalLight
       }
     })
 
     // Compute light direction
-    const lightDir = vec3Create()
+    const lightDir = this._lightDir
+    lightDir[0] = 0
+    lightDir[1] = 0
+    lightDir[2] = 0
     if (dirLight) {
       const lp = (dirLight as DirectionalLight)._worldMatrix
-      const lx = lp[12]!,
-        ly = lp[13]!,
-        lz = lp[14]!
-      vec3Normalize(lightDir, new Float32Array([lx, ly, lz]))
+      this._tempVec3[0] = lp[12]!
+      this._tempVec3[1] = lp[13]!
+      this._tempVec3[2] = lp[14]!
+      vec3Normalize(lightDir, this._tempVec3)
     }
+
+    // Radix sort meshes by layer > pipeline > material > depth
+    sortMeshes(this._sortState, meshes, meshes.length, camera)
+    const sortedIndices = this._sortState.indices
 
     // ─── Update per-frame uniform buffer ────────────────────────
     const fd = this._frameData
@@ -1020,7 +1029,63 @@ export class WebGPURenderer implements Renderer {
     let drawCalls = 0
     let triangles = 0
 
-    for (const mesh of meshes) {
+    // ─── Batch fill: write all object/skinned data into staging arrays ─
+    let objIdx = 0
+    let skinnedIdx = 0
+    const alignedObjFloats = this._alignedObjectSize / 4
+    const alignedSkinnedFloats = this._alignedSkinnedSize / 4
+
+    // Count to ensure capacity
+    let objCount = 0
+    let skinnedCount = 0
+    for (let si = 0; si < meshes.length; si++) {
+      const mesh = meshes[sortedIndices[si]!]!
+      if (mesh.skeleton && mesh.geometry.joints && mesh.geometry.weights) skinnedCount++
+      else objCount++
+    }
+    this.ensureDynamicCapacity(objCount, 'object')
+    this.ensureDynamicCapacity(skinnedCount, 'skinned')
+
+    const objBatch = this._objectBatchData
+    const skinnedBatch = this._skinnedBatchData
+
+    for (let si = 0; si < meshes.length; si++) {
+      const mesh = meshes[sortedIndices[si]!]!
+      const isSkinned = !!mesh.skeleton && !!mesh.geometry.joints && !!mesh.geometry.weights
+      if (isSkinned) {
+        mesh.skeleton!.update()
+        const off = skinnedIdx * alignedSkinnedFloats
+        skinnedBatch.set(mesh._worldMatrix, off)
+        if (mat4Invert(this._invWorldMatrix, mesh._worldMatrix)) {
+          mat4Transpose(this._normalMatrix, this._invWorldMatrix)
+        }
+        skinnedBatch.set(this._normalMatrix, off + 16)
+        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 32)
+        mesh._batchIndex = skinnedIdx++
+      } else {
+        const off = objIdx * alignedObjFloats
+        objBatch.set(mesh._worldMatrix, off)
+        if (mat4Invert(this._invWorldMatrix, mesh._worldMatrix)) {
+          mat4Transpose(this._normalMatrix, this._invWorldMatrix)
+        }
+        objBatch.set(this._normalMatrix, off + 16)
+        mesh._batchIndex = objIdx++
+      }
+    }
+
+    // 1-2 writeBuffer calls instead of 900
+    if (objIdx > 0) {
+      const byteLen = objIdx * this._alignedObjectSize
+      this.device.queue.writeBuffer(this._objectDynBuf, 0, objBatch.buffer, objBatch.byteOffset, byteLen)
+    }
+    if (skinnedIdx > 0) {
+      const byteLen = skinnedIdx * this._alignedSkinnedSize
+      this.device.queue.writeBuffer(this._skinnedDynBuf, 0, skinnedBatch.buffer, skinnedBatch.byteOffset, byteLen)
+    }
+
+    // ─── Draw loop ──────────────────────────────────────────────────
+    for (let si = 0; si < meshes.length; si++) {
+      const mesh = meshes[sortedIndices[si]!]!
       const isSkinned = !!mesh.skeleton && !!mesh.geometry.joints && !!mesh.geometry.weights
       let pipeline: GPURenderPipeline
       if (isSkinned) {
@@ -1042,17 +1107,15 @@ export class WebGPURenderer implements Renderer {
       opaquePass.setIndexBuffer(geoBufs.index, geoBufs.indexFormat)
 
       const matCache = this.ensureMaterialCache(mesh.material)
-      this.writeMaterialBuffer(mesh.material, matCache)
+      if (mesh.material.needsUpdate) {
+        this.writeMaterialBuffer(mesh.material, matCache)
+        mesh.material.needsUpdate = false
+      }
 
       if (isSkinned) {
-        mesh.skeleton!.update()
-        const skinnedCache = this.ensureSkinnedMeshCache(mesh)
-        this.writeSkinnedObjectBuffer(mesh, skinnedCache)
-        opaquePass.setBindGroup(2, skinnedCache.bindGroup)
+        opaquePass.setBindGroup(2, this._skinnedDynBG, [mesh._batchIndex * this._alignedSkinnedSize])
       } else {
-        const meshCache = this.ensureMeshCache(mesh)
-        this.writeObjectBuffer(mesh, meshCache)
-        opaquePass.setBindGroup(2, meshCache.bindGroup)
+        opaquePass.setBindGroup(2, this._objectDynBG, [mesh._batchIndex * this._alignedObjectSize])
       }
 
       opaquePass.setBindGroup(0, this.frameBG)
@@ -1139,6 +1202,8 @@ export class WebGPURenderer implements Renderer {
     this.frameUB.destroy()
     this.blitUB.destroy()
     this.dummyTexture.destroy()
+    this._objectDynBuf.destroy()
+    this._skinnedDynBuf.destroy()
     for (const ub of this.bloomDownUBs) ub.destroy()
     for (const ub of this.bloomUpUBs) ub.destroy()
     this.device.destroy()

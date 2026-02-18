@@ -23,14 +23,16 @@ import {
   BLOOM_UPSAMPLE_FRAG,
   BLIT_FRAG,
 } from './shaders.ts'
+import { createSortState, sortMeshes } from './sort.ts'
 
 import type { Geometry } from '../geometry/geometry.ts'
-import type { PaletteEntry } from '../materials/material.ts'
+import type { Material, PaletteEntry } from '../materials/material.ts'
 import type { AABB, Mat4 } from '../math/index.ts'
 import type { PerspectiveCamera } from '../scene/camera.ts'
 import type { DirectionalLight } from '../scene/light.ts'
 import type { Scene } from '../scene/scene.ts'
 import type { Renderer, RendererConfig, FrameStats } from './renderer.ts'
+import type { SortState } from './sort.ts'
 
 // ─── Shader compilation ───────────────────────────────────────────────
 
@@ -62,10 +64,82 @@ const createProgram = (gl: WebGL2RenderingContext, vertSrc: string, fragSrc: str
   return program
 }
 
+// ─── Uniform location cache ───────────────────────────────────────────
+
+interface SceneUniformLocs {
+  u_viewProjection: WebGLUniformLocation | null
+  u_worldMatrix: WebGLUniformLocation | null
+  u_normalMatrix: WebGLUniformLocation | null
+  u_boneMatrices: WebGLUniformLocation | null
+  u_lightDirection: WebGLUniformLocation | null
+  u_lightColor: WebGLUniformLocation | null
+  u_lightIntensity: WebGLUniformLocation | null
+  u_ambientColor: WebGLUniformLocation | null
+  u_ambientIntensity: WebGLUniformLocation | null
+  u_baseColor: WebGLUniformLocation | null
+  u_opacity: WebGLUniformLocation | null
+  u_hasPalette: WebGLUniformLocation | null
+  u_paletteColor: (WebGLUniformLocation | null)[]
+  u_paletteEmissive: (WebGLUniformLocation | null)[]
+}
+
+interface PostUniformLocs {
+  u_srcTexture: WebGLUniformLocation | null
+  u_texelSize: WebGLUniformLocation | null
+  u_useKarisAverage: WebGLUniformLocation | null
+}
+
+interface BlitUniformLocs {
+  u_sceneTexture: WebGLUniformLocation | null
+  u_bloomTexture: WebGLUniformLocation | null
+  u_bloomIntensity: WebGLUniformLocation | null
+}
+
+const cacheSceneLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): SceneUniformLocs => {
+  const paletteColor: (WebGLUniformLocation | null)[] = []
+  const paletteEmissive: (WebGLUniformLocation | null)[] = []
+  for (let i = 0; i < 32; i++) {
+    paletteColor.push(gl.getUniformLocation(program, `u_palette[${i}].color`))
+    paletteEmissive.push(gl.getUniformLocation(program, `u_palette[${i}].emissive`))
+  }
+  return {
+    u_viewProjection: gl.getUniformLocation(program, 'u_viewProjection'),
+    u_worldMatrix: gl.getUniformLocation(program, 'u_worldMatrix'),
+    u_normalMatrix: gl.getUniformLocation(program, 'u_normalMatrix'),
+    u_boneMatrices: gl.getUniformLocation(program, 'u_boneMatrices[0]'),
+    u_lightDirection: gl.getUniformLocation(program, 'u_lightDirection'),
+    u_lightColor: gl.getUniformLocation(program, 'u_lightColor'),
+    u_lightIntensity: gl.getUniformLocation(program, 'u_lightIntensity'),
+    u_ambientColor: gl.getUniformLocation(program, 'u_ambientColor'),
+    u_ambientIntensity: gl.getUniformLocation(program, 'u_ambientIntensity'),
+    u_baseColor: gl.getUniformLocation(program, 'u_baseColor'),
+    u_opacity: gl.getUniformLocation(program, 'u_opacity'),
+    u_hasPalette: gl.getUniformLocation(program, 'u_hasPalette'),
+    u_paletteColor: paletteColor,
+    u_paletteEmissive: paletteEmissive,
+  }
+}
+
+const cachePostLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): PostUniformLocs => ({
+  u_srcTexture: gl.getUniformLocation(program, 'u_srcTexture'),
+  u_texelSize: gl.getUniformLocation(program, 'u_texelSize'),
+  u_useKarisAverage: gl.getUniformLocation(program, 'u_useKarisAverage'),
+})
+
+const cacheBlitLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): BlitUniformLocs => ({
+  u_sceneTexture: gl.getUniformLocation(program, 'u_sceneTexture'),
+  u_bloomTexture: gl.getUniformLocation(program, 'u_bloomTexture'),
+  u_bloomIntensity: gl.getUniformLocation(program, 'u_bloomIntensity'),
+})
+
 // ─── GPU buffer management ────────────────────────────────────────────
 
 const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry, _program: WebGLProgram) => {
   if (geometry._gpuBuffers) return
+
+  // Unbind any active VAO to prevent corrupting its element array buffer
+  // binding when we bind the new index buffer below
+  gl.bindVertexArray(null)
 
   const posBuffer = gl.createBuffer()!
   gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer)
@@ -326,6 +400,19 @@ export class WebGL2Renderer implements Renderer {
   private bloomUpsampleProgram: WebGLProgram
   private blitProgram: WebGLProgram
 
+  // Cached uniform locations
+  private _lambertLocs!: SceneUniformLocs
+  private _basicLocs!: SceneUniformLocs
+  private _lambertSkinnedLocs!: SceneUniformLocs
+  private _basicSkinnedLocs!: SceneUniformLocs
+  private _bloomDownLocs!: PostUniformLocs
+  private _bloomUpLocs!: PostUniformLocs
+  private _blitLocs!: BlitUniformLocs
+
+  // Material tracking for skipping redundant uniform uploads
+  private _lastMaterial: Material | null = null
+  private _lastProgram: WebGLProgram | null = null
+
   private renderTargets: RenderTargets | null = null
   private samples: number
   private bloomLevels: number
@@ -338,6 +425,10 @@ export class WebGL2Renderer implements Renderer {
   private _normalMatrix: Mat4 = mat4Create()
   private _frustumPlanes = new Float32Array(24)
   private _worldAABB: AABB = new Float32Array(6)
+  private _lightDir = vec3Create()
+  private _tempVec3 = new Float32Array(3)
+  private _meshes: Mesh[] = []
+  private _sortState: SortState = createSortState(4096)
 
   // Stats
   private _lastFrameTime = 0
@@ -392,6 +483,15 @@ export class WebGL2Renderer implements Renderer {
     this.bloomDownsampleProgram = createProgram(gl, FULLSCREEN_VERT, BLOOM_DOWNSAMPLE_FRAG)
     this.bloomUpsampleProgram = createProgram(gl, FULLSCREEN_VERT, BLOOM_UPSAMPLE_FRAG)
     this.blitProgram = createProgram(gl, FULLSCREEN_VERT, BLIT_FRAG)
+
+    // Cache uniform locations
+    this._lambertLocs = cacheSceneLocs(gl, this.lambertProgram)
+    this._basicLocs = cacheSceneLocs(gl, this.basicProgram)
+    this._lambertSkinnedLocs = cacheSceneLocs(gl, this.lambertSkinnedProgram)
+    this._basicSkinnedLocs = cacheSceneLocs(gl, this.basicSkinnedProgram)
+    this._bloomDownLocs = cachePostLocs(gl, this.bloomDownsampleProgram)
+    this._bloomUpLocs = cachePostLocs(gl, this.bloomUpsampleProgram)
+    this._blitLocs = cacheBlitLocs(gl, this.blitProgram)
 
     // Enable depth test
     gl.enable(gl.DEPTH_TEST)
@@ -462,9 +562,11 @@ export class WebGL2Renderer implements Renderer {
     // Frustum culling
     frustumFromViewProjection(this._frustumPlanes, this._vpMatrix)
 
-    // Collect visible meshes
-    const meshes: Mesh[] = []
+    // Collect visible meshes + find directional light in single traversal
+    const meshes = this._meshes
+    meshes.length = 0
     let culledCount = 0
+    let dirLight: DirectionalLight | null = null
     scene.traverse((node: Node) => {
       if (!node.visible) return
       if (node instanceof Mesh) {
@@ -477,25 +579,22 @@ export class WebGL2Renderer implements Renderer {
         }
         meshes.push(node)
       }
-    })
-
-    // Find directional light
-    let dirLight: DirectionalLight | null = null
-    scene.traverse((node: Node) => {
-      if (node.type === 'directionalLight' && !dirLight) {
+      if (!dirLight && node.type === 'directionalLight') {
         dirLight = node as DirectionalLight
       }
     })
 
     // Compute light direction from world matrix
-    const lightDir = vec3Create()
+    const lightDir = this._lightDir
+    lightDir[0] = 0
+    lightDir[1] = 0
+    lightDir[2] = 0
     if (dirLight) {
-      // Direction = normalize(light position) as directional light
       const lp = (dirLight as DirectionalLight)._worldMatrix
-      const lx = lp[12]!,
-        ly = lp[13]!,
-        lz = lp[14]!
-      vec3Normalize(lightDir, new Float32Array([lx, ly, lz]))
+      this._tempVec3[0] = lp[12]!
+      this._tempVec3[1] = lp[13]!
+      this._tempVec3[2] = lp[14]!
+      vec3Normalize(lightDir, this._tempVec3)
     }
 
     this.ensureRenderTargets()
@@ -513,80 +612,105 @@ export class WebGL2Renderer implements Renderer {
     let drawCalls = 0
     let triangles = 0
 
-    for (const mesh of meshes) {
+    // Radix sort meshes by layer > pipeline > material > depth
+    sortMeshes(this._sortState, meshes, meshes.length, camera)
+    const sortedIndices = this._sortState.indices
+
+    this._lastMaterial = null
+    this._lastProgram = null
+
+    for (let si = 0; si < meshes.length; si++) {
+      const mesh = meshes[sortedIndices[si]!]!
       const isSkinned = !!mesh.skeleton && !!mesh.geometry.joints && !!mesh.geometry.weights
       let program: WebGLProgram
+      let locs: SceneUniformLocs
       if (isSkinned) {
-        program = mesh.material.type === 'lambert' ? this.lambertSkinnedProgram : this.basicSkinnedProgram
+        if (mesh.material.type === 'lambert') {
+          program = this.lambertSkinnedProgram
+          locs = this._lambertSkinnedLocs
+        } else {
+          program = this.basicSkinnedProgram
+          locs = this._basicSkinnedLocs
+        }
       } else {
-        program = mesh.material.type === 'lambert' ? this.lambertProgram : this.basicProgram
+        if (mesh.material.type === 'lambert') {
+          program = this.lambertProgram
+          locs = this._lambertLocs
+        } else {
+          program = this.basicProgram
+          locs = this._basicLocs
+        }
       }
-      gl.useProgram(program)
+
+      const programChanged = program !== this._lastProgram
+      if (programChanged) {
+        gl.useProgram(program)
+        this._lastProgram = program
+
+        // Per-frame uniforms (set once per program switch)
+        gl.uniformMatrix4fv(locs.u_viewProjection, false, this._vpMatrix)
+
+        if (mesh.material.type === 'lambert') {
+          gl.uniform3fv(locs.u_lightDirection, lightDir)
+          if (dirLight) {
+            gl.uniform3fv(locs.u_lightColor, (dirLight as DirectionalLight).color)
+            gl.uniform1f(locs.u_lightIntensity, (dirLight as DirectionalLight).intensity)
+          }
+          gl.uniform3fv(locs.u_ambientColor, scene.ambientLight.color)
+          gl.uniform1f(locs.u_ambientIntensity, scene.ambientLight.intensity)
+        }
+      }
 
       ensureGPUBuffers(gl, mesh.geometry, program)
       gl.bindVertexArray(mesh.geometry._gpuBuffers!.vao!)
 
-      // Per-frame uniforms
-      gl.uniformMatrix4fv(gl.getUniformLocation(program, 'u_viewProjection'), false, this._vpMatrix)
-
       // Per-object uniforms
-      gl.uniformMatrix4fv(gl.getUniformLocation(program, 'u_worldMatrix'), false, mesh._worldMatrix)
+      gl.uniformMatrix4fv(locs.u_worldMatrix, false, mesh._worldMatrix)
 
-      // Upload bone matrices for skinned meshes
       if (isSkinned) {
         mesh.skeleton!.update()
-        gl.uniformMatrix4fv(gl.getUniformLocation(program, 'u_boneMatrices[0]'), false, mesh.skeleton!.boneMatrices)
+        gl.uniformMatrix4fv(locs.u_boneMatrices, false, mesh.skeleton!.boneMatrices)
       }
 
       if (mesh.material.type === 'lambert') {
-        // Normal matrix = transpose(inverse(worldMatrix))
         if (mat4Invert(this._invWorldMatrix, mesh._worldMatrix)) {
           mat4Transpose(this._normalMatrix, this._invWorldMatrix)
         }
-        gl.uniformMatrix4fv(gl.getUniformLocation(program, 'u_normalMatrix'), false, this._normalMatrix)
+        gl.uniformMatrix4fv(locs.u_normalMatrix, false, this._normalMatrix)
+      }
 
-        // Light uniforms
-        gl.uniform3fv(gl.getUniformLocation(program, 'u_lightDirection'), lightDir)
-        if (dirLight) {
-          gl.uniform3fv(gl.getUniformLocation(program, 'u_lightColor'), (dirLight as DirectionalLight).color)
-          gl.uniform1f(gl.getUniformLocation(program, 'u_lightIntensity'), (dirLight as DirectionalLight).intensity)
-        }
+      // Per-material uniforms (skip if same material + same program)
+      const materialChanged = mesh.material !== this._lastMaterial || programChanged
+      if (materialChanged) {
+        this._lastMaterial = mesh.material
 
-        // Ambient
-        gl.uniform3fv(gl.getUniformLocation(program, 'u_ambientColor'), scene.ambientLight.color)
-        gl.uniform1f(gl.getUniformLocation(program, 'u_ambientIntensity'), scene.ambientLight.intensity)
+        gl.uniform3fv(locs.u_baseColor, mesh.material.color)
+        gl.uniform1f(locs.u_opacity, mesh.material.opacity)
 
-        // Material
-        gl.uniform3fv(gl.getUniformLocation(program, 'u_baseColor'), mesh.material.color)
-        gl.uniform1f(gl.getUniformLocation(program, 'u_opacity'), mesh.material.opacity)
+        if (mesh.material.type === 'lambert') {
+          const hasPalette = !!mesh.material.palette && mesh.geometry.hasAttribute('materialIndex')
+          gl.uniform1i(locs.u_hasPalette, hasPalette ? 1 : 0)
 
-        // Palette
-        const hasPalette = !!mesh.material.palette && mesh.geometry.hasAttribute('materialIndex')
-        gl.uniform1i(gl.getUniformLocation(program, 'u_hasPalette'), hasPalette ? 1 : 0)
-
-        if (hasPalette && mesh.material.palette) {
-          for (let i = 0; i < 32; i++) {
-            const entry: PaletteEntry = mesh.material.palette[i] ?? { color: [1, 1, 1] }
-            gl.uniform4f(
-              gl.getUniformLocation(program, `u_palette[${i}].color`),
-              entry.color[0],
-              entry.color[1],
-              entry.color[2],
-              entry.opacity ?? 1.0,
-            )
-            gl.uniform4f(
-              gl.getUniformLocation(program, `u_palette[${i}].emissive`),
-              entry.emissive?.[0] ?? 0,
-              entry.emissive?.[1] ?? 0,
-              entry.emissive?.[2] ?? 0,
-              entry.emissiveIntensity ?? 0,
-            )
+          if (hasPalette && mesh.material.palette) {
+            for (let i = 0; i < 32; i++) {
+              const entry: PaletteEntry = mesh.material.palette[i] ?? { color: [1, 1, 1] }
+              gl.uniform4f(
+                locs.u_paletteColor[i]!,
+                entry.color[0],
+                entry.color[1],
+                entry.color[2],
+                entry.opacity ?? 1.0,
+              )
+              gl.uniform4f(
+                locs.u_paletteEmissive[i]!,
+                entry.emissive?.[0] ?? 0,
+                entry.emissive?.[1] ?? 0,
+                entry.emissive?.[2] ?? 0,
+                entry.emissiveIntensity ?? 0,
+              )
+            }
           }
         }
-      } else {
-        // Basic material
-        gl.uniform3fv(gl.getUniformLocation(program, 'u_baseColor'), mesh.material.color)
-        gl.uniform1f(gl.getUniformLocation(program, 'u_opacity'), mesh.material.opacity)
       }
 
       const idxType = mesh.geometry.indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT
@@ -620,15 +744,16 @@ export class WebGL2Renderer implements Renderer {
       let srcW = rt.width
       let srcH = rt.height
 
+      const downLocs = this._bloomDownLocs
       for (let i = 0; i < this.bloomLevels; i++) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, rt.bloomFbos[i]!)
         gl.viewport(0, 0, rt.bloomWidths[i]!, rt.bloomHeights[i]!)
 
         gl.activeTexture(gl.TEXTURE0)
         gl.bindTexture(gl.TEXTURE_2D, srcTex)
-        gl.uniform1i(gl.getUniformLocation(this.bloomDownsampleProgram, 'u_srcTexture'), 0)
-        gl.uniform2f(gl.getUniformLocation(this.bloomDownsampleProgram, 'u_texelSize'), 1 / srcW, 1 / srcH)
-        gl.uniform1i(gl.getUniformLocation(this.bloomDownsampleProgram, 'u_useKarisAverage'), i === 0 ? 1 : 0)
+        gl.uniform1i(downLocs.u_srcTexture, 0)
+        gl.uniform2f(downLocs.u_texelSize, 1 / srcW, 1 / srcH)
+        gl.uniform1i(downLocs.u_useKarisAverage, i === 0 ? 1 : 0)
 
         gl.drawArrays(gl.TRIANGLES, 0, 3)
 
@@ -642,18 +767,15 @@ export class WebGL2Renderer implements Renderer {
       gl.enable(gl.BLEND)
       gl.blendFunc(gl.ONE, gl.ONE)
 
+      const upLocs = this._bloomUpLocs
       for (let i = this.bloomLevels - 1; i > 0; i--) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, rt.bloomFbos[i - 1]!)
         gl.viewport(0, 0, rt.bloomWidths[i - 1]!, rt.bloomHeights[i - 1]!)
 
         gl.activeTexture(gl.TEXTURE0)
         gl.bindTexture(gl.TEXTURE_2D, rt.bloomTextures[i]!)
-        gl.uniform1i(gl.getUniformLocation(this.bloomUpsampleProgram, 'u_srcTexture'), 0)
-        gl.uniform2f(
-          gl.getUniformLocation(this.bloomUpsampleProgram, 'u_texelSize'),
-          1 / rt.bloomWidths[i]!,
-          1 / rt.bloomHeights[i]!,
-        )
+        gl.uniform1i(upLocs.u_srcTexture, 0)
+        gl.uniform2f(upLocs.u_texelSize, 1 / rt.bloomWidths[i]!, 1 / rt.bloomHeights[i]!)
 
         gl.drawArrays(gl.TRIANGLES, 0, 3)
       }
@@ -668,20 +790,20 @@ export class WebGL2Renderer implements Renderer {
     gl.depthMask(false)
 
     gl.useProgram(this.blitProgram)
+    const blitLocs = this._blitLocs
 
     gl.activeTexture(gl.TEXTURE0)
     gl.bindTexture(gl.TEXTURE_2D, rt.resolvedColorTex)
-    gl.uniform1i(gl.getUniformLocation(this.blitProgram, 'u_sceneTexture'), 0)
+    gl.uniform1i(blitLocs.u_sceneTexture, 0)
 
     gl.activeTexture(gl.TEXTURE1)
     if (this.bloomEnabled && this.bloomLevels > 0) {
       gl.bindTexture(gl.TEXTURE_2D, rt.bloomTextures[0]!)
     } else {
-      // Bind a dummy (resolved color serves as zero bloom)
       gl.bindTexture(gl.TEXTURE_2D, rt.resolvedEmissiveTex)
     }
-    gl.uniform1i(gl.getUniformLocation(this.blitProgram, 'u_bloomTexture'), 1)
-    gl.uniform1f(gl.getUniformLocation(this.blitProgram, 'u_bloomIntensity'), this.bloomIntensity)
+    gl.uniform1i(blitLocs.u_bloomTexture, 1)
+    gl.uniform1f(blitLocs.u_bloomIntensity, this.bloomIntensity)
 
     gl.drawArrays(gl.TRIANGLES, 0, 3)
 

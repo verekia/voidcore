@@ -38,7 +38,7 @@ voidcore/
 │   │   └── webgl2.ts         # WebGL2 implementation
 │   ├── renderer/      # Render loop, pass orchestration, draw call sorting
 │   │   ├── renderer.ts       # Main render function
-│   │   ├── sort.ts           # 64-bit radix sort
+│   │   ├── sort.ts           # 32-bit radix sort
 │   │   ├── passes/           # Shadow, opaque, transparent, composite, bloom, blit
 │   │   └── uniforms.ts       # Shared uniform buffer management
 │   ├── scene/         # Scene graph, nodes, transforms, dirty flags
@@ -103,7 +103,7 @@ scene.add(mesh)
 
 // INTERNAL: the renderer iterates flat arrays, never walks the object graph
 // worldMatrices: Float32Array  — contiguous, GPU-uploadable
-// sortKeys: BigUint64Array     — 64-bit composite keys for radix sort
+// sortKeys: Uint32Array        — 32-bit composite keys for radix sort
 // visibilityFlags: Uint8Array  — frustum culling results
 // aabbPool: Float32Array       — per-node AABBs for culling
 ```
@@ -171,7 +171,7 @@ Each frame, the visible mesh list is rebuilt from scratch:
 ```typescript
 // Each frame:
 const visibleList = frustumCull(scene, camera) // collect visible meshes
-radixSort(visibleList, sortKeyOf) // sort by 64-bit composite key
+radixSort(visibleList, sortKeyOf) // sort by 32-bit composite key
 buildDrawCommands(visibleList) // emit draw calls
 ```
 
@@ -209,7 +209,7 @@ Every frame executes this sequence:
  6. AABB update (recompute world-space AABBs for dirty nodes)
  7. Frustum culling (test AABBs against 6 camera planes)
  8. Build draw list (collect visible meshes into flat array)
- 9. Sort draw list (radix sort by 64-bit key: pipeline > material > depth)
+ 9. Sort draw list (radix sort by 32-bit key: layer > pipeline > material > depth)
 10. Upload per-frame uniforms (camera, lights, shadow matrices → bind group 0)
 11. Upload per-object uniforms (world matrices → shared buffer for bind group 2)
 12. Execute render passes:

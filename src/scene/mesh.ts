@@ -8,6 +8,7 @@ export class Mesh extends Node {
   geometry: Geometry
   material: Material
   skeleton?: Skeleton
+  _batchIndex = 0
 
   constructor(geometry: Geometry, material: Material) {
     super()
