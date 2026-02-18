@@ -1,0 +1,63 @@
+export interface PaletteEntry {
+  color: [number, number, number]
+  opacity?: number
+  emissive?: [number, number, number]
+  emissiveIntensity?: number
+}
+
+export type MaterialType = 'basic' | 'lambert'
+
+export class Material {
+  type: MaterialType
+  color: [number, number, number]
+  opacity: number
+  transparent: boolean
+  vertexColors: boolean
+  palette?: PaletteEntry[]
+
+  // Lambert-specific
+  receiveShadow: boolean
+  aoTexture?: unknown // For future texture support
+
+  // Computed
+  _hasEmissive = false
+
+  constructor(type: MaterialType, opts: MaterialOptions = {}) {
+    this.type = type
+    this.color = opts.color ?? [1, 1, 1]
+    this.opacity = opts.opacity ?? 1.0
+    this.transparent = opts.transparent ?? false
+    this.vertexColors = opts.vertexColors ?? false
+    this.receiveShadow = opts.receiveShadow ?? true
+
+    if (opts.palette) {
+      this.palette = opts.palette
+      for (const entry of opts.palette) {
+        if (entry.emissive && entry.emissiveIntensity && entry.emissiveIntensity > 0) {
+          this._hasEmissive = true
+          break
+        }
+        if (entry.opacity !== undefined && entry.opacity < 1.0) {
+          this.transparent = true
+        }
+      }
+    }
+
+    if (this.opacity < 1.0) this.transparent = true
+  }
+
+  dispose() {}
+}
+
+export interface MaterialOptions {
+  color?: [number, number, number]
+  opacity?: number
+  transparent?: boolean
+  vertexColors?: boolean
+  receiveShadow?: boolean
+  palette?: PaletteEntry[]
+}
+
+export const createBasicMaterial = (opts: MaterialOptions = {}): Material => new Material('basic', opts)
+
+export const createLambertMaterial = (opts: MaterialOptions = {}): Material => new Material('lambert', opts)

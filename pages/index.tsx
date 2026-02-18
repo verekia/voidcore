@@ -8,10 +8,30 @@ const IndexPage = () => {
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    main(canvas)
+
+    let engine: any = null
+    main(canvas).then(e => {
+      engine = e
+    })
+
+    return () => {
+      engine?.dispose()
+    }
   }, [])
 
-  return <canvas ref={canvasRef} />
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{
+        width: '100vw',
+        height: '100vh',
+        display: 'block',
+        position: 'fixed',
+        top: 0,
+        left: 0,
+      }}
+    />
+  )
 }
 
 export default IndexPage
