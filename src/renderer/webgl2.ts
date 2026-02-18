@@ -505,7 +505,7 @@ export class WebGL2Renderer implements Renderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, rt.msaaFbo)
     gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1])
     gl.viewport(0, 0, rt.width, rt.height)
-    gl.clearColor(0.05, 0.05, 0.08, 1.0)
+    gl.clearColor(0, 0, 0, 1.0)
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
     gl.enable(gl.DEPTH_TEST)
     gl.depthMask(true)

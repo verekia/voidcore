@@ -107,14 +107,13 @@ void main() {
     a_weights.w * u_boneMatrices[int(a_joints.w)];
 
   vec4 skinnedPos = skinMatrix * vec4(a_position, 1.0);
-  vec4 worldPos = u_worldMatrix * skinnedPos;
-  v_worldPos = worldPos.xyz;
+  v_worldPos = skinnedPos.xyz;
 
   vec4 skinnedNorm = skinMatrix * vec4(a_normal, 0.0);
-  v_normal = normalize((u_normalMatrix * skinnedNorm).xyz);
+  v_normal = normalize(skinnedNorm.xyz);
   v_uv = a_uv;
   v_materialIndex = int(a_materialIndex);
-  gl_Position = u_viewProjection * worldPos;
+  gl_Position = u_viewProjection * skinnedPos;
 }
 `
 
@@ -142,7 +141,7 @@ void main() {
     a_weights.w * u_boneMatrices[int(a_joints.w)];
 
   vec4 skinnedPos = skinMatrix * vec4(a_position, 1.0);
-  gl_Position = u_viewProjection * u_worldMatrix * skinnedPos;
+  gl_Position = u_viewProjection * skinnedPos;
   v_uv = a_uv;
 }
 `

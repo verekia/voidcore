@@ -3,22 +3,21 @@ import {
   createScene,
   createPerspectiveCamera,
   createDirectionalLight,
-  createMesh,
   createLambertMaterial,
-  createPlaneGeometry,
-  createBoxGeometry,
-  createSphereGeometry,
-  createConeGeometry,
-  createCylinderGeometry,
-  createCapsuleGeometry,
-  createCircleGeometry,
   createOrbitControls,
   loadGLTF,
   createAnimationMixer,
+  Skeleton,
+  Mesh,
+  Group,
+  Node,
 } from './index.ts'
 
-import type { Skeleton } from './animation/skeleton.ts'
 import type { AnimationClip, AnimationAction } from './index.ts'
+
+// ─── Configuration ──────────────────────────────────────────────────
+const CHARACTER_COUNT = 1000
+const GRID_SPACING = 5
 
 export const main = async (canvas: HTMLCanvasElement) => {
   // ─── Engine ─────────────────────────────────────────────────────
@@ -41,9 +40,9 @@ export const main = async (canvas: HTMLCanvasElement) => {
 
   // ─── Camera + Orbit Controls ────────────────────────────────────
   const camera = createPerspectiveCamera({ fov: 55, near: 0.1, far: 500 })
-  camera.position[0] = 8
-  camera.position[1] = -12
-  camera.position[2] = 8
+  camera.position[0] = 0
+  camera.position[1] = -170
+  camera.position[2] = 60
   camera._dirtyLocal = true
   camera._dirtyWorld = true
 
@@ -51,224 +50,180 @@ export const main = async (canvas: HTMLCanvasElement) => {
     target: [0, 0, 1.5],
     dampingFactor: 0.08,
     minDistance: 2,
-    maxDistance: 60,
+    maxDistance: 200,
   })
 
-  // ─── Load megaxe from static-bundle.glb ─────────────────────────
-  let megaxeMesh: ReturnType<typeof createMesh> | null = null
+  // ─── Load assets ───────────────────────────────────────────────
+  const [megaxeGltf, playerGltf] = await Promise.all([
+    loadGLTF('/static-bundle.glb', engine, { draco: { decoderPath: '/draco-1.5.7/' } }),
+    loadGLTF('/player-bundle.glb', engine, { draco: { decoderPath: '/draco-1.5.7/' } }),
+  ])
 
-  try {
-    const gltf = await loadGLTF('/static-bundle.glb', engine, {
-      draco: { decoderPath: '/draco-1.5.7/' },
-    })
-
-    // Find the megaxe mesh and add only that to the scene
-    for (const mesh of gltf.meshes) {
-      if (mesh.name.toLowerCase().includes('megaxe')) {
-        // Override material with palette:
-        // 0: near white, 1: near black, 2: bright teal with bloom
-        mesh.material = createLambertMaterial({
-          palette: [
-            { color: [0.95, 0.93, 0.9] }, // 0: near white
-            { color: [0.08, 0.08, 0.1] }, // 1: near black
-            { color: [0, 0.9, 0.85], emissive: [0, 1, 0.9], emissiveIntensity: 2.5 }, // 2: bright teal with bloom
-          ],
-        })
-        mesh.frustumCulled = false
-        mesh.position[2] = 1.5
-        mesh._dirtyLocal = true
-        scene.add(mesh)
-        megaxeMesh = mesh
-      }
+  // Find megaxe template mesh
+  let megaxeTemplate: Mesh | null = null
+  for (const mesh of megaxeGltf.meshes) {
+    if (mesh.name.toLowerCase().includes('megaxe')) {
+      megaxeTemplate = mesh
+      break
     }
-  } catch (e) {
-    console.warn('Failed to load static-bundle.glb:', e)
   }
 
-  // ─── Load player-bundle.glb (skinned character) ─────────────────
-  let playerSkeleton: Skeleton | null = null
-  let playerClips: AnimationClip[] = []
-  let mixer: ReturnType<typeof createAnimationMixer> | null = null
-  let actions: AnimationAction[] = []
-  let currentActionIndex = 0
-  let nextSwitchTime = 0
-  const clipDuration = 2 // seconds per clip before crossfade
-  const crossfadeDuration = 0.3
+  const megaxeMaterial = createLambertMaterial({
+    palette: [
+      { color: [0.95, 0.93, 0.9] },
+      { color: [0.08, 0.08, 0.1] },
+      { color: [0, 0.9, 0.85], emissive: [0, 1, 0.9], emissiveIntensity: 2.5 },
+    ],
+  })
 
-  try {
-    const playerGltf = await loadGLTF('/player-bundle.glb', engine, {
-      draco: { decoderPath: '/draco-1.5.7/' },
-    })
+  // Gather animation clips
+  const refSkeleton = playerGltf.skeletons[0]!
+  const playerClips: AnimationClip[] = []
+  for (const name of ['SlashRight', 'Jump', 'Run']) {
+    const clip = playerGltf.animations.find(a => a.name === name)
+    if (clip) playerClips.push(clip)
+  }
+  if (playerClips.length === 0) {
+    playerClips.push(...playerGltf.animations.slice(0, 3))
+  }
 
-    scene.add(playerGltf.scene)
+  // ─── Clone helper ─────────────────────────────────────────────
+  const cloneNodeTree = (source: Node): { root: Node; nodeMap: Map<Node, Node> } => {
+    const nodeMap = new Map<Node, Node>()
 
-    if (playerGltf.skeletons.length > 0) {
-      playerSkeleton = playerGltf.skeletons[0]!
+    const cloneNode = (src: Node): Node => {
+      let clone: Node
+      if (src instanceof Mesh && src.name === 'Body') {
+        clone = new Mesh(src.geometry, src.material)
+      } else {
+        clone = new Group()
+      }
+      clone.name = src.name
+      clone.visible = src.visible
+      clone.frustumCulled = src.frustumCulled
+      clone.position[0] = src.position[0]!
+      clone.position[1] = src.position[1]!
+      clone.position[2] = src.position[2]!
+      clone.rotation[0] = src.rotation[0]!
+      clone.rotation[1] = src.rotation[1]!
+      clone.rotation[2] = src.rotation[2]!
+      clone.rotation[3] = src.rotation[3]!
+      clone.scale[0] = src.scale[0]!
+      clone.scale[1] = src.scale[1]!
+      clone.scale[2] = src.scale[2]!
+      clone._dirtyLocal = true
 
-      // Attach megaxe to Hand.R bone
-      if (megaxeMesh && playerSkeleton) {
-        const handBone = playerSkeleton.getBone('Hand.R')
-        if (handBone) {
-          // Reparent megaxe under hand bone
-          if (megaxeMesh.parent) megaxeMesh.parent.remove(megaxeMesh)
-          handBone.add(megaxeMesh)
-          // Reset transform so it sits at bone origin
-          megaxeMesh.position[0] = 0
-          megaxeMesh.position[1] = 0
-          megaxeMesh.position[2] = 0
-          megaxeMesh.rotation[0] = 0
-          megaxeMesh.rotation[1] = 0
-          megaxeMesh.rotation[2] = 0
-          megaxeMesh.rotation[3] = 1
-          megaxeMesh.scale[0] = 1
-          megaxeMesh.scale[1] = 1
-          megaxeMesh.scale[2] = 1
-          megaxeMesh._dirtyLocal = true
-        }
+      nodeMap.set(src, clone)
+
+      for (const child of src.children) {
+        clone.add(cloneNode(child))
+      }
+      return clone
+    }
+
+    return { root: cloneNode(source), nodeMap }
+  }
+
+  // ─── Spawn characters ─────────────────────────────────────────
+  const CLIP_DURATION = 2 // seconds per clip before crossfade
+  const CROSSFADE_DURATION = 0.3
+
+  const mixers: ReturnType<typeof createAnimationMixer>[] = []
+  const charActions: AnimationAction[][] = []
+  const charCurrentClip: number[] = []
+  const charNextSwitch: number[] = []
+
+  const cols = Math.ceil(Math.sqrt(CHARACTER_COUNT))
+  const rows = Math.ceil(CHARACTER_COUNT / cols)
+
+  // Total cycle length for staggering offsets
+  const totalCycle = playerClips.length * CLIP_DURATION
+
+  for (let i = 0; i < CHARACTER_COUNT; i++) {
+    const { root, nodeMap } = cloneNodeTree(playerGltf.scene)
+
+    // Create skeleton with cloned bones
+    const clonedBones = refSkeleton.bones.map(b => nodeMap.get(b)!)
+    const skeleton = new Skeleton(clonedBones, refSkeleton.boneInverseBindMatrices)
+
+    // Assign skeleton to skinned meshes
+    for (const origMesh of playerGltf.meshes) {
+      const clonedNode = nodeMap.get(origMesh)
+      if (clonedNode && clonedNode instanceof Mesh) {
+        clonedNode.skeleton = skeleton
       }
     }
 
-    // Find animation clips by name
-    const clipNames = ['SlashRight', 'Jump', 'Run']
-    for (const name of clipNames) {
-      const clip = playerGltf.animations.find(a => a.name === name)
-      if (clip) playerClips.push(clip)
+    // Position in grid
+    const col = i % cols
+    const row = Math.floor(i / cols)
+    root.position[0] = (col - (cols - 1) / 2) * GRID_SPACING
+    root.position[1] = (row - (rows - 1) / 2) * GRID_SPACING
+    root._dirtyLocal = true
+
+    // Attach megaxe clone
+    if (megaxeTemplate) {
+      const handBone = skeleton.getBone('Hand.R')
+      if (handBone) {
+        const axeClone = new Mesh(megaxeTemplate.geometry, megaxeMaterial)
+        axeClone._dirtyLocal = true
+        handBone.add(axeClone)
+      }
     }
 
-    // Fallback: use whatever animations are available
-    if (playerClips.length === 0) {
-      playerClips = playerGltf.animations.slice(0, 3)
-    }
+    scene.add(root)
 
-    // Set up mixer with actions
-    if (playerSkeleton && playerClips.length > 0) {
-      mixer = createAnimationMixer(playerSkeleton)
+    // Animation — all characters cycle through all clips with staggered offsets
+    if (playerClips.length > 0) {
+      const mixer = createAnimationMixer(skeleton)
+      const actions: AnimationAction[] = []
       for (const clip of playerClips) {
         actions.push(mixer.clipAction(clip))
       }
-      // Start the first action
-      actions[0]!.play()
-      actions[0]!.weight = 1
-      nextSwitchTime = clipDuration
+
+      // Stagger: random offset into the full cycle
+      const offset = Math.random() * totalCycle
+      const startClip = Math.floor(offset / CLIP_DURATION) % playerClips.length
+      const timeIntoClip = offset % CLIP_DURATION
+
+      actions[startClip]!.play()
+      actions[startClip]!.weight = 1
+      actions[startClip]!.time = timeIntoClip
+
+      mixers.push(mixer)
+      charActions.push(actions)
+      charCurrentClip.push(startClip)
+      charNextSwitch.push(CLIP_DURATION - timeIntoClip)
     }
-  } catch (e) {
-    console.warn('Failed to load player-bundle.glb:', e)
   }
 
-  // ─── Geometry Showcase ──────────────────────────────────────────
+  // ─── Stats overlay ────────────────────────────────────────────
+  const statsDiv = document.createElement('div')
+  statsDiv.style.cssText =
+    'position:fixed;top:10px;left:10px;color:#fff;font:14px monospace;background:rgba(0,0,0,0.6);padding:8px 12px;border-radius:4px;z-index:1000;pointer-events:none'
+  document.body.appendChild(statsDiv)
 
-  const geoMaterial = createLambertMaterial({ color: [0.7, 0.5, 0.9] })
-  const geoMaterial2 = createLambertMaterial({ color: [0.4, 0.8, 0.6] })
-  const geoMaterial3 = createLambertMaterial({ color: [0.9, 0.6, 0.3] })
-
-  const spacing = 2.5
-  const startX = -spacing * 3
-
-  // Ground plane
-  const ground = createMesh(
-    createPlaneGeometry({ width: 30, height: 30 }),
-    createLambertMaterial({ color: [0.25, 0.25, 0.28] }),
-  )
-  scene.add(ground)
-
-  // Plane (vertical display)
-  const planeMesh = createMesh(createPlaneGeometry({ width: 1.5, height: 1.5 }), geoMaterial)
-  planeMesh.position[0] = startX
-  planeMesh.position[1] = 5
-  planeMesh.position[2] = 1.5
-  // Tilt the plane so it's visible
-  const halfPi = Math.PI / 4
-  const s = Math.sin(halfPi / 2)
-  planeMesh.rotation[0] = s // rotate around X to face camera
-  planeMesh.rotation[3] = Math.cos(halfPi / 2)
-  planeMesh._dirtyLocal = true
-  scene.add(planeMesh)
-
-  // Box
-  const boxMesh = createMesh(createBoxGeometry({ width: 1.2, height: 1.2, depth: 1.2 }), geoMaterial2)
-  boxMesh.position[0] = startX + spacing
-  boxMesh.position[1] = 5
-  boxMesh.position[2] = 1
-  boxMesh._dirtyLocal = true
-  scene.add(boxMesh)
-
-  // Sphere
-  const sphereMesh = createMesh(
-    createSphereGeometry({ radius: 0.7, widthSegments: 24, heightSegments: 12 }),
-    geoMaterial3,
-  )
-  sphereMesh.position[0] = startX + spacing * 2
-  sphereMesh.position[1] = 5
-  sphereMesh.position[2] = 1
-  sphereMesh._dirtyLocal = true
-  scene.add(sphereMesh)
-
-  // Cone
-  const coneMesh = createMesh(createConeGeometry({ radius: 0.6, height: 1.4, radialSegments: 24 }), geoMaterial)
-  coneMesh.position[0] = startX + spacing * 3
-  coneMesh.position[1] = 5
-  coneMesh.position[2] = 0
-  coneMesh._dirtyLocal = true
-  scene.add(coneMesh)
-
-  // Cylinder
-  const cylMesh = createMesh(
-    createCylinderGeometry({ radiusTop: 0.5, radiusBottom: 0.5, height: 1.5, radialSegments: 24 }),
-    geoMaterial2,
-  )
-  cylMesh.position[0] = startX + spacing * 4
-  cylMesh.position[1] = 5
-  cylMesh.position[2] = 0.75
-  cylMesh._dirtyLocal = true
-  scene.add(cylMesh)
-
-  // Capsule
-  const capMesh = createMesh(createCapsuleGeometry({ radius: 0.4, height: 1.6, radialSegments: 16 }), geoMaterial3)
-  capMesh.position[0] = startX + spacing * 5
-  capMesh.position[1] = 5
-  capMesh.position[2] = 0.8
-  capMesh._dirtyLocal = true
-  scene.add(capMesh)
-
-  // Circle
-  const circleMesh = createMesh(createCircleGeometry({ radius: 0.7, segments: 24 }), geoMaterial)
-  circleMesh.position[0] = startX + spacing * 6
-  circleMesh.position[1] = 5
-  circleMesh.position[2] = 1.5
-  // Tilt the circle
-  circleMesh.rotation[0] = s
-  circleMesh.rotation[3] = Math.cos(halfPi / 2)
-  circleMesh._dirtyLocal = true
-  scene.add(circleMesh)
-
-  // ─── Render Loop ────────────────────────────────────────────────
-  engine.onFrame((dt, elapsed) => {
+  // ─── Render Loop ──────────────────────────────────────────────
+  let elapsed = 0
+  engine.onFrame(dt => {
     controls.update(dt)
+    elapsed += dt
 
-    // Slowly rotate the geometry showcase items
-    const time = performance.now() / 1000
-    boxMesh.rotation[2] = Math.sin(time * 0.3) * 0.3
-    boxMesh.rotation[3] = Math.cos(time * 0.3) * 0.3 + 0.7
-    boxMesh._dirtyLocal = true
-
-    sphereMesh.position[2] = 1 + Math.sin(time * 0.5) * 0.3
-    sphereMesh._dirtyLocal = true
-
-    // Animate player character with crossfades
-    if (mixer && actions.length > 1) {
-      // Check if it's time to crossfade to the next clip
-      if (elapsed >= nextSwitchTime) {
-        const nextIndex = (currentActionIndex + 1) % actions.length
-        const current = actions[currentActionIndex]!
-        const next = actions[nextIndex]!
-        current.crossFadeTo(next, crossfadeDuration)
-        currentActionIndex = nextIndex
-        nextSwitchTime = elapsed + clipDuration
+    for (let i = 0; i < mixers.length; i++) {
+      // Crossfade to next clip when it's time
+      if (elapsed >= charNextSwitch[i]!) {
+        const actions = charActions[i]!
+        const cur = charCurrentClip[i]!
+        const next = (cur + 1) % actions.length
+        actions[cur]!.crossFadeTo(actions[next]!, CROSSFADE_DURATION)
+        charCurrentClip[i] = next
+        charNextSwitch[i] = elapsed + CLIP_DURATION
       }
-      mixer.update(dt)
-    } else if (mixer) {
-      mixer.update(dt)
+      mixers[i]!.update(dt)
     }
+
+    const stats = engine.getStats()
+    statsDiv.textContent = `Draw calls: ${stats.drawCalls}`
   })
 
   engine.start(scene, camera)

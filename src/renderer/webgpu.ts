@@ -999,7 +999,7 @@ export class WebGPURenderer implements Renderer {
           resolveTarget: rt.resolvedColorView,
           loadOp: 'clear',
           storeOp: 'discard',
-          clearValue: { r: 0.05, g: 0.05, b: 0.08, a: 1.0 },
+          clearValue: { r: 0, g: 0, b: 0, a: 1.0 },
         },
         {
           view: rt.msaaEmissiveView,

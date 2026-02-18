@@ -151,8 +151,8 @@ export const createSphereGeometry = (opts: SphereGeometryOptions = {}): Geometry
       const b = a + 1
       const c = a + (ws + 1)
       const d = c + 1
-      if (iy !== 0) indices.push(a, b, d)
-      if (iy !== hs - 1) indices.push(a, d, c)
+      if (iy !== 0) indices.push(a, d, b)
+      if (iy !== hs - 1) indices.push(a, c, d)
     }
   }
 
@@ -339,9 +339,9 @@ export const createCapsuleGeometry = (opts: CapsuleGeometryOptions = {}): Geomet
   const uvs: number[] = []
   const indices: number[] = []
 
-  // Top hemisphere (z-up)
+  // Top hemisphere (z-up) — from pole down to equator
   for (let iy = 0; iy <= capSegs; iy++) {
-    const phi = (iy / capSegs) * (Math.PI / 2) // 0 to PI/2
+    const phi = (1 - iy / capSegs) * (Math.PI / 2) // PI/2 (pole) to 0 (equator)
     for (let ix = 0; ix <= rs; ix++) {
       const theta = (ix / rs) * Math.PI * 2
       const sinPhi = Math.sin(phi),
@@ -351,7 +351,7 @@ export const createCapsuleGeometry = (opts: CapsuleGeometryOptions = {}): Geomet
       const z = sinPhi
       positions.push(x * r, y * r, z * r + halfCylH)
       normals.push(x, y, z)
-      uvs.push(ix / rs, 1 - iy / (capSegs * 2))
+      uvs.push(ix / rs, iy / (capSegs * 2))
     }
   }
 
@@ -378,7 +378,7 @@ export const createCapsuleGeometry = (opts: CapsuleGeometryOptions = {}): Geomet
       const b = a + 1
       const c = a + (rs + 1)
       const d = c + 1
-      indices.push(a, b, d, a, d, c)
+      indices.push(a, d, b, a, c, d)
     }
   }
 

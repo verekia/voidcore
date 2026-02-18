@@ -147,14 +147,13 @@ fn vs_main(
     a_weights.w * object.boneMatrices[a_joints.w];
 
   let skinnedPos = skinMatrix * vec4<f32>(a_position, 1.0);
-  let worldPos = object.worldMatrix * skinnedPos;
-  out.worldPos = worldPos.xyz;
+  out.worldPos = skinnedPos.xyz;
 
   let skinnedNorm = skinMatrix * vec4<f32>(a_normal, 0.0);
-  out.normal = normalize((object.normalMatrix * skinnedNorm).xyz);
+  out.normal = normalize(skinnedNorm.xyz);
   out.uv = a_uv;
   out.materialIndex = i32(a_materialIndex);
-  out.position = frame.viewProjection * worldPos;
+  out.position = frame.viewProjection * skinnedPos;
   return out;
 }
 
@@ -246,7 +245,7 @@ fn vs_main(
     a_weights.w * object.boneMatrices[a_joints.w];
 
   let skinnedPos = skinMatrix * vec4<f32>(a_position, 1.0);
-  out.position = frame.viewProjection * object.worldMatrix * skinnedPos;
+  out.position = frame.viewProjection * skinnedPos;
   out.uv = a_uv;
   return out;
 }
