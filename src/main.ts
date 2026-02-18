@@ -175,6 +175,10 @@ export const main = async (canvas: HTMLCanvasElement) => {
       const handBone = skeleton.getBone('Hand.R')
       if (handBone) {
         const axeClone = new Mesh(megaxeTemplate.geometry, megaxeMaterial)
+        axeClone.rotation[0] = 0
+        axeClone.rotation[1] = 0
+        axeClone.rotation[2] = 1
+        axeClone.rotation[3] = 0
         axeClone._dirtyLocal = true
         handBone.add(axeClone)
       }
