@@ -38,9 +38,8 @@ export class Material {
     if (opts.palette) {
       this.palette = opts.palette
       for (const entry of opts.palette) {
-        if (entry.emissive && entry.emissiveIntensity && entry.emissiveIntensity > 0) {
+        if (!this._hasEmissive && entry.emissive && entry.emissiveIntensity && entry.emissiveIntensity > 0) {
           this._hasEmissive = true
-          break
         }
         if (entry.opacity !== undefined && entry.opacity < 1.0) {
           this.transparent = true

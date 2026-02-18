@@ -411,8 +411,13 @@ export const loadGLTF = async (url: string, options?: LoadOptions): Promise<GLTF
         nodeMeshes.push(mesh)
       }
 
-      // Use the last primitive mesh as the node for this glTF node
-      node = nodeMeshes[nodeMeshes.length - 1]!
+      if (nodeMeshes.length === 1) {
+        node = nodeMeshes[0]!
+      } else {
+        // Multi-primitive: wrap in a group so all primitives are in the scene graph
+        node = new Group()
+        for (const m of nodeMeshes) node.add(m)
+      }
     } else {
       node = new Group()
     }

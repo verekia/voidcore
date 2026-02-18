@@ -32,13 +32,13 @@ export const sortMeshes = (state: SortState, meshes: Mesh[], meshCount: number, 
   for (let i = 0; i < meshCount; i++) {
     const mesh = meshes[i]!
     const material = mesh.material
-    const hasSkeleton = !!(mesh.skeleton && mesh.geometry.joints && mesh.geometry.weights)
+    mesh._isSkinned = !!mesh.skeleton && !!mesh.geometry.joints && !!mesh.geometry.weights
 
     // Layer: bits 31-30 (opaque=0, transparent=1)
     const layer = material.transparent ? 1 : 0
 
     // Pipeline ID: bits 29-22
-    const pipelineId = (material.type === 'lambert' ? 1 : 0) | (hasSkeleton ? 2 : 0)
+    const pipelineId = (material.type === 'lambert' ? 1 : 0) | (mesh._isSkinned ? 2 : 0)
 
     // Material ID: bits 21-10 (masked to 12 bits)
     const materialId = material._id & 0xfff

@@ -32,6 +32,20 @@ import type { Scene } from '../scene/scene.ts'
 import type { Renderer, RendererConfig, FrameStats } from './renderer.ts'
 import type { SortState } from './sort.ts'
 
+// ─── WebGL2 GPU buffer handles ───────────────────────────────────────
+
+interface GPUBuffers {
+  position: WebGLBuffer
+  normal: WebGLBuffer
+  index: WebGLBuffer
+  uv?: WebGLBuffer
+  color?: WebGLBuffer
+  materialIndex?: WebGLBuffer
+  joints?: WebGLBuffer
+  weights?: WebGLBuffer
+  vao?: WebGLVertexArrayObject
+}
+
 // ─── Shader compilation ───────────────────────────────────────────────
 
 const compileShader = (gl: WebGL2RenderingContext, type: number, source: string): WebGLShader => {
@@ -695,8 +709,7 @@ export class WebGL2Renderer implements Renderer {
     let objCount = 0
     let skinnedCount = 0
     for (let si = 0; si < meshes.length; si++) {
-      const mesh = meshes[sortedIndices[si]!]!
-      if (mesh.skeleton && mesh.geometry.joints && mesh.geometry.weights) skinnedCount++
+      if (meshes[sortedIndices[si]!]!._isSkinned) skinnedCount++
       else objCount++
     }
     this._ensureDynamicCapacity(objCount, skinnedCount)
@@ -710,8 +723,7 @@ export class WebGL2Renderer implements Renderer {
 
     for (let si = 0; si < meshes.length; si++) {
       const mesh = meshes[sortedIndices[si]!]!
-      const isSkinned = !!mesh.skeleton && !!mesh.geometry.joints && !!mesh.geometry.weights
-      if (isSkinned) {
+      if (mesh._isSkinned) {
         mesh.skeleton!.update()
         const off = skinnedIdx * alignedSkinnedFloats
         skinnedBatch.set(mesh._worldMatrix, off)
@@ -748,10 +760,9 @@ export class WebGL2Renderer implements Renderer {
 
     for (let si = 0; si < meshes.length; si++) {
       const mesh = meshes[sortedIndices[si]!]!
-      const isSkinned = !!mesh.skeleton && !!mesh.geometry.joints && !!mesh.geometry.weights
       let program: WebGLProgram
       let locs: SceneUniformLocs
-      if (isSkinned) {
+      if (mesh._isSkinned) {
         if (mesh.material.type === 'lambert') {
           program = this.lambertSkinnedProgram
           locs = this._lambertSkinnedLocs
@@ -776,10 +787,10 @@ export class WebGL2Renderer implements Renderer {
       }
 
       ensureGPUBuffers(gl, mesh.geometry)
-      gl.bindVertexArray(mesh.geometry._gpuBuffers!.vao!)
+      gl.bindVertexArray((mesh.geometry._gpuBuffers as GPUBuffers).vao!)
 
       // Bind object UBO at the pre-filled offset (replaces all per-object uniformMatrix4fv)
-      if (isSkinned) {
+      if (mesh._isSkinned) {
         gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._skinnedDynBuf, mesh._batchIndex * this._alignedSkinnedSize, 2176)
       } else {
         gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 128)

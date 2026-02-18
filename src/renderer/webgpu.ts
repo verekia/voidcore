@@ -1031,12 +1031,11 @@ export class WebGPURenderer implements Renderer {
     const alignedObjFloats = this._alignedObjectSize / 4
     const alignedSkinnedFloats = this._alignedSkinnedSize / 4
 
-    // Count to ensure capacity
+    // Count to ensure capacity (_isSkinned already set by sortMeshes)
     let objCount = 0
     let skinnedCount = 0
     for (let si = 0; si < meshes.length; si++) {
-      const mesh = meshes[sortedIndices[si]!]!
-      if (mesh.skeleton && mesh.geometry.joints && mesh.geometry.weights) skinnedCount++
+      if (meshes[sortedIndices[si]!]!._isSkinned) skinnedCount++
       else objCount++
     }
     this.ensureDynamicCapacity(objCount, 'object')
@@ -1047,8 +1046,7 @@ export class WebGPURenderer implements Renderer {
 
     for (let si = 0; si < meshes.length; si++) {
       const mesh = meshes[sortedIndices[si]!]!
-      const isSkinned = !!mesh.skeleton && !!mesh.geometry.joints && !!mesh.geometry.weights
-      if (isSkinned) {
+      if (mesh._isSkinned) {
         mesh.skeleton!.update()
         const off = skinnedIdx * alignedSkinnedFloats
         skinnedBatch.set(mesh._worldMatrix, off)
@@ -1083,9 +1081,8 @@ export class WebGPURenderer implements Renderer {
     this._lastMaterial = null
     for (let si = 0; si < meshes.length; si++) {
       const mesh = meshes[sortedIndices[si]!]!
-      const isSkinned = !!mesh.skeleton && !!mesh.geometry.joints && !!mesh.geometry.weights
       let pipeline: GPURenderPipeline
-      if (isSkinned) {
+      if (mesh._isSkinned) {
         pipeline = mesh.material.type === 'lambert' ? this.lambertSkinnedPipeline : this.basicSkinnedPipeline
       } else {
         pipeline = mesh.material.type === 'lambert' ? this.lambertPipeline : this.basicPipeline
@@ -1097,7 +1094,7 @@ export class WebGPURenderer implements Renderer {
       opaquePass.setVertexBuffer(1, geoBufs.normal)
       opaquePass.setVertexBuffer(2, geoBufs.uv)
       opaquePass.setVertexBuffer(3, geoBufs.materialIndex)
-      if (isSkinned && geoBufs.joints && geoBufs.weights) {
+      if (mesh._isSkinned && geoBufs.joints && geoBufs.weights) {
         opaquePass.setVertexBuffer(4, geoBufs.joints)
         opaquePass.setVertexBuffer(5, geoBufs.weights)
       }
@@ -1109,7 +1106,7 @@ export class WebGPURenderer implements Renderer {
         this.writeMaterialBuffer(mesh.material, matCache)
       }
 
-      if (isSkinned) {
+      if (mesh._isSkinned) {
         opaquePass.setBindGroup(2, this._skinnedDynBG, [mesh._batchIndex * this._alignedSkinnedSize])
       } else {
         opaquePass.setBindGroup(2, this._objectDynBG, [mesh._batchIndex * this._alignedObjectSize])

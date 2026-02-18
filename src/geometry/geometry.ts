@@ -13,18 +13,6 @@ export interface GeometryData {
   weights?: Float32Array
 }
 
-export interface GPUBuffers {
-  position: WebGLBuffer
-  normal: WebGLBuffer
-  index: WebGLBuffer
-  uv?: WebGLBuffer
-  color?: WebGLBuffer
-  materialIndex?: WebGLBuffer
-  joints?: WebGLBuffer
-  weights?: WebGLBuffer
-  vao?: WebGLVertexArrayObject
-}
-
 export class Geometry {
   positions: Float32Array
   normals: Float32Array
@@ -39,7 +27,7 @@ export class Geometry {
   indexCount: number
   aabb: AABB
 
-  _gpuBuffers: GPUBuffers | null = null
+  _gpuBuffers: unknown = null
   needsUpdate = false
 
   constructor(data: GeometryData) {
