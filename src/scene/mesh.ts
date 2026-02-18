@@ -17,6 +17,7 @@ export class Mesh extends Node {
   material: Material
   skeleton?: Skeleton
   _batchIndex = 0
+  _batchFrame = -1
   _isSkinned = false
 
   constructor(geometry: Geometry, material: Material) {

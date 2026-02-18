@@ -14,12 +14,13 @@
 
 import { createRenderer, type Renderer, type RendererConfig, type FrameStats } from './renderer/renderer.ts'
 
+import type { ShadowConfig } from './renderer/renderer.ts'
 import type { PerspectiveCamera } from './scene/camera.ts'
 import type { Scene } from './scene/scene.ts'
 
 export interface EngineConfig extends RendererConfig {
   backend?: 'auto' | 'webgpu' | 'webgl2'
-  shadows?: boolean | object
+  shadows?: boolean | ShadowConfig
   debug?: boolean
 }
 

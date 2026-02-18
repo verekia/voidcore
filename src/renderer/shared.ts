@@ -71,6 +71,43 @@ export const collectVisibleMeshes = (
   return _traversalResult
 }
 
+/**
+ * Collect shadow casters from the scene for a given cascade frustum.
+ * Meshes already in the camera-visible batch (batchFrame === frameNum) are skipped.
+ * Returns the number of shadow-only meshes found.
+ */
+export const collectShadowCasters = (
+  root: Node,
+  frustumPlanes: Float32Array,
+  worldAABB: AABB,
+  shadowMeshes: Mesh[],
+  stack: Node[],
+  frameNum: number,
+): number => {
+  let count = 0
+  stack.length = 0
+  stack.push(root)
+  while (stack.length > 0) {
+    const node = stack.pop()!
+    if (!node.visible) continue
+    if (node.type === 'mesh') {
+      const mesh = node as Mesh
+      if (mesh.castShadow && mesh._batchFrame !== frameNum) {
+        aabbTransform(worldAABB, mesh.geometry.aabb, mesh._worldMatrix)
+        if (frustumContainsAABB(frustumPlanes, worldAABB)) {
+          shadowMeshes.push(mesh)
+          count++
+        }
+      }
+    }
+    const children = node.children
+    for (let i = children.length - 1; i >= 0; i--) {
+      stack.push(children[i]!)
+    }
+  }
+  return count
+}
+
 /** Compute normalized light direction from a directional light's world position. */
 export const computeLightDir = (
   lightDir: Float32Array,

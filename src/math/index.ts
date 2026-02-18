@@ -477,6 +477,29 @@ export const mat4Ortho = (
   return out
 }
 
+export const mat4OrthoZO = (
+  out: Mat4,
+  left: number,
+  right: number,
+  bottom: number,
+  top: number,
+  near: number,
+  far: number,
+): Mat4 => {
+  const lr = 1 / (left - right)
+  const bt = 1 / (bottom - top)
+  const nf = 1 / (near - far)
+  out.fill(0)
+  out[0] = -2 * lr
+  out[5] = -2 * bt
+  out[10] = nf
+  out[12] = (left + right) * lr
+  out[13] = (top + bottom) * bt
+  out[14] = near * nf
+  out[15] = 1
+  return out
+}
+
 // Z-up lookAt: eye looks at target with Z as up
 export const mat4LookAt = (out: Mat4, eye: Vec3, target: Vec3, up: Vec3 = VEC3_UP): Mat4 => {
   let fx = target[0]! - eye[0]!

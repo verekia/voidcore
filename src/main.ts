@@ -4,7 +4,6 @@ import {
   createPerspectiveCamera,
   createDirectionalLight,
   createLambertMaterial,
-  createBasicMaterial,
   createOrbitControls,
   loadGLTF,
   createAnimationMixer,
@@ -33,6 +32,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
   const engine = await createEngine(canvas, {
     antialias: true,
     bloom: { intensity: 0.8 },
+    shadows: true,
     backend: forceWebGL ? 'webgl2' : 'auto',
   })
 
@@ -219,8 +219,9 @@ export const main = async (canvas: HTMLCanvasElement) => {
   const SPHERE_CENTER_Z = 10 - SPHERE_RADIUS // = -290
 
   const sphereGeo = createSphereGeometry({ radius: SPHERE_RADIUS, widthSegments: 64, heightSegments: 64 })
-  const sphereMat = createBasicMaterial({ color: [0.12, 0.14, 0.18] })
+  const sphereMat = createLambertMaterial({ color: [0.12, 0.14, 0.18] })
   const sphere = createMesh(sphereGeo, sphereMat)
+  sphere.castShadow = false
   sphere.position[2] = SPHERE_CENTER_Z
   sphere._dirtyLocal = true
   scene.add(sphere)
@@ -272,6 +273,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
   cube.scale[1] = 5
   cube.scale[2] = 5
   cube._dirtyLocal = true
+  cube.castShadow = true
   scene.add(cube)
 
   // ─── Stats overlay ────────────────────────────────────────────

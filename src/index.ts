@@ -2,7 +2,7 @@
 
 // Engine
 export { createEngine, Engine, type EngineConfig } from './engine.ts'
-export { type Renderer, type RendererConfig, type FrameStats } from './renderer/renderer.ts'
+export { type Renderer, type RendererConfig, type FrameStats, type ShadowConfig } from './renderer/renderer.ts'
 
 // Scene
 export { createScene, Scene } from './scene/scene.ts'

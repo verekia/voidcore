@@ -14,9 +14,20 @@
 import type { PerspectiveCamera } from '../scene/camera.ts'
 import type { Scene } from '../scene/scene.ts'
 
+export interface ShadowConfig {
+  enabled?: boolean
+  resolution?: number
+  lambda?: number
+  backExtend?: number
+  constantBias?: number
+  slopeBias?: number
+  blendRange?: number
+}
+
 export interface RendererConfig {
   antialias?: boolean
   bloom?: boolean | { intensity?: number; levels?: number }
+  shadows?: boolean | ShadowConfig
 }
 
 export interface FrameStats {
