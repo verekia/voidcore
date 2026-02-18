@@ -1,3 +1,22 @@
+// Math – Linear algebra primitives for 3D graphics (vectors, matrices, quaternions).
+//
+// All types are backed by Float32Array for direct GPU upload with zero copying. Functions
+// follow a "write into output" pattern (e.g. vec3Add(out, a, b)) to avoid allocating new
+// arrays every frame, which is critical for performance in a render loop.
+//
+// Coordinate system: Z-up, right-handed. Forward is +Y, right is +X, up is +Z.
+//
+// Vec3  – 3D vector (position, direction, scale). Common: add, sub, normalize, cross, dot.
+// Vec4  – 4D vector (used for homogeneous coordinates and shader uniforms).
+// Quat  – Quaternion [x,y,z,w] for rotation. Avoids gimbal lock unlike Euler angles.
+//         Key op: slerp (spherical interpolation for smooth rotation blending).
+// Mat4  – 4x4 matrix (column-major) for transforms. Combines position + rotation + scale
+//         into one matrix that the GPU multiplies with each vertex.
+//         Key ops: compose (from pos/rot/scale), perspective (camera projection),
+//         lookAt (camera view), multiply, invert.
+// AABB  – Axis-aligned bounding box [minX,minY,minZ, maxX,maxY,maxZ] for culling/raycasting.
+// Frustum – Six clip planes extracted from the view-projection matrix for frustum culling.
+//
 // Voidcore Math — Z-up, right-handed, Float32Array-backed, zero-allocation
 
 export type Vec2 = Float32Array // length 2

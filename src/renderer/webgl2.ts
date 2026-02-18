@@ -1,3 +1,20 @@
+// WebGL2 Renderer – Renders the scene using the WebGL2 API (fallback for non-WebGPU browsers).
+//
+// Functionally equivalent to the WebGPU renderer but uses the older WebGL2 API. The render
+// pipeline is the same: frustum culling → sort → batch uniform upload → MSAA MRT draw →
+// bloom post-processing → final blit with gamma correction.
+//
+// Key differences from WebGPU:
+//   - Uses GLSL shaders instead of WGSL
+//   - Uses Uniform Buffer Objects (UBOs) with bindBufferRange for per-object data
+//   - Uses Vertex Array Objects (VAOs) to group vertex buffer bindings
+//   - Uses framebuffer objects (FBOs) and renderbuffers for MSAA and MRT
+//   - MSAA resolve is done via blitFramebuffer instead of resolve targets
+//   - Clip space depth is [-1, 1] instead of WebGPU's [0, 1]
+//
+// WebGL2Renderer.render()  – Draws one frame.
+// WebGL2Renderer.dispose() – Releases all GPU resources.
+
 import {
   frustumFromViewProjection,
   mat4Create,

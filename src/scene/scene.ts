@@ -1,3 +1,16 @@
+// Scene – The root container for all 3D objects, lights, and environment settings.
+//
+// The Scene is the top-level Node of the scene graph. It holds global settings like
+// ambient light (a constant low-level illumination that affects all objects equally) and
+// a name registry for quick node lookup by name.
+//
+// Each frame, the renderer calls scene.updateGraph() which triggers a top-down traversal
+// to recompute world matrices for any nodes whose transforms have changed.
+//
+// createScene()       – Factory that creates an empty scene.
+// scene.getByName()   – Finds any node in the scene by its name string (O(1) lookup).
+// scene.updateGraph() – Recomputes all dirty world matrices in the scene graph.
+
 import { Node, updateWorldMatrices } from './node.ts'
 
 export interface AmbientLight {

@@ -1,3 +1,11 @@
+// Mesh – A visible 3D object composed of a Geometry (shape) and a Material (appearance).
+//
+// Meshes are the main renderable objects in the scene. The renderer draws each visible mesh
+// by binding its geometry buffers and material uniforms, then issuing a draw call. A mesh
+// can optionally have a Skeleton for skeletal animation (skinned meshes).
+//
+// createMesh() – Factory that creates a mesh from a geometry and material.
+
 import { Node } from './node.ts'
 
 import type { Skeleton } from '../animation/skeleton.ts'

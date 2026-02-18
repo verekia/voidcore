@@ -1,3 +1,24 @@
+// glTF Loader – Imports 3D models from the glTF/GLB binary format.
+//
+// glTF (GL Transmission Format) is the standard format for 3D models on the web (like JPEG
+// for images). A .glb file is a single binary containing JSON metadata + raw binary buffers
+// for vertex data, animations, and textures.
+//
+// The loader works in several passes:
+//   1. Parse the GLB binary: extract the JSON chunk (scene description) and BIN chunk (raw data)
+//   2. Create nodes: for each glTF node, create a Mesh, Group, or bone with its transform
+//      - For each mesh primitive, read vertex attributes (positions, normals, UVs, indices)
+//        from binary accessors, or decode from Draco compression if present
+//      - Create materials from glTF PBR definitions (simplified to basic/lambert)
+//   3. Build hierarchy: connect parent-child relationships between nodes
+//   4. Resolve skins: create Skeletons from joint lists and inverse bind matrices, attach
+//      them to the corresponding meshes
+//   5. Parse animations: read keyframe tracks (time → value arrays) for bone transforms
+//   6. Assemble the final scene graph under a root Group
+//
+// loadGLTF() – Async function that fetches a .glb URL and returns meshes, skeletons,
+//              animations, and a scene graph ready to add to your Scene.
+
 import { Skeleton } from '../animation/skeleton.ts'
 import { Geometry } from '../geometry/geometry.ts'
 import { Material, createLambertMaterial } from '../materials/material.ts'

@@ -1,3 +1,12 @@
+// Light – Light sources that illuminate the scene.
+//
+// A DirectionalLight simulates a distant light source (like the sun) where all rays are
+// parallel. Its direction is determined by its position in the scene (the position vector
+// is treated as a direction). The light has a color and intensity that are multiplied with
+// the surface's diffuse color in the shader.
+//
+// createDirectionalLight() – Factory with default white light at full intensity.
+
 import { Node } from './node.ts'
 
 export class DirectionalLight extends Node {

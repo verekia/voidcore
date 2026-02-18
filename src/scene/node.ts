@@ -1,3 +1,20 @@
+// Node – Base class for all objects in the scene graph (the tree of 3D objects).
+//
+// Every object in the scene (meshes, cameras, lights, groups) is a Node. Nodes form a
+// parent-child tree: moving a parent automatically moves all its children. Each node
+// stores a local transform (position, rotation, scale) and a computed world matrix.
+//
+// The scene graph update traverses the tree top-down: if a node's local transform changed
+// (_dirtyLocal), its local matrix is recomputed from position/rotation/scale via mat4Compose.
+// If either the local matrix or a parent changed, the world matrix is recomputed as
+// worldMatrix = parent.worldMatrix × localMatrix.
+//
+// node.add()     – Adds child nodes (reparenting if already attached elsewhere).
+// node.remove()  – Detaches a child node.
+// node.traverse() – Walks the subtree, calling a callback on each node.
+// node.lookAt()  – Orients the node to face a target point (Z-up convention).
+// updateWorldMatrices() – Recursively recomputes world matrices for dirty nodes.
+
 import { mat4Compose, mat4Copy, mat4Create, mat4Multiply, quatCreate, vec3Create } from '../math/index.ts'
 
 import type { Mat4, Quat, Vec3 } from '../math/index.ts'

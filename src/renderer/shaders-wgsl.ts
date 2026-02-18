@@ -1,3 +1,15 @@
+// WGSL Shaders – GPU programs for the WebGPU renderer.
+//
+// Functionally identical to the GLSL shaders but written in WGSL (WebGPU Shading Language).
+// See shaders.ts for detailed explanations of each shader's purpose.
+//
+// Key WGSL differences from GLSL:
+//   - Uses `@group(N) @binding(M)` instead of UBO layout bindings
+//   - Structs instead of interface blocks for uniform data
+//   - `var<uniform>` for uniform buffers, `var` for locals
+//   - Built-in `@builtin(vertex_index)` replaces `gl_VertexID`
+//   - Explicit return types on all functions
+
 // Inline WGSL shaders for WebGPU
 
 export const LAMBERT_WGSL = /* wgsl */ `

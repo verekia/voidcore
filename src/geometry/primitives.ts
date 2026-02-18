@@ -1,3 +1,19 @@
+// Primitives – Procedural geometry generators for common 3D shapes.
+//
+// Each function builds vertex data (positions, normals, UVs, indices) from scratch using
+// math. All shapes are Z-up and centered at the origin. The process is always the same:
+// loop over a grid of parameters (angles, segments), compute each vertex's 3D position
+// and surface normal, generate UV coordinates for texturing, then connect vertices into
+// triangles via an index array.
+//
+// createPlaneGeometry()    – Flat rectangular surface on the XY plane.
+// createBoxGeometry()      – Six-faced box (cube/cuboid).
+// createSphereGeometry()   – UV sphere with poles along the Z axis.
+// createConeGeometry()     – Cone with a circular base and a pointed tip.
+// createCylinderGeometry() – Cylinder with configurable top/bottom radii.
+// createCapsuleGeometry()  – Cylinder with hemispherical caps (pill shape).
+// createCircleGeometry()   – Flat disc on the XY plane.
+
 import { Geometry } from './geometry.ts'
 
 // All primitives: Z-up, centered at origin

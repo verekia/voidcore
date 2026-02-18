@@ -1,3 +1,16 @@
+// Animation Mixer – Plays and blends skeletal animations.
+//
+// The AnimationMixer drives one or more AnimationActions on a Skeleton. Each frame it:
+//   1. Advances time on each playing action (handling looping, ping-pong, etc.)
+//   2. Updates fade-in/fade-out weights for smooth transitions between animations
+//   3. Samples each action's clip at the current time to get bone poses
+//   4. Blends all active actions together using weighted interpolation
+//   5. Writes the final blended pose back to the skeleton's bones
+//
+// AnimationAction   – Controls playback of a single clip (play, stop, fadeIn, fadeOut, crossFadeTo).
+// AnimationMixer    – Manages multiple actions, blends them, and applies the result to bones.
+// createAnimationMixer() – Factory that creates a mixer for a given skeleton.
+
 import { quatSlerp } from '../math/index.ts'
 
 import type { AnimationClip, KeyframeTrack } from './clip.ts'

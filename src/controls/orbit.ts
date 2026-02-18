@@ -1,3 +1,18 @@
+// Orbit Controls – Mouse/touch camera controls that orbit around a target point.
+//
+// The camera's position is defined in spherical coordinates (azimuth, elevation, distance)
+// relative to a target point. User input (drag, scroll, pinch) adds velocity to these
+// coordinates, and damping smoothly decays the velocity each frame for inertia.
+//
+// Left drag   → orbit (rotate azimuth and elevation)
+// Right drag  → pan (shift the target point)
+// Scroll      → zoom (change distance)
+// Pinch       → zoom + pan on touch devices
+//
+// OrbitControls.update(dt)  – Applies damping and recomputes the camera's position/view matrix.
+// OrbitControls.dispose()   – Removes all event listeners.
+// createOrbitControls()     – Factory that creates controls for a camera + canvas pair.
+
 import { mat4LookAt, VEC3_UP, vec3Create, vec3Set } from '../math/index.ts'
 
 import type { Vec3 } from '../math/index.ts'

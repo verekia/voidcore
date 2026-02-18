@@ -1,3 +1,23 @@
+// Mesh Sorting – Sorts meshes to minimize GPU state changes and ensure correct draw order.
+//
+// Changing the active shader program, material, or blend mode on the GPU is expensive.
+// By sorting meshes before drawing, we group identical states together and reduce
+// these costly switches.
+//
+// Sort key layout (32-bit unsigned integer):
+//   Bits 31-30: Layer       – Opaque (0) before transparent (1)
+//   Bits 29-22: Pipeline ID – Groups by shader program (lambert/basic × skinned/static)
+//   Bits 21-10: Material ID – Groups by material to reduce uniform uploads
+//   Bits 9-0:   Depth       – Opaque: nearest first (early-Z optimization).
+//                              Transparent: farthest first (correct alpha blending).
+//
+// Uses a 4-pass LSD (Least Significant Digit) radix sort with an 8-bit radix.
+// Radix sort is O(n) and stable, making it ideal for the thousands of meshes a scene
+// might contain. The sort state (buffers, histograms) is pre-allocated to avoid
+// per-frame allocations.
+//
+// sortMeshes() – Sorts meshes in-place by the composite key described above.
+
 import type { PerspectiveCamera } from '../scene/camera.ts'
 import type { Mesh } from '../scene/mesh.ts'
 

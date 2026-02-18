@@ -1,6 +1,25 @@
-// Voidcore — Raycasting & BVH
-// Two-level BVH: scene-level (mesh AABBs) + mesh-level (triangle AABBs)
-// Binned SAH with 12 bins, Möller-Trumbore ray-triangle, slab ray-AABB
+// Raycasting & BVH – Determines what a ray (e.g. from a mouse click) hits in the scene.
+//
+// Raycasting shoots an invisible line (ray) into the 3D scene and finds which triangles it
+// intersects. This is used for mouse picking, hit detection, and physics queries.
+//
+// To avoid testing every triangle of every mesh (too slow), we use a BVH (Bounding Volume
+// Hierarchy): a tree of nested bounding boxes. We first test the ray against large boxes,
+// then progressively smaller ones, and only test actual triangles when we reach a leaf node.
+// This turns O(n) triangle tests into roughly O(log n).
+//
+// BVH construction uses "binned SAH" (Surface Area Heuristic): it evaluates multiple ways
+// to split triangles along each axis, picks the split that minimizes expected ray-test cost,
+// and recurses. The resulting tree is stored in a flat array for cache-friendly traversal.
+//
+// buildMeshBVH()            – Builds a BVH for a mesh's triangles (done once, cached).
+// Raycaster.set()           – Sets the ray from an origin and direction.
+// Raycaster.setFromCamera() – Creates a ray from screen coordinates through the camera.
+// Raycaster.intersectObject() / intersectObjects() – Returns sorted hits (nearest first).
+//
+// Key algorithms:
+//   Ray-AABB:     Slab method – tests ray against axis-aligned box entry/exit distances.
+//   Ray-Triangle: Möller-Trumbore – fast ray-triangle intersection using cross products.
 
 import { mat4Create, mat4Invert, vec3TransformMat4 } from '../math/index.ts'
 

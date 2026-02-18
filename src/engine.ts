@@ -1,3 +1,17 @@
+// Engine – The main entry point that ties everything together.
+//
+// The Engine owns the render loop: it calls `requestAnimationFrame` in a loop, computes
+// delta time (time since last frame) and elapsed time, fires user callbacks, then asks the
+// renderer to draw the scene. Think of it as the "heartbeat" of your application.
+//
+// createEngine()  – Async factory that picks the best available renderer (WebGPU or WebGL2)
+//                   and returns an Engine instance.
+// engine.start()  – Begins the render loop (calls your `onFrame` callbacks every frame).
+// engine.stop()   – Pauses the render loop.
+// engine.onFrame() – Registers a callback that runs every frame with (deltaTime, elapsed).
+// engine.render() – Renders a single frame manually (useful outside the loop).
+// engine.dispose() – Cleans up GPU resources.
+
 import { createRenderer, type Renderer, type RendererConfig, type FrameStats } from './renderer/renderer.ts'
 
 import type { PerspectiveCamera } from './scene/camera.ts'

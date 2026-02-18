@@ -1,3 +1,14 @@
+// Skeleton – Manages a set of bones for skeletal (skinned) animation.
+//
+// A skeleton is a hierarchy of bones (scene nodes) plus "inverse bind matrices" that
+// define how the mesh was originally posed. Each frame, the skeleton computes a
+// "bone matrix" for every bone: boneMatrix = bone.worldMatrix * inverseBindMatrix.
+// These matrices are uploaded to the GPU so the vertex shader can deform the mesh
+// vertices according to the current pose.
+//
+// Skeleton.update()   – Recomputes all bone matrices (called once per frame when dirty).
+// Skeleton.getBone()  – Finds a bone node by name.
+
 import { mat4Create, mat4Multiply } from '../math/index.ts'
 
 import type { Mat4 } from '../math/index.ts'

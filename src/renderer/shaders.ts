@@ -1,3 +1,25 @@
+// GLSL Shaders – GPU programs for the WebGL2 renderer.
+//
+// Shaders are small programs that run on the GPU for every vertex and every pixel.
+//   Vertex shader   – Transforms 3D positions into screen coordinates.
+//   Fragment shader – Computes the final color of each pixel.
+//
+// This file contains four pairs of shaders:
+//   Lambert          – Diffuse lighting (ambient + directional light × surface normal).
+//   Lambert Skinned  – Same lighting, but vertices are deformed by bone matrices first.
+//   Basic            – Flat unlit color (no lighting calculations).
+//   Basic Skinned    – Flat unlit color with skeletal deformation.
+//
+// Plus three post-processing shaders (fullscreen triangle, no vertex buffer needed):
+//   Bloom Downsample – 13-tap filter that progressively shrinks the emissive image.
+//                      First pass uses Karis average to prevent "firefly" artifacts.
+//   Bloom Upsample   – 9-tap tent filter that blurs back up, additively blending.
+//   Blit             – Combines the scene color + bloom and applies gamma correction.
+//
+// Data flow: CPU uploads uniform buffers (UBOs) with matrices and light info. The vertex
+// shader reads per-object transforms from ObjectBlock/SkinnedObjectBlock (binding 1) and
+// per-frame data (view-projection, lights) from FrameBlock (binding 0).
+
 // Inline GLSL shaders for WebGL2
 
 // ─── Shared UBO block declarations ───────────────────────────────────

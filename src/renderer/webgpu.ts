@@ -1,3 +1,27 @@
+// WebGPU Renderer – Renders the scene using the WebGPU API.
+//
+// This is the high-performance rendering backend. Each frame it:
+//   1. Resizes the canvas to match display resolution (accounting for device pixel ratio)
+//   2. Updates the camera's projection matrix
+//   3. Walks the scene graph to collect visible meshes (with frustum culling)
+//   4. Sorts meshes by material/pipeline to minimize GPU state changes
+//   5. Uploads per-frame uniforms (view-projection matrix, light data) to the GPU
+//   6. Batches all object transforms into dynamic uniform buffers (1-2 uploads vs N)
+//   7. Draws all meshes in an MSAA render pass with two render targets (color + emissive)
+//   8. Runs a bloom post-processing chain (downsample → upsample with tent filter)
+//   9. Blits the final image to screen with bloom compositing and gamma correction
+//
+// Key concepts:
+//   Pipeline      – A compiled GPU program (vertex + fragment shader + render state).
+//   Bind group    – A set of GPU resources (buffers, textures) bound to shader slots.
+//   Uniform buffer – CPU-to-GPU data (matrices, colors) uploaded once and read by shaders.
+//   MSAA          – Multi-sample anti-aliasing (4x) to smooth jagged edges.
+//   MRT           – Multiple render targets: color and emissive are written simultaneously.
+//
+// WebGPURenderer.create()  – Async factory that initializes the GPU device and pipelines.
+// WebGPURenderer.render()  – Draws one frame.
+// WebGPURenderer.dispose() – Releases all GPU resources.
+
 import {
   frustumFromViewProjection,
   mat4Create,

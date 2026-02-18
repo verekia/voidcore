@@ -1,3 +1,16 @@
+// Renderer – Interface and factory for the rendering backend (WebGPU or WebGL2).
+//
+// The renderer is responsible for taking a scene and camera and producing pixels on screen.
+// Voidcore supports two backends: WebGPU (modern, faster) and WebGL2 (wider compatibility).
+// The `createRenderer` factory tries WebGPU first, falls back to WebGL2 if unavailable.
+//
+// Both backends implement the same Renderer interface so the rest of the engine doesn't
+// need to know which one is active.
+//
+// createRenderer() – Async factory: tries WebGPU, falls back to WebGL2.
+// renderer.render() – Draws a single frame.
+// renderer.dispose() – Releases GPU resources.
+
 import type { PerspectiveCamera } from '../scene/camera.ts'
 import type { Scene } from '../scene/scene.ts'
 

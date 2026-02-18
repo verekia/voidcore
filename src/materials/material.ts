@@ -1,3 +1,17 @@
+// Material – Defines how a mesh surface looks when rendered.
+//
+// A material controls the color, transparency, and shading model of a mesh. Two shading
+// types are supported:
+//   - "basic"   – Unlit flat color (ignores lights, good for UI or debug).
+//   - "lambert" – Diffuse shading that reacts to directional and ambient light.
+//
+// Materials can also use a palette: an array of up to 32 color entries. Each vertex in the
+// geometry can reference a palette index, allowing a single mesh to display multiple colors
+// without needing textures. Palette entries can also specify emissive colors (self-glowing).
+//
+// createBasicMaterial()   – Factory for unlit materials.
+// createLambertMaterial() – Factory for diffuse-lit materials.
+
 export interface PaletteEntry {
   color: [number, number, number]
   opacity?: number

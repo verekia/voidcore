@@ -1,3 +1,17 @@
+// Geometry – Container for mesh vertex data (positions, normals, UVs, indices, etc.).
+//
+// A Geometry holds all the raw arrays that describe the shape of a 3D object. The GPU
+// needs this data uploaded as buffers to draw triangles. Each vertex has a position in 3D
+// space, a normal vector (used for lighting), optional UV coordinates (for textures), and
+// an index buffer that defines which vertices form each triangle.
+//
+// Geometry also computes an axis-aligned bounding box (AABB) used for frustum culling
+// (skipping objects that are off-screen) and raycasting (click detection).
+//
+// createGeometry()       – Factory that wraps raw arrays into a Geometry object.
+// geometry.hasAttribute() – Checks if optional attributes (UVs, colors, joints, etc.) exist.
+// geometry.dispose()     – Releases GPU buffer references.
+
 import { aabbFromPoints } from '../math/index.ts'
 
 import type { AABB } from '../math/index.ts'

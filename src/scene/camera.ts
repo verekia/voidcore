@@ -1,3 +1,19 @@
+// Camera – Defines how the 3D scene is projected onto the 2D screen.
+//
+// A PerspectiveCamera uses perspective projection: objects farther away appear smaller
+// (like real human vision). It is defined by:
+//   fov    – Field of view angle in degrees (how "wide" the lens is)
+//   near   – Near clipping plane (objects closer than this are invisible)
+//   far    – Far clipping plane (objects farther than this are invisible)
+//   aspect – Width/height ratio of the viewport (set automatically by the renderer)
+//
+// The camera also inherits position/rotation from Node, so it can be placed in the scene.
+// The renderer uses two matrices from the camera:
+//   Projection matrix – Converts 3D eye-space coords to clip space (applies perspective)
+//   View matrix       – Converts world-space coords to eye-space (set by orbit controls)
+//
+// createPerspectiveCamera() – Factory with default values (60° FOV, 0.1–1000 range).
+
 import { mat4Create, mat4Perspective } from '../math/index.ts'
 import { Node } from './node.ts'
 

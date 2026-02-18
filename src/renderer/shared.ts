@@ -1,3 +1,16 @@
+// Shared Renderer Utilities – Logic used by both WebGPU and WebGL2 renderers.
+//
+// collectVisibleMeshes() – Walks the scene graph in a single pass to:
+//   1. Collect all visible Mesh nodes (skipping invisible ones)
+//   2. Perform frustum culling: transforms each mesh's bounding box into world space
+//      and checks if it intersects the camera's view frustum. Meshes fully outside the
+//      frustum are skipped (not sent to the GPU), saving draw calls.
+//   3. Find the first directional light in the scene
+//
+// computeLightDir() – Extracts the light direction from a directional light's world matrix.
+//   The light's world position is treated as a direction vector (like the sun – infinitely
+//   far away, only direction matters), then normalized.
+
 import { aabbTransform, frustumContainsAABB, vec3Normalize } from '../math/index.ts'
 import { Mesh } from '../scene/mesh.ts'
 
