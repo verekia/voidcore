@@ -1,8 +1,12 @@
+import { Skeleton } from '../animation/skeleton.ts'
 import { Geometry } from '../geometry/geometry.ts'
 import { Material, createLambertMaterial } from '../materials/material.ts'
 import { Group } from '../scene/group.ts'
 import { Mesh } from '../scene/mesh.ts'
 import { Node } from '../scene/node.ts'
+
+import type { AnimationClip, KeyframeTrack } from '../animation/clip.ts'
+import type { Mat4 } from '../math/index.ts'
 
 export interface LoadOptions {
   draco?: { decoderPath: string }
@@ -13,7 +17,8 @@ export interface GLTFResult {
   scene: Group
   scenes: Group[]
   meshes: Mesh[]
-  animations: unknown[]
+  skeletons: Skeleton[]
+  animations: AnimationClip[]
   textures: unknown[]
   dispose: () => void
 }
@@ -153,6 +158,8 @@ const decodeDraco = async (
   indices: Uint16Array | Uint32Array
   uvs?: Float32Array
   materialIndices?: Uint8Array
+  joints?: Uint8Array
+  weights?: Float32Array
 }> => {
   const decoder = new dracoModule.Decoder()
   const decoderBuffer = new dracoModule.DecoderBuffer()
@@ -229,11 +236,31 @@ const decodeDraco = async (
     }
   }
 
+  // Joints (read as float, convert to Uint8)
+  let joints: Uint8Array | undefined
+  if (attributes.JOINTS_0 !== undefined) {
+    const jointAttr = decoder.GetAttributeByUniqueId(dracoGeometry, attributes.JOINTS_0)
+    if (jointAttr && jointAttr.ptr !== 0) {
+      const floats = readDracoAttribute(dracoModule, decoder, dracoGeometry, jointAttr, numVertices, 4)
+      joints = new Uint8Array(numVertices * 4)
+      for (let i = 0; i < joints.length; i++) joints[i] = Math.round(floats[i]!)
+    }
+  }
+
+  // Weights
+  let weights: Float32Array | undefined
+  if (attributes.WEIGHTS_0 !== undefined) {
+    const weightAttr = decoder.GetAttributeByUniqueId(dracoGeometry, attributes.WEIGHTS_0)
+    if (weightAttr && weightAttr.ptr !== 0) {
+      weights = readDracoAttribute(dracoModule, decoder, dracoGeometry, weightAttr, numVertices, 4)
+    }
+  }
+
   dracoModule.destroy(dracoGeometry)
   dracoModule.destroy(decoderBuffer)
   dracoModule.destroy(decoder)
 
-  return { positions, normals, indices, uvs, materialIndices }
+  return { positions, normals, indices, uvs, materialIndices, joints, weights }
 }
 
 // ─── Main loader ─────────────────────────────────────────────────────
@@ -256,6 +283,7 @@ const loadGLTFImpl = async (url: string, options?: LoadOptions): Promise<GLTFRes
 
   const meshes: Mesh[] = []
   const allGeometries: Geometry[] = []
+  const skeletons: Skeleton[] = []
 
   // Load Draco decoder if needed
   let dracoModule: any = null
@@ -267,10 +295,14 @@ const loadGLTFImpl = async (url: string, options?: LoadOptions): Promise<GLTFRes
     dracoModule = await loadDracoDecoder(options.draco.decoderPath)
   }
 
-  // Process mesh nodes
-  const processNode = async (nodeIdx: number, parent: Node): Promise<void> => {
+  // ─── Pass 1: Create all nodes with transforms ─────────────────────
+  const nodeMap = new Map<number, Node>()
+  const meshNodeMap = new Map<number, Mesh[]>() // nodeIndex → meshes created for it
+
+  for (let nodeIdx = 0; nodeIdx < (json.nodes?.length ?? 0); nodeIdx++) {
     const nodeDef = json.nodes[nodeIdx]
     let node: Node
+    const nodeMeshes: Mesh[] = []
 
     if (nodeDef.mesh !== undefined) {
       const meshDef = json.meshes[nodeDef.mesh]
@@ -290,6 +322,8 @@ const loadGLTFImpl = async (url: string, options?: LoadOptions): Promise<GLTFRes
             indices: decoded.indices,
             uvs: decoded.uvs,
             materialIndices: decoded.materialIndices,
+            joints: decoded.joints,
+            weights: decoded.weights,
           })
         } else {
           // Standard (non-Draco) mesh
@@ -315,6 +349,40 @@ const loadGLTFImpl = async (url: string, options?: LoadOptions): Promise<GLTFRes
                 : new Uint16Array(posData.count).map((_, i) => i)
           }
 
+          // Read joints and weights for skinning
+          let joints: Uint8Array | Uint16Array | undefined
+          let weights: Float32Array | undefined
+
+          if (attrs.JOINTS_0 !== undefined) {
+            const jointsData = readAccessor(json, bin, attrs.JOINTS_0)
+            if (jointsData.data instanceof Uint8Array) {
+              joints = jointsData.data as Uint8Array
+            } else if (jointsData.data instanceof Uint16Array) {
+              joints = jointsData.data as Uint16Array
+            } else {
+              // Convert to Uint8Array
+              joints = new Uint8Array(jointsData.count * 4)
+              for (let i = 0; i < jointsData.count * 4; i++) {
+                joints[i] = (jointsData.data as any)[i]
+              }
+            }
+          }
+
+          if (attrs.WEIGHTS_0 !== undefined) {
+            const weightsData = readAccessor(json, bin, attrs.WEIGHTS_0)
+            if (weightsData.data instanceof Float32Array) {
+              weights = weightsData.data as Float32Array
+            } else {
+              // Normalize from uint8/uint16 to float
+              weights = new Float32Array(weightsData.count * 4)
+              const src = weightsData.data
+              const max = src instanceof Uint8Array ? 255 : 65535
+              for (let i = 0; i < weightsData.count * 4; i++) {
+                weights[i] = (src as any)[i] / max
+              }
+            }
+          }
+
           geometry = new Geometry({
             positions,
             normals,
@@ -323,6 +391,8 @@ const loadGLTFImpl = async (url: string, options?: LoadOptions): Promise<GLTFRes
             materialIndices: matIdxData
               ? new Uint8Array(matIdxData.data.buffer, matIdxData.data.byteOffset, matIdxData.count)
               : undefined,
+            joints,
+            weights,
           })
         }
 
@@ -349,11 +419,11 @@ const loadGLTFImpl = async (url: string, options?: LoadOptions): Promise<GLTFRes
         const mesh = new Mesh(geometry, material)
         mesh.name = meshDef.name ?? ''
         meshes.push(mesh)
-        node = mesh
+        nodeMeshes.push(mesh)
       }
 
-      // If multiple primitives, use the last one as the node
-      node = meshes[meshes.length - 1]!
+      // Use the last primitive mesh as the node for this glTF node
+      node = nodeMeshes[nodeMeshes.length - 1]!
     } else {
       node = new Group()
     }
@@ -381,16 +451,127 @@ const loadGLTFImpl = async (url: string, options?: LoadOptions): Promise<GLTFRes
       node._dirtyLocal = true
     }
 
-    parent.add(node)
+    nodeMap.set(nodeIdx, node)
+    if (nodeMeshes.length > 0) {
+      meshNodeMap.set(nodeIdx, nodeMeshes)
+    }
+  }
 
-    // Process children
+  // ─── Build hierarchy ──────────────────────────────────────────────
+  for (let nodeIdx = 0; nodeIdx < (json.nodes?.length ?? 0); nodeIdx++) {
+    const nodeDef = json.nodes[nodeIdx]
+    const parentNode = nodeMap.get(nodeIdx)!
     if (nodeDef.children) {
       for (const childIdx of nodeDef.children) {
-        await processNode(childIdx, node)
+        const childNode = nodeMap.get(childIdx)
+        if (childNode) parentNode.add(childNode)
       }
     }
   }
 
+  // ─── Pass 2: Resolve skins → Skeletons ────────────────────────────
+  if (json.skins) {
+    for (let skinIdx = 0; skinIdx < json.skins.length; skinIdx++) {
+      const skinDef = json.skins[skinIdx]
+      const jointIndices: number[] = skinDef.joints
+      const bones: Node[] = []
+      const inverseBindMatrices: Mat4[] = []
+
+      // Read inverse bind matrices
+      let ibmData: Float32Array | null = null
+      if (skinDef.inverseBindMatrices !== undefined) {
+        const acc = readAccessor(json, bin, skinDef.inverseBindMatrices)
+        ibmData = new Float32Array(acc.data.buffer, acc.data.byteOffset, acc.count * 16)
+      }
+
+      for (let j = 0; j < jointIndices.length; j++) {
+        const boneNode = nodeMap.get(jointIndices[j]!)
+        if (boneNode) bones.push(boneNode)
+
+        const ibm = new Float32Array(16)
+        if (ibmData) {
+          ibm.set(ibmData.subarray(j * 16, j * 16 + 16))
+        } else {
+          // Identity
+          ibm[0] = 1
+          ibm[5] = 1
+          ibm[10] = 1
+          ibm[15] = 1
+        }
+        inverseBindMatrices.push(ibm)
+      }
+
+      const skeleton = new Skeleton(bones, inverseBindMatrices)
+      skeletons.push(skeleton)
+    }
+
+    // Attach skeletons to meshes
+    for (let nodeIdx = 0; nodeIdx < (json.nodes?.length ?? 0); nodeIdx++) {
+      const nodeDef = json.nodes[nodeIdx]
+      if (nodeDef.skin !== undefined && nodeDef.mesh !== undefined) {
+        const skinSkeleton = skeletons[nodeDef.skin]
+        const nodeMeshes = meshNodeMap.get(nodeIdx)
+        if (skinSkeleton && nodeMeshes) {
+          for (const m of nodeMeshes) {
+            m.skeleton = skinSkeleton
+          }
+        }
+      }
+    }
+  }
+
+  // ─── Parse animations ─────────────────────────────────────────────
+  const animations: AnimationClip[] = []
+
+  if (json.animations) {
+    for (let animIdx = 0; animIdx < json.animations.length; animIdx++) {
+      const animDef = json.animations[animIdx]
+      const tracks: KeyframeTrack[] = []
+      let duration = 0
+
+      for (const channel of animDef.channels) {
+        const sampler = animDef.samplers[channel.sampler]
+        const targetNodeIdx = channel.target.node
+        const targetPath = channel.target.path as 'translation' | 'rotation' | 'scale'
+
+        // Only support translation/rotation/scale
+        if (targetPath !== 'translation' && targetPath !== 'rotation' && targetPath !== 'scale') continue
+
+        // Find bone index in the first skeleton
+        let boneIndex = -1
+        if (skeletons.length > 0) {
+          const skeleton = skeletons[0]!
+          const targetNode = nodeMap.get(targetNodeIdx)
+          if (targetNode) {
+            boneIndex = skeleton.bones.indexOf(targetNode)
+          }
+        }
+        if (boneIndex < 0) continue
+
+        // Read keyframe data
+        const inputAcc = readAccessor(json, bin, sampler.input)
+        const outputAcc = readAccessor(json, bin, sampler.output)
+
+        const times = new Float32Array(inputAcc.data.buffer, inputAcc.data.byteOffset, inputAcc.count)
+        const stride = targetPath === 'rotation' ? 4 : 3
+        const values = new Float32Array(outputAcc.data.buffer, outputAcc.data.byteOffset, outputAcc.count * stride)
+
+        // Track max time for duration
+        if (times.length > 0) {
+          const maxTime = times[times.length - 1]!
+          if (maxTime > duration) duration = maxTime
+        }
+
+        const interpolation = sampler.interpolation === 'STEP' ? 'STEP' : 'LINEAR'
+
+        tracks.push({ boneIndex, path: targetPath, times, values, interpolation } as KeyframeTrack)
+      }
+
+      animations.push({ name: animDef.name ?? `animation_${animIdx}`, duration, tracks })
+    }
+  }
+
+  // ─── Assemble scene ───────────────────────────────────────────────
   const rootGroup = new Group()
   rootGroup.name = 'gltf_root'
 
@@ -398,7 +579,8 @@ const loadGLTFImpl = async (url: string, options?: LoadOptions): Promise<GLTFRes
   const sceneDef = json.scenes?.[json.scene ?? 0]
   if (sceneDef?.nodes) {
     for (const nodeIdx of sceneDef.nodes) {
-      await processNode(nodeIdx, rootGroup)
+      const node = nodeMap.get(nodeIdx)
+      if (node) rootGroup.add(node)
     }
   }
 
@@ -406,7 +588,8 @@ const loadGLTFImpl = async (url: string, options?: LoadOptions): Promise<GLTFRes
     scene: rootGroup,
     scenes: [rootGroup],
     meshes,
-    animations: [],
+    skeletons,
+    animations,
     textures: [],
     dispose: () => {
       for (const geom of allGeometries) geom.dispose()

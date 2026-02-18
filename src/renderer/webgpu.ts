@@ -11,7 +11,15 @@ import {
 } from '../math/index.ts'
 import { Mesh } from '../scene/mesh.ts'
 import { Node } from '../scene/node.ts'
-import { LAMBERT_WGSL, BASIC_WGSL, BLOOM_DOWN_WGSL, BLOOM_UP_WGSL, BLIT_WGSL } from './shaders-wgsl.ts'
+import {
+  LAMBERT_WGSL,
+  BASIC_WGSL,
+  LAMBERT_SKINNED_WGSL,
+  BASIC_SKINNED_WGSL,
+  BLOOM_DOWN_WGSL,
+  BLOOM_UP_WGSL,
+  BLIT_WGSL,
+} from './shaders-wgsl.ts'
 
 import type { Geometry } from '../geometry/geometry.ts'
 import type { PaletteEntry } from '../materials/material.ts'
@@ -32,6 +40,8 @@ interface GeoBufs {
   index: GPUBuffer
   indexFormat: GPUIndexFormat
   indexCount: number
+  joints?: GPUBuffer
+  weights?: GPUBuffer
 }
 
 interface MatCache {
@@ -78,6 +88,9 @@ const BLOOM_UP_UB_SIZE = 16
 // Blit params: f32+pad(16)
 const BLIT_UB_SIZE = 16
 
+// SkinnedObjectUniforms: mat4(64) + mat4(64) + 32*mat4(2048) = 2176 bytes
+const SKINNED_OBJECT_UB_SIZE = 2176
+
 // ─── Vertex buffer layout (shared by lambert + basic) ────────────────
 
 const VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
@@ -85,6 +98,12 @@ const VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
   { arrayStride: 12, attributes: [{ shaderLocation: 1, offset: 0, format: 'float32x3' as GPUVertexFormat }] },
   { arrayStride: 8, attributes: [{ shaderLocation: 2, offset: 0, format: 'float32x2' as GPUVertexFormat }] },
   { arrayStride: 4, attributes: [{ shaderLocation: 3, offset: 0, format: 'float32' as GPUVertexFormat }] },
+]
+
+const SKINNED_VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
+  ...VERTEX_BUFFER_LAYOUT,
+  { arrayStride: 4, attributes: [{ shaderLocation: 4, offset: 0, format: 'uint8x4' as GPUVertexFormat }] },
+  { arrayStride: 16, attributes: [{ shaderLocation: 5, offset: 0, format: 'float32x4' as GPUVertexFormat }] },
 ]
 
 // ─── Renderer ─────────────────────────────────────────────────────────
@@ -100,6 +119,8 @@ export class WebGPURenderer implements Renderer {
   // Pipelines
   private lambertPipeline: GPURenderPipeline
   private basicPipeline: GPURenderPipeline
+  private lambertSkinnedPipeline: GPURenderPipeline
+  private basicSkinnedPipeline: GPURenderPipeline
   private bloomDownPipeline: GPURenderPipeline
   private bloomUpPipeline: GPURenderPipeline
   private blitPipeline: GPURenderPipeline
@@ -108,6 +129,7 @@ export class WebGPURenderer implements Renderer {
   private frameBGL: GPUBindGroupLayout
   private materialBGL: GPUBindGroupLayout
   private objectBGL: GPUBindGroupLayout
+  private skinnedObjectBGL: GPUBindGroupLayout
   private postProcessBGL: GPUBindGroupLayout
   private blitBGL: GPUBindGroupLayout
 
@@ -140,6 +162,7 @@ export class WebGPURenderer implements Renderer {
   private _geoCache = new WeakMap<Geometry, GeoBufs>()
   private _matCache = new WeakMap<Material, MatCache>()
   private _meshCache = new WeakMap<Mesh, MeshCache>()
+  private _skinnedMeshCache = new WeakMap<Mesh, MeshCache>()
 
   // Scratch matrices
   private _vpMatrix: Mat4 = mat4Create()
@@ -150,6 +173,7 @@ export class WebGPURenderer implements Renderer {
   // Reusable typed arrays for uniform writes
   private _frameData = new Float32Array(FRAME_UB_SIZE / 4)
   private _objectData = new Float32Array(OBJECT_UB_SIZE / 4)
+  private _skinnedObjectData = new Float32Array(SKINNED_OBJECT_UB_SIZE / 4)
   private _materialData = new Float32Array(MATERIAL_UB_SIZE / 4)
 
   // Stats
@@ -173,12 +197,15 @@ export class WebGPURenderer implements Renderer {
     canvas: HTMLCanvasElement,
     lambertPipeline: GPURenderPipeline,
     basicPipeline: GPURenderPipeline,
+    lambertSkinnedPipeline: GPURenderPipeline,
+    basicSkinnedPipeline: GPURenderPipeline,
     bloomDownPipeline: GPURenderPipeline,
     bloomUpPipeline: GPURenderPipeline,
     blitPipeline: GPURenderPipeline,
     frameBGL: GPUBindGroupLayout,
     materialBGL: GPUBindGroupLayout,
     objectBGL: GPUBindGroupLayout,
+    skinnedObjectBGL: GPUBindGroupLayout,
     postProcessBGL: GPUBindGroupLayout,
     blitBGL: GPUBindGroupLayout,
     frameUB: GPUBuffer,
@@ -196,12 +223,15 @@ export class WebGPURenderer implements Renderer {
     this.canvas = canvas
     this.lambertPipeline = lambertPipeline
     this.basicPipeline = basicPipeline
+    this.lambertSkinnedPipeline = lambertSkinnedPipeline
+    this.basicSkinnedPipeline = basicSkinnedPipeline
     this.bloomDownPipeline = bloomDownPipeline
     this.bloomUpPipeline = bloomUpPipeline
     this.blitPipeline = blitPipeline
     this.frameBGL = frameBGL
     this.materialBGL = materialBGL
     this.objectBGL = objectBGL
+    this.skinnedObjectBGL = skinnedObjectBGL
     this.postProcessBGL = postProcessBGL
     this.blitBGL = blitBGL
     this.frameUB = frameUB
@@ -269,6 +299,8 @@ export class WebGPURenderer implements Renderer {
     // ─── Shader modules ────────────────────────────────────────────
     const lambertModule = device.createShaderModule({ code: LAMBERT_WGSL })
     const basicModule = device.createShaderModule({ code: BASIC_WGSL })
+    const lambertSkinnedModule = device.createShaderModule({ code: LAMBERT_SKINNED_WGSL })
+    const basicSkinnedModule = device.createShaderModule({ code: BASIC_SKINNED_WGSL })
     const bloomDownModule = device.createShaderModule({ code: BLOOM_DOWN_WGSL })
     const bloomUpModule = device.createShaderModule({ code: BLOOM_UP_WGSL })
     const blitModule = device.createShaderModule({ code: BLIT_WGSL })
@@ -286,6 +318,16 @@ export class WebGPURenderer implements Renderer {
 
     const objectBGL = device.createBindGroupLayout({
       entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } }],
+    })
+
+    const skinnedObjectBGL = device.createBindGroupLayout({
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.VERTEX,
+          buffer: { type: 'uniform', minBindingSize: SKINNED_OBJECT_UB_SIZE },
+        },
+      ],
     })
 
     // Shared by bloom down + bloom up
@@ -309,6 +351,10 @@ export class WebGPURenderer implements Renderer {
     // ─── Pipeline layouts ──────────────────────────────────────────
     const opaquePipelineLayout = device.createPipelineLayout({
       bindGroupLayouts: [frameBGL, materialBGL, objectBGL],
+    })
+
+    const skinnedOpaquePipelineLayout = device.createPipelineLayout({
+      bindGroupLayouts: [frameBGL, materialBGL, skinnedObjectBGL],
     })
 
     const postProcessPipelineLayout = device.createPipelineLayout({
@@ -336,6 +382,24 @@ export class WebGPURenderer implements Renderer {
       layout: opaquePipelineLayout,
       vertex: { module: basicModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
       fragment: { module: basicModule, entryPoint: 'fs_main', targets: opaqueTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
+      multisample: { count: samples },
+    })
+
+    const lambertSkinnedPipeline = device.createRenderPipeline({
+      layout: skinnedOpaquePipelineLayout,
+      vertex: { module: lambertSkinnedModule, entryPoint: 'vs_main', buffers: SKINNED_VERTEX_BUFFER_LAYOUT },
+      fragment: { module: lambertSkinnedModule, entryPoint: 'fs_main', targets: opaqueTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
+      multisample: { count: samples },
+    })
+
+    const basicSkinnedPipeline = device.createRenderPipeline({
+      layout: skinnedOpaquePipelineLayout,
+      vertex: { module: basicSkinnedModule, entryPoint: 'vs_main', buffers: SKINNED_VERTEX_BUFFER_LAYOUT },
+      fragment: { module: basicSkinnedModule, entryPoint: 'fs_main', targets: opaqueTargets },
       primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
       depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
       multisample: { count: samples },
@@ -412,12 +476,15 @@ export class WebGPURenderer implements Renderer {
       canvas,
       lambertPipeline,
       basicPipeline,
+      lambertSkinnedPipeline,
+      basicSkinnedPipeline,
       bloomDownPipeline,
       bloomUpPipeline,
       blitPipeline,
       frameBGL,
       materialBGL,
       objectBGL,
+      skinnedObjectBGL,
       postProcessBGL,
       blitBGL,
       frameUB,
@@ -660,6 +727,34 @@ export class WebGPURenderer implements Renderer {
     })
     d.queue.writeBuffer(indexBuf, 0, geometry.indices.buffer, geometry.indices.byteOffset, geometry.indices.byteLength)
 
+    // Joints buffer (uint8x4 raw — WGSL reads as vec4<u32>)
+    let jointsBuf: GPUBuffer | undefined
+    if (geometry.joints) {
+      // Need Uint8Array for uint8x4 vertex format
+      const jointsU8 = geometry.joints instanceof Uint8Array ? geometry.joints : new Uint8Array(geometry.joints)
+      jointsBuf = d.createBuffer({
+        size: Math.max(jointsU8.byteLength, 4),
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      })
+      d.queue.writeBuffer(jointsBuf, 0, jointsU8.buffer, jointsU8.byteOffset, jointsU8.byteLength)
+    }
+
+    // Weights buffer (float32x4)
+    let weightsBuf: GPUBuffer | undefined
+    if (geometry.weights) {
+      weightsBuf = d.createBuffer({
+        size: geometry.weights.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      })
+      d.queue.writeBuffer(
+        weightsBuf,
+        0,
+        geometry.weights.buffer,
+        geometry.weights.byteOffset,
+        geometry.weights.byteLength,
+      )
+    }
+
     // Destroy old buffers
     if (cached) {
       cached.position.destroy()
@@ -667,6 +762,8 @@ export class WebGPURenderer implements Renderer {
       cached.uv.destroy()
       cached.materialIndex.destroy()
       cached.index.destroy()
+      if (cached.joints) cached.joints.destroy()
+      if (cached.weights) cached.weights.destroy()
     }
 
     const bufs: GeoBufs = {
@@ -677,6 +774,8 @@ export class WebGPURenderer implements Renderer {
       index: indexBuf,
       indexFormat,
       indexCount: geometry.indexCount,
+      joints: jointsBuf,
+      weights: weightsBuf,
     }
     this._geoCache.set(geometry, bufs)
     geometry.needsUpdate = false
@@ -760,6 +859,40 @@ export class WebGPURenderer implements Renderer {
       mat4Transpose(this._normalMatrix, this._invWorldMatrix)
     }
     data.set(this._normalMatrix, 16)
+
+    this.device.queue.writeBuffer(cache.buffer, 0, data.buffer, data.byteOffset, data.byteLength)
+  }
+
+  private ensureSkinnedMeshCache(mesh: Mesh): MeshCache {
+    const cached = this._skinnedMeshCache.get(mesh)
+    if (cached) return cached
+
+    const d = this.device
+    const buffer = d.createBuffer({
+      size: SKINNED_OBJECT_UB_SIZE,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
+    const bindGroup = d.createBindGroup({
+      layout: this.skinnedObjectBGL,
+      entries: [{ binding: 0, resource: { buffer } }],
+    })
+
+    const cache: MeshCache = { buffer, bindGroup }
+    this._skinnedMeshCache.set(mesh, cache)
+    return cache
+  }
+
+  private writeSkinnedObjectBuffer(mesh: Mesh, cache: MeshCache) {
+    const data = this._skinnedObjectData
+    // World matrix (16 floats)
+    data.set(mesh._worldMatrix, 0)
+    // Normal matrix = transpose(inverse(worldMatrix)) (16 floats)
+    if (mat4Invert(this._invWorldMatrix, mesh._worldMatrix)) {
+      mat4Transpose(this._normalMatrix, this._invWorldMatrix)
+    }
+    data.set(this._normalMatrix, 16)
+    // Bone matrices (32 * 16 = 512 floats starting at offset 32)
+    data.set(mesh.skeleton!.boneMatrices, 32)
 
     this.device.queue.writeBuffer(cache.buffer, 0, data.buffer, data.byteOffset, data.byteLength)
   }
@@ -888,7 +1021,13 @@ export class WebGPURenderer implements Renderer {
     let triangles = 0
 
     for (const mesh of meshes) {
-      const pipeline = mesh.material.type === 'lambert' ? this.lambertPipeline : this.basicPipeline
+      const isSkinned = !!mesh.skeleton && !!mesh.geometry.joints && !!mesh.geometry.weights
+      let pipeline: GPURenderPipeline
+      if (isSkinned) {
+        pipeline = mesh.material.type === 'lambert' ? this.lambertSkinnedPipeline : this.basicSkinnedPipeline
+      } else {
+        pipeline = mesh.material.type === 'lambert' ? this.lambertPipeline : this.basicPipeline
+      }
       opaquePass.setPipeline(pipeline)
 
       const geoBufs = this.ensureGeometryBuffers(mesh.geometry)
@@ -896,17 +1035,28 @@ export class WebGPURenderer implements Renderer {
       opaquePass.setVertexBuffer(1, geoBufs.normal)
       opaquePass.setVertexBuffer(2, geoBufs.uv)
       opaquePass.setVertexBuffer(3, geoBufs.materialIndex)
+      if (isSkinned && geoBufs.joints && geoBufs.weights) {
+        opaquePass.setVertexBuffer(4, geoBufs.joints)
+        opaquePass.setVertexBuffer(5, geoBufs.weights)
+      }
       opaquePass.setIndexBuffer(geoBufs.index, geoBufs.indexFormat)
 
       const matCache = this.ensureMaterialCache(mesh.material)
       this.writeMaterialBuffer(mesh.material, matCache)
 
-      const meshCache = this.ensureMeshCache(mesh)
-      this.writeObjectBuffer(mesh, meshCache)
+      if (isSkinned) {
+        mesh.skeleton!.update()
+        const skinnedCache = this.ensureSkinnedMeshCache(mesh)
+        this.writeSkinnedObjectBuffer(mesh, skinnedCache)
+        opaquePass.setBindGroup(2, skinnedCache.bindGroup)
+      } else {
+        const meshCache = this.ensureMeshCache(mesh)
+        this.writeObjectBuffer(mesh, meshCache)
+        opaquePass.setBindGroup(2, meshCache.bindGroup)
+      }
 
       opaquePass.setBindGroup(0, this.frameBG)
       opaquePass.setBindGroup(1, matCache.bindGroup)
-      opaquePass.setBindGroup(2, meshCache.bindGroup)
 
       opaquePass.drawIndexed(geoBufs.indexCount)
       drawCalls++

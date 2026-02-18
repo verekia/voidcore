@@ -14,7 +14,11 @@ import {
   createCircleGeometry,
   createOrbitControls,
   loadGLTF,
+  createAnimationMixer,
 } from './index.ts'
+
+import type { Skeleton } from './animation/skeleton.ts'
+import type { AnimationClip, AnimationAction } from './index.ts'
 
 export const main = async (canvas: HTMLCanvasElement) => {
   // ─── Engine ─────────────────────────────────────────────────────
@@ -51,6 +55,8 @@ export const main = async (canvas: HTMLCanvasElement) => {
   })
 
   // ─── Load megaxe from static-bundle.glb ─────────────────────────
+  let megaxeMesh: ReturnType<typeof createMesh> | null = null
+
   try {
     const gltf = await loadGLTF('/static-bundle.glb', engine, {
       draco: { decoderPath: '/draco-1.5.7/' },
@@ -68,13 +74,85 @@ export const main = async (canvas: HTMLCanvasElement) => {
             { color: [0, 0.9, 0.85], emissive: [0, 1, 0.9], emissiveIntensity: 2.5 }, // 2: bright teal with bloom
           ],
         })
+        mesh.frustumCulled = false
         mesh.position[2] = 1.5
         mesh._dirtyLocal = true
         scene.add(mesh)
+        megaxeMesh = mesh
       }
     }
   } catch (e) {
     console.warn('Failed to load static-bundle.glb:', e)
+  }
+
+  // ─── Load player-bundle.glb (skinned character) ─────────────────
+  let playerSkeleton: Skeleton | null = null
+  let playerClips: AnimationClip[] = []
+  let mixer: ReturnType<typeof createAnimationMixer> | null = null
+  let actions: AnimationAction[] = []
+  let currentActionIndex = 0
+  let nextSwitchTime = 0
+  const clipDuration = 2 // seconds per clip before crossfade
+  const crossfadeDuration = 0.3
+
+  try {
+    const playerGltf = await loadGLTF('/player-bundle.glb', engine, {
+      draco: { decoderPath: '/draco-1.5.7/' },
+    })
+
+    scene.add(playerGltf.scene)
+
+    if (playerGltf.skeletons.length > 0) {
+      playerSkeleton = playerGltf.skeletons[0]!
+
+      // Attach megaxe to Hand.R bone
+      if (megaxeMesh && playerSkeleton) {
+        const handBone = playerSkeleton.getBone('Hand.R')
+        if (handBone) {
+          // Reparent megaxe under hand bone
+          if (megaxeMesh.parent) megaxeMesh.parent.remove(megaxeMesh)
+          handBone.add(megaxeMesh)
+          // Reset transform so it sits at bone origin
+          megaxeMesh.position[0] = 0
+          megaxeMesh.position[1] = 0
+          megaxeMesh.position[2] = 0
+          megaxeMesh.rotation[0] = 0
+          megaxeMesh.rotation[1] = 0
+          megaxeMesh.rotation[2] = 0
+          megaxeMesh.rotation[3] = 1
+          megaxeMesh.scale[0] = 1
+          megaxeMesh.scale[1] = 1
+          megaxeMesh.scale[2] = 1
+          megaxeMesh._dirtyLocal = true
+        }
+      }
+    }
+
+    // Find animation clips by name
+    const clipNames = ['SlashRight', 'Jump', 'Run']
+    for (const name of clipNames) {
+      const clip = playerGltf.animations.find(a => a.name === name)
+      if (clip) playerClips.push(clip)
+    }
+
+    // Fallback: use whatever animations are available
+    if (playerClips.length === 0) {
+      playerClips = playerGltf.animations.slice(0, 3)
+    }
+
+    // Set up mixer with actions
+    if (playerSkeleton && playerClips.length > 0) {
+      mixer = createAnimationMixer(playerSkeleton)
+      for (const clip of playerClips) {
+        actions.push(mixer.clipAction(clip))
+      }
+      // Start the first action
+      actions[0]!.play()
+      actions[0]!.weight = 1
+      nextSwitchTime = clipDuration
+    }
+  } catch (e) {
+    console.warn('Failed to load player-bundle.glb:', e)
   }
 
   // ─── Geometry Showcase ──────────────────────────────────────────
@@ -164,7 +242,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
   scene.add(circleMesh)
 
   // ─── Render Loop ────────────────────────────────────────────────
-  engine.onFrame(dt => {
+  engine.onFrame((dt, elapsed) => {
     controls.update(dt)
 
     // Slowly rotate the geometry showcase items
@@ -175,6 +253,22 @@ export const main = async (canvas: HTMLCanvasElement) => {
 
     sphereMesh.position[2] = 1 + Math.sin(time * 0.5) * 0.3
     sphereMesh._dirtyLocal = true
+
+    // Animate player character with crossfades
+    if (mixer && actions.length > 1) {
+      // Check if it's time to crossfade to the next clip
+      if (elapsed >= nextSwitchTime) {
+        const nextIndex = (currentActionIndex + 1) % actions.length
+        const current = actions[currentActionIndex]!
+        const next = actions[nextIndex]!
+        current.crossFadeTo(next, crossfadeDuration)
+        currentActionIndex = nextIndex
+        nextSwitchTime = elapsed + clipDuration
+      }
+      mixer.update(dt)
+    } else if (mixer) {
+      mixer.update(dt)
+    }
   })
 
   engine.start(scene, camera)

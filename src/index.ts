@@ -30,6 +30,17 @@ export { createBasicMaterial, createLambertMaterial, Material } from './material
 // Controls
 export { createOrbitControls, OrbitControls } from './controls/orbit.ts'
 
+// Animation
+export {
+  Skeleton,
+  type AnimationClip,
+  type KeyframeTrack,
+  sampleClip,
+  AnimationMixer,
+  AnimationAction,
+  createAnimationMixer,
+} from './animation/index.ts'
+
 // Loaders
 export { loadGLTF } from './loaders/gltf.ts'
 

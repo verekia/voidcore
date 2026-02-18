@@ -98,6 +98,7 @@ export const updateWorldMatrices = (node: Node): void => {
   if (node._dirtyLocal) {
     mat4Compose(node._localMatrix, node.position, node.rotation, node.scale)
     node._dirtyLocal = false
+    node._dirtyWorld = true
   }
   if (node._dirtyWorld) {
     if (node.parent) {
@@ -106,6 +107,9 @@ export const updateWorldMatrices = (node: Node): void => {
       mat4Copy(node._worldMatrix, node._localMatrix)
     }
     node._dirtyWorld = false
+    for (let i = 0; i < node.children.length; i++) {
+      node.children[i]!._dirtyWorld = true
+    }
   }
   for (let i = 0; i < node.children.length; i++) {
     updateWorldMatrices(node.children[i]!)

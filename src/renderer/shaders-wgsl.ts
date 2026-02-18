@@ -89,6 +89,182 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 }
 `
 
+export const LAMBERT_SKINNED_WGSL = /* wgsl */ `
+struct FrameUniforms {
+  viewProjection: mat4x4<f32>,
+  lightDir: vec3<f32>,
+  lightIntensity: f32,
+  lightColor: vec3<f32>,
+  ambientIntensity: f32,
+  ambientColor: vec3<f32>,
+};
+
+struct PaletteEntry {
+  color: vec4<f32>,
+  emissive: vec4<f32>,
+};
+
+struct MaterialUniforms {
+  baseColor: vec3<f32>,
+  opacity: f32,
+  hasPalette: f32,
+  palette: array<PaletteEntry, 32>,
+};
+
+struct ObjectUniforms {
+  worldMatrix: mat4x4<f32>,
+  normalMatrix: mat4x4<f32>,
+  boneMatrices: array<mat4x4<f32>, 32>,
+};
+
+@group(0) @binding(0) var<uniform> frame: FrameUniforms;
+@group(1) @binding(0) var<uniform> material: MaterialUniforms;
+@group(2) @binding(0) var<uniform> object: ObjectUniforms;
+
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldPos: vec3<f32>,
+  @location(1) normal: vec3<f32>,
+  @location(2) uv: vec2<f32>,
+  @location(3) @interpolate(flat) materialIndex: i32,
+};
+
+@vertex
+fn vs_main(
+  @location(0) a_position: vec3<f32>,
+  @location(1) a_normal: vec3<f32>,
+  @location(2) a_uv: vec2<f32>,
+  @location(3) a_materialIndex: f32,
+  @location(4) a_joints: vec4<u32>,
+  @location(5) a_weights: vec4<f32>,
+) -> VertexOutput {
+  var out: VertexOutput;
+
+  let skinMatrix =
+    a_weights.x * object.boneMatrices[a_joints.x] +
+    a_weights.y * object.boneMatrices[a_joints.y] +
+    a_weights.z * object.boneMatrices[a_joints.z] +
+    a_weights.w * object.boneMatrices[a_joints.w];
+
+  let skinnedPos = skinMatrix * vec4<f32>(a_position, 1.0);
+  let worldPos = object.worldMatrix * skinnedPos;
+  out.worldPos = worldPos.xyz;
+
+  let skinnedNorm = skinMatrix * vec4<f32>(a_normal, 0.0);
+  out.normal = normalize((object.normalMatrix * skinnedNorm).xyz);
+  out.uv = a_uv;
+  out.materialIndex = i32(a_materialIndex);
+  out.position = frame.viewProjection * worldPos;
+  return out;
+}
+
+struct FragmentOutput {
+  @location(0) color: vec4<f32>,
+  @location(1) emissive: vec4<f32>,
+};
+
+@fragment
+fn fs_main(in: VertexOutput) -> FragmentOutput {
+  var out: FragmentOutput;
+  let normal = normalize(in.normal);
+  var baseColor = material.baseColor;
+  var alpha = material.opacity;
+  var emissive = vec3<f32>(0.0, 0.0, 0.0);
+
+  if (material.hasPalette > 0.5) {
+    let idx = clamp(in.materialIndex, 0, 31);
+    baseColor = material.palette[idx].color.rgb;
+    alpha = material.palette[idx].color.a;
+    emissive = material.palette[idx].emissive.rgb * material.palette[idx].emissive.a;
+  }
+
+  let ambient = frame.ambientColor * frame.ambientIntensity;
+  let NdotL = max(dot(normal, frame.lightDir), 0.0);
+  let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
+
+  let litColor = baseColor * (ambient + diffuse);
+  let finalColor = litColor + emissive;
+
+  out.color = vec4<f32>(finalColor, alpha);
+  out.emissive = vec4<f32>(emissive, 1.0);
+  return out;
+}
+`
+
+export const BASIC_SKINNED_WGSL = /* wgsl */ `
+struct FrameUniforms {
+  viewProjection: mat4x4<f32>,
+  lightDir: vec3<f32>,
+  lightIntensity: f32,
+  lightColor: vec3<f32>,
+  ambientIntensity: f32,
+  ambientColor: vec3<f32>,
+};
+
+struct PaletteEntry {
+  color: vec4<f32>,
+  emissive: vec4<f32>,
+};
+
+struct MaterialUniforms {
+  baseColor: vec3<f32>,
+  opacity: f32,
+  hasPalette: f32,
+  palette: array<PaletteEntry, 32>,
+};
+
+struct ObjectUniforms {
+  worldMatrix: mat4x4<f32>,
+  normalMatrix: mat4x4<f32>,
+  boneMatrices: array<mat4x4<f32>, 32>,
+};
+
+@group(0) @binding(0) var<uniform> frame: FrameUniforms;
+@group(1) @binding(0) var<uniform> material: MaterialUniforms;
+@group(2) @binding(0) var<uniform> object: ObjectUniforms;
+
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(
+  @location(0) a_position: vec3<f32>,
+  @location(1) a_normal: vec3<f32>,
+  @location(2) a_uv: vec2<f32>,
+  @location(3) a_materialIndex: f32,
+  @location(4) a_joints: vec4<u32>,
+  @location(5) a_weights: vec4<f32>,
+) -> VertexOutput {
+  var out: VertexOutput;
+
+  let skinMatrix =
+    a_weights.x * object.boneMatrices[a_joints.x] +
+    a_weights.y * object.boneMatrices[a_joints.y] +
+    a_weights.z * object.boneMatrices[a_joints.z] +
+    a_weights.w * object.boneMatrices[a_joints.w];
+
+  let skinnedPos = skinMatrix * vec4<f32>(a_position, 1.0);
+  out.position = frame.viewProjection * object.worldMatrix * skinnedPos;
+  out.uv = a_uv;
+  return out;
+}
+
+struct FragmentOutput {
+  @location(0) color: vec4<f32>,
+  @location(1) emissive: vec4<f32>,
+};
+
+@fragment
+fn fs_main(in: VertexOutput) -> FragmentOutput {
+  var out: FragmentOutput;
+  out.color = vec4<f32>(material.baseColor, material.opacity);
+  out.emissive = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+  return out;
+}
+`
+
 export const BASIC_WGSL = /* wgsl */ `
 struct FrameUniforms {
   viewProjection: mat4x4<f32>,

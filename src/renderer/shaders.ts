@@ -79,6 +79,74 @@ void main() {
 }
 `
 
+export const LAMBERT_SKINNED_VERT = `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec3 a_normal;
+layout(location = 2) in vec2 a_uv;
+layout(location = 3) in float a_materialIndex;
+layout(location = 4) in vec4 a_joints;
+layout(location = 5) in vec4 a_weights;
+
+uniform mat4 u_viewProjection;
+uniform mat4 u_worldMatrix;
+uniform mat4 u_normalMatrix;
+uniform mat4 u_boneMatrices[32];
+
+out vec3 v_worldPos;
+out vec3 v_normal;
+out vec2 v_uv;
+flat out int v_materialIndex;
+
+void main() {
+  mat4 skinMatrix =
+    a_weights.x * u_boneMatrices[int(a_joints.x)] +
+    a_weights.y * u_boneMatrices[int(a_joints.y)] +
+    a_weights.z * u_boneMatrices[int(a_joints.z)] +
+    a_weights.w * u_boneMatrices[int(a_joints.w)];
+
+  vec4 skinnedPos = skinMatrix * vec4(a_position, 1.0);
+  vec4 worldPos = u_worldMatrix * skinnedPos;
+  v_worldPos = worldPos.xyz;
+
+  vec4 skinnedNorm = skinMatrix * vec4(a_normal, 0.0);
+  v_normal = normalize((u_normalMatrix * skinnedNorm).xyz);
+  v_uv = a_uv;
+  v_materialIndex = int(a_materialIndex);
+  gl_Position = u_viewProjection * worldPos;
+}
+`
+
+export const BASIC_SKINNED_VERT = `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec3 a_normal;
+layout(location = 2) in vec2 a_uv;
+layout(location = 3) in float a_materialIndex;
+layout(location = 4) in vec4 a_joints;
+layout(location = 5) in vec4 a_weights;
+
+uniform mat4 u_viewProjection;
+uniform mat4 u_worldMatrix;
+uniform mat4 u_boneMatrices[32];
+
+out vec2 v_uv;
+
+void main() {
+  mat4 skinMatrix =
+    a_weights.x * u_boneMatrices[int(a_joints.x)] +
+    a_weights.y * u_boneMatrices[int(a_joints.y)] +
+    a_weights.z * u_boneMatrices[int(a_joints.z)] +
+    a_weights.w * u_boneMatrices[int(a_joints.w)];
+
+  vec4 skinnedPos = skinMatrix * vec4(a_position, 1.0);
+  gl_Position = u_viewProjection * u_worldMatrix * skinnedPos;
+  v_uv = a_uv;
+}
+`
+
 export const BASIC_VERT = `#version 300 es
 precision highp float;
 

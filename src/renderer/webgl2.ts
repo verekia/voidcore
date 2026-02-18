@@ -14,8 +14,10 @@ import { Node } from '../scene/node.ts'
 import {
   LAMBERT_VERT,
   LAMBERT_FRAG,
+  LAMBERT_SKINNED_VERT,
   BASIC_VERT,
   BASIC_FRAG,
+  BASIC_SKINNED_VERT,
   FULLSCREEN_VERT,
   BLOOM_DOWNSAMPLE_FRAG,
   BLOOM_UPSAMPLE_FRAG,
@@ -96,6 +98,26 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry, _progr
     gl.bufferData(gl.ARRAY_BUFFER, floatIndices, gl.STATIC_DRAW)
   }
 
+  // Joints buffer (location 4) — convert to float for vertexAttribPointer
+  let jointsBuffer: WebGLBuffer | undefined
+  if (geometry.joints) {
+    jointsBuffer = gl.createBuffer()!
+    gl.bindBuffer(gl.ARRAY_BUFFER, jointsBuffer)
+    const floatJoints = new Float32Array(geometry.joints.length)
+    for (let i = 0; i < geometry.joints.length; i++) {
+      floatJoints[i] = geometry.joints[i]!
+    }
+    gl.bufferData(gl.ARRAY_BUFFER, floatJoints, gl.STATIC_DRAW)
+  }
+
+  // Weights buffer (location 5)
+  let weightsBuffer: WebGLBuffer | undefined
+  if (geometry.weights) {
+    weightsBuffer = gl.createBuffer()!
+    gl.bindBuffer(gl.ARRAY_BUFFER, weightsBuffer)
+    gl.bufferData(gl.ARRAY_BUFFER, geometry.weights, gl.STATIC_DRAW)
+  }
+
   // Create VAO
   const vao = gl.createVertexArray()!
   gl.bindVertexArray(vao)
@@ -127,6 +149,24 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry, _progr
     gl.vertexAttrib1f(3, 0.0)
   }
 
+  // Joints (location 4) — as vec4 float
+  if (jointsBuffer) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, jointsBuffer)
+    gl.enableVertexAttribArray(4)
+    gl.vertexAttribPointer(4, 4, gl.FLOAT, false, 0, 0)
+  } else {
+    gl.disableVertexAttribArray(4)
+  }
+
+  // Weights (location 5) — as vec4 float
+  if (weightsBuffer) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, weightsBuffer)
+    gl.enableVertexAttribArray(5)
+    gl.vertexAttribPointer(5, 4, gl.FLOAT, false, 0, 0)
+  } else {
+    gl.disableVertexAttribArray(5)
+  }
+
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuffer)
   gl.bindVertexArray(null)
 
@@ -136,6 +176,8 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry, _progr
     index: idxBuffer,
     uv: uvBuffer,
     materialIndex: matIdxBuffer,
+    joints: jointsBuffer,
+    weights: weightsBuffer,
     vao,
   }
 }
@@ -278,6 +320,8 @@ export class WebGL2Renderer implements Renderer {
 
   private lambertProgram: WebGLProgram
   private basicProgram: WebGLProgram
+  private lambertSkinnedProgram: WebGLProgram
+  private basicSkinnedProgram: WebGLProgram
   private bloomDownsampleProgram: WebGLProgram
   private bloomUpsampleProgram: WebGLProgram
   private blitProgram: WebGLProgram
@@ -343,6 +387,8 @@ export class WebGL2Renderer implements Renderer {
     // Compile programs
     this.lambertProgram = createProgram(gl, LAMBERT_VERT, LAMBERT_FRAG)
     this.basicProgram = createProgram(gl, BASIC_VERT, BASIC_FRAG)
+    this.lambertSkinnedProgram = createProgram(gl, LAMBERT_SKINNED_VERT, LAMBERT_FRAG)
+    this.basicSkinnedProgram = createProgram(gl, BASIC_SKINNED_VERT, BASIC_FRAG)
     this.bloomDownsampleProgram = createProgram(gl, FULLSCREEN_VERT, BLOOM_DOWNSAMPLE_FRAG)
     this.bloomUpsampleProgram = createProgram(gl, FULLSCREEN_VERT, BLOOM_UPSAMPLE_FRAG)
     this.blitProgram = createProgram(gl, FULLSCREEN_VERT, BLIT_FRAG)
@@ -468,7 +514,13 @@ export class WebGL2Renderer implements Renderer {
     let triangles = 0
 
     for (const mesh of meshes) {
-      const program = mesh.material.type === 'lambert' ? this.lambertProgram : this.basicProgram
+      const isSkinned = !!mesh.skeleton && !!mesh.geometry.joints && !!mesh.geometry.weights
+      let program: WebGLProgram
+      if (isSkinned) {
+        program = mesh.material.type === 'lambert' ? this.lambertSkinnedProgram : this.basicSkinnedProgram
+      } else {
+        program = mesh.material.type === 'lambert' ? this.lambertProgram : this.basicProgram
+      }
       gl.useProgram(program)
 
       ensureGPUBuffers(gl, mesh.geometry, program)
@@ -479,6 +531,12 @@ export class WebGL2Renderer implements Renderer {
 
       // Per-object uniforms
       gl.uniformMatrix4fv(gl.getUniformLocation(program, 'u_worldMatrix'), false, mesh._worldMatrix)
+
+      // Upload bone matrices for skinned meshes
+      if (isSkinned) {
+        mesh.skeleton!.update()
+        gl.uniformMatrix4fv(gl.getUniformLocation(program, 'u_boneMatrices[0]'), false, mesh.skeleton!.boneMatrices)
+      }
 
       if (mesh.material.type === 'lambert') {
         // Normal matrix = transpose(inverse(worldMatrix))
@@ -645,6 +703,8 @@ export class WebGL2Renderer implements Renderer {
     const gl = this.gl
     gl.deleteProgram(this.lambertProgram)
     gl.deleteProgram(this.basicProgram)
+    gl.deleteProgram(this.lambertSkinnedProgram)
+    gl.deleteProgram(this.basicSkinnedProgram)
     gl.deleteProgram(this.bloomDownsampleProgram)
     gl.deleteProgram(this.bloomUpsampleProgram)
     gl.deleteProgram(this.blitProgram)
