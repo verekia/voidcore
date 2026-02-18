@@ -65,17 +65,9 @@ const createProgram = (gl: WebGL2RenderingContext, vertSrc: string, fragSrc: str
 }
 
 // ─── Uniform location cache ───────────────────────────────────────────
+// Matrix and light uniforms are now in UBOs; only material uniforms remain.
 
 interface SceneUniformLocs {
-  u_viewProjection: WebGLUniformLocation | null
-  u_worldMatrix: WebGLUniformLocation | null
-  u_normalMatrix: WebGLUniformLocation | null
-  u_boneMatrices: WebGLUniformLocation | null
-  u_lightDirection: WebGLUniformLocation | null
-  u_lightColor: WebGLUniformLocation | null
-  u_lightIntensity: WebGLUniformLocation | null
-  u_ambientColor: WebGLUniformLocation | null
-  u_ambientIntensity: WebGLUniformLocation | null
   u_baseColor: WebGLUniformLocation | null
   u_opacity: WebGLUniformLocation | null
   u_hasPalette: WebGLUniformLocation | null
@@ -103,15 +95,6 @@ const cacheSceneLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): Scen
     paletteEmissive.push(gl.getUniformLocation(program, `u_palette[${i}].emissive`))
   }
   return {
-    u_viewProjection: gl.getUniformLocation(program, 'u_viewProjection'),
-    u_worldMatrix: gl.getUniformLocation(program, 'u_worldMatrix'),
-    u_normalMatrix: gl.getUniformLocation(program, 'u_normalMatrix'),
-    u_boneMatrices: gl.getUniformLocation(program, 'u_boneMatrices[0]'),
-    u_lightDirection: gl.getUniformLocation(program, 'u_lightDirection'),
-    u_lightColor: gl.getUniformLocation(program, 'u_lightColor'),
-    u_lightIntensity: gl.getUniformLocation(program, 'u_lightIntensity'),
-    u_ambientColor: gl.getUniformLocation(program, 'u_ambientColor'),
-    u_ambientIntensity: gl.getUniformLocation(program, 'u_ambientIntensity'),
     u_baseColor: gl.getUniformLocation(program, 'u_baseColor'),
     u_opacity: gl.getUniformLocation(program, 'u_opacity'),
     u_hasPalette: gl.getUniformLocation(program, 'u_hasPalette'),
@@ -419,6 +402,26 @@ export class WebGL2Renderer implements Renderer {
   private bloomIntensity: number
   private bloomEnabled: boolean
 
+  // Traversal
+  private _traversalStack: Node[] = []
+
+  // UBOs
+  // FrameBlock (binding 0): mat4 VP + vec3 lightDir + pad + vec3 lightColor + float lightIntensity
+  //   + vec3 ambientColor + float ambientIntensity = 112 bytes = 28 floats
+  private _frameUBO!: WebGLBuffer
+  private _frameData = new Float32Array(28)
+  // ObjectBlock (binding 1, dynamic): mat4 worldMatrix + mat4 normalMatrix = 128 bytes
+  // SkinnedObjectBlock (binding 1, dynamic): above + mat4[32] boneMatrices = 2176 bytes
+  private _uboAlignment = 256
+  private _alignedObjectSize = 256 // ceil(128 / alignment) * alignment
+  private _alignedSkinnedSize = 2304 // ceil(2176 / alignment) * alignment
+  private _objectDynBuf!: WebGLBuffer
+  private _skinnedDynBuf!: WebGLBuffer
+  private _objectBatchData!: Float32Array
+  private _skinnedBatchData!: Float32Array
+  private _objectCapacity = 2048
+  private _skinnedCapacity = 2048
+
   // Scratch
   private _vpMatrix: Mat4 = mat4Create()
   private _invWorldMatrix: Mat4 = mat4Create()
@@ -429,6 +432,10 @@ export class WebGL2Renderer implements Renderer {
   private _tempVec3 = new Float32Array(3)
   private _meshes: Mesh[] = []
   private _sortState: SortState = createSortState(4096)
+
+  // Cached canvas dimensions
+  private _displayW = 0
+  private _displayH = 0
 
   // Stats
   private _lastFrameTime = 0
@@ -498,6 +505,75 @@ export class WebGL2Renderer implements Renderer {
     gl.depthFunc(gl.LEQUAL)
     gl.enable(gl.CULL_FACE)
     gl.cullFace(gl.BACK)
+
+    // UBO setup
+    this._uboAlignment = gl.getParameter(gl.UNIFORM_BUFFER_OFFSET_ALIGNMENT) as number
+    this._alignedObjectSize = Math.ceil(128 / this._uboAlignment) * this._uboAlignment
+    this._alignedSkinnedSize = Math.ceil(2176 / this._uboAlignment) * this._uboAlignment
+
+    // Frame UBO
+    this._frameUBO = gl.createBuffer()!
+    gl.bindBuffer(gl.UNIFORM_BUFFER, this._frameUBO)
+    gl.bufferData(gl.UNIFORM_BUFFER, 112, gl.DYNAMIC_DRAW)
+
+    // Dynamic object / skinned UBOs
+    this._createDynamicBuffers()
+
+    // Bind UBO block indices for all scene programs (done once at init)
+    this._bindUBOBlocks(this.lambertProgram, false)
+    this._bindUBOBlocks(this.basicProgram, false)
+    this._bindUBOBlocks(this.lambertSkinnedProgram, true)
+    this._bindUBOBlocks(this.basicSkinnedProgram, true)
+
+    // Cache canvas dimensions
+    this._displayW = canvas.clientWidth
+    this._displayH = canvas.clientHeight
+    new ResizeObserver(() => {
+      this._displayW = this.canvas.clientWidth
+      this._displayH = this.canvas.clientHeight
+    }).observe(canvas)
+  }
+
+  private _bindUBOBlocks(program: WebGLProgram, skinned: boolean) {
+    const gl = this.gl
+    const frameIdx = gl.getUniformBlockIndex(program, 'FrameBlock')
+    if (frameIdx !== gl.INVALID_INDEX) gl.uniformBlockBinding(program, frameIdx, 0)
+    const objName = skinned ? 'SkinnedObjectBlock' : 'ObjectBlock'
+    const objIdx = gl.getUniformBlockIndex(program, objName)
+    if (objIdx !== gl.INVALID_INDEX) gl.uniformBlockBinding(program, objIdx, 1)
+  }
+
+  private _createDynamicBuffers() {
+    const gl = this.gl
+    this._objectDynBuf = gl.createBuffer()!
+    gl.bindBuffer(gl.UNIFORM_BUFFER, this._objectDynBuf)
+    gl.bufferData(gl.UNIFORM_BUFFER, this._objectCapacity * this._alignedObjectSize, gl.DYNAMIC_DRAW)
+    this._objectBatchData = new Float32Array((this._objectCapacity * this._alignedObjectSize) / 4)
+
+    this._skinnedDynBuf = gl.createBuffer()!
+    gl.bindBuffer(gl.UNIFORM_BUFFER, this._skinnedDynBuf)
+    gl.bufferData(gl.UNIFORM_BUFFER, this._skinnedCapacity * this._alignedSkinnedSize, gl.DYNAMIC_DRAW)
+    this._skinnedBatchData = new Float32Array((this._skinnedCapacity * this._alignedSkinnedSize) / 4)
+  }
+
+  private _ensureDynamicCapacity(objCount: number, skinnedCount: number) {
+    const gl = this.gl
+    if (objCount > this._objectCapacity) {
+      this._objectCapacity = Math.max(objCount, this._objectCapacity * 2)
+      gl.deleteBuffer(this._objectDynBuf)
+      this._objectDynBuf = gl.createBuffer()!
+      gl.bindBuffer(gl.UNIFORM_BUFFER, this._objectDynBuf)
+      gl.bufferData(gl.UNIFORM_BUFFER, this._objectCapacity * this._alignedObjectSize, gl.DYNAMIC_DRAW)
+      this._objectBatchData = new Float32Array((this._objectCapacity * this._alignedObjectSize) / 4)
+    }
+    if (skinnedCount > this._skinnedCapacity) {
+      this._skinnedCapacity = Math.max(skinnedCount, this._skinnedCapacity * 2)
+      gl.deleteBuffer(this._skinnedDynBuf)
+      this._skinnedDynBuf = gl.createBuffer()!
+      gl.bindBuffer(gl.UNIFORM_BUFFER, this._skinnedDynBuf)
+      gl.bufferData(gl.UNIFORM_BUFFER, this._skinnedCapacity * this._alignedSkinnedSize, gl.DYNAMIC_DRAW)
+      this._skinnedBatchData = new Float32Array((this._skinnedCapacity * this._alignedSkinnedSize) / 4)
+    }
   }
 
   private ensureRenderTargets() {
@@ -543,8 +619,8 @@ export class WebGL2Renderer implements Renderer {
 
     // Resize canvas if needed
     const dpr = Math.min(window.devicePixelRatio, 2)
-    const displayW = Math.floor(this.canvas.clientWidth * dpr)
-    const displayH = Math.floor(this.canvas.clientHeight * dpr)
+    const displayW = Math.floor(this._displayW * dpr)
+    const displayH = Math.floor(this._displayH * dpr)
     if (this.canvas.width !== displayW || this.canvas.height !== displayH) {
       this.canvas.width = displayW
       this.canvas.height = displayH
@@ -567,22 +643,33 @@ export class WebGL2Renderer implements Renderer {
     meshes.length = 0
     let culledCount = 0
     let dirLight: DirectionalLight | null = null
-    scene.traverse((node: Node) => {
-      if (!node.visible) return
-      if (node instanceof Mesh) {
-        if (node.frustumCulled) {
-          aabbTransform(this._worldAABB, node.geometry.aabb, node._worldMatrix)
+    const stack = this._traversalStack
+    stack.length = 0
+    stack.push(scene)
+    while (stack.length > 0) {
+      const node = stack.pop()!
+      if (!node.visible) continue
+      if (node.type === 'mesh') {
+        const mesh = node as Mesh
+        if (mesh.frustumCulled) {
+          aabbTransform(this._worldAABB, mesh.geometry.aabb, mesh._worldMatrix)
           if (!frustumContainsAABB(this._frustumPlanes, this._worldAABB)) {
             culledCount++
-            return
+          } else {
+            meshes.push(mesh)
           }
+        } else {
+          meshes.push(mesh)
         }
-        meshes.push(node)
       }
       if (!dirLight && node.type === 'directionalLight') {
         dirLight = node as DirectionalLight
       }
-    })
+      const children = node.children
+      for (let i = children.length - 1; i >= 0; i--) {
+        stack.push(children[i]!)
+      }
+    }
 
     // Compute light direction from world matrix
     const lightDir = this._lightDir
@@ -616,6 +703,77 @@ export class WebGL2Renderer implements Renderer {
     sortMeshes(this._sortState, meshes, meshes.length, camera)
     const sortedIndices = this._sortState.indices
 
+    // ─── Upload frame UBO (once per frame) ─────────────────────────
+    const fd = this._frameData
+    fd.set(this._vpMatrix, 0)
+    fd[16] = lightDir[0]!
+    fd[17] = lightDir[1]!
+    fd[18] = lightDir[2]!
+    fd[19] = 0 // _lightPad
+    fd[20] = dirLight ? (dirLight as DirectionalLight).color[0] : 0
+    fd[21] = dirLight ? (dirLight as DirectionalLight).color[1] : 0
+    fd[22] = dirLight ? (dirLight as DirectionalLight).color[2] : 0
+    fd[23] = dirLight ? (dirLight as DirectionalLight).intensity : 0
+    fd[24] = scene.ambientLight.color[0]
+    fd[25] = scene.ambientLight.color[1]
+    fd[26] = scene.ambientLight.color[2]
+    fd[27] = scene.ambientLight.intensity
+    gl.bindBuffer(gl.UNIFORM_BUFFER, this._frameUBO)
+    gl.bufferSubData(gl.UNIFORM_BUFFER, 0, fd)
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, this._frameUBO)
+
+    // ─── Batch-fill object UBOs ─────────────────────────────────────
+    let objCount = 0
+    let skinnedCount = 0
+    for (let si = 0; si < meshes.length; si++) {
+      const mesh = meshes[sortedIndices[si]!]!
+      if (mesh.skeleton && mesh.geometry.joints && mesh.geometry.weights) skinnedCount++
+      else objCount++
+    }
+    this._ensureDynamicCapacity(objCount, skinnedCount)
+
+    const alignedObjFloats = this._alignedObjectSize / 4
+    const alignedSkinnedFloats = this._alignedSkinnedSize / 4
+    const objBatch = this._objectBatchData
+    const skinnedBatch = this._skinnedBatchData
+    let objIdx = 0
+    let skinnedIdx = 0
+
+    for (let si = 0; si < meshes.length; si++) {
+      const mesh = meshes[sortedIndices[si]!]!
+      const isSkinned = !!mesh.skeleton && !!mesh.geometry.joints && !!mesh.geometry.weights
+      if (isSkinned) {
+        mesh.skeleton!.update()
+        const off = skinnedIdx * alignedSkinnedFloats
+        skinnedBatch.set(mesh._worldMatrix, off)
+        if (mat4Invert(this._invWorldMatrix, mesh._worldMatrix)) {
+          mat4Transpose(this._normalMatrix, this._invWorldMatrix)
+        }
+        skinnedBatch.set(this._normalMatrix, off + 16)
+        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 32)
+        mesh._batchIndex = skinnedIdx++
+      } else {
+        const off = objIdx * alignedObjFloats
+        objBatch.set(mesh._worldMatrix, off)
+        if (mat4Invert(this._invWorldMatrix, mesh._worldMatrix)) {
+          mat4Transpose(this._normalMatrix, this._invWorldMatrix)
+        }
+        objBatch.set(this._normalMatrix, off + 16)
+        mesh._batchIndex = objIdx++
+      }
+    }
+
+    // Upload batch data (1-2 bufferSubData calls instead of N*uniformMatrix4fv)
+    if (objIdx > 0) {
+      gl.bindBuffer(gl.UNIFORM_BUFFER, this._objectDynBuf)
+      gl.bufferSubData(gl.UNIFORM_BUFFER, 0, objBatch, 0, objIdx * alignedObjFloats)
+    }
+    if (skinnedIdx > 0) {
+      gl.bindBuffer(gl.UNIFORM_BUFFER, this._skinnedDynBuf)
+      gl.bufferSubData(gl.UNIFORM_BUFFER, 0, skinnedBatch, 0, skinnedIdx * alignedSkinnedFloats)
+    }
+
+    // ─── Draw loop ──────────────────────────────────────────────────
     this._lastMaterial = null
     this._lastProgram = null
 
@@ -646,37 +804,16 @@ export class WebGL2Renderer implements Renderer {
       if (programChanged) {
         gl.useProgram(program)
         this._lastProgram = program
-
-        // Per-frame uniforms (set once per program switch)
-        gl.uniformMatrix4fv(locs.u_viewProjection, false, this._vpMatrix)
-
-        if (mesh.material.type === 'lambert') {
-          gl.uniform3fv(locs.u_lightDirection, lightDir)
-          if (dirLight) {
-            gl.uniform3fv(locs.u_lightColor, (dirLight as DirectionalLight).color)
-            gl.uniform1f(locs.u_lightIntensity, (dirLight as DirectionalLight).intensity)
-          }
-          gl.uniform3fv(locs.u_ambientColor, scene.ambientLight.color)
-          gl.uniform1f(locs.u_ambientIntensity, scene.ambientLight.intensity)
-        }
       }
 
       ensureGPUBuffers(gl, mesh.geometry, program)
       gl.bindVertexArray(mesh.geometry._gpuBuffers!.vao!)
 
-      // Per-object uniforms
-      gl.uniformMatrix4fv(locs.u_worldMatrix, false, mesh._worldMatrix)
-
+      // Bind object UBO at the pre-filled offset (replaces all per-object uniformMatrix4fv)
       if (isSkinned) {
-        mesh.skeleton!.update()
-        gl.uniformMatrix4fv(locs.u_boneMatrices, false, mesh.skeleton!.boneMatrices)
-      }
-
-      if (mesh.material.type === 'lambert') {
-        if (mat4Invert(this._invWorldMatrix, mesh._worldMatrix)) {
-          mat4Transpose(this._normalMatrix, this._invWorldMatrix)
-        }
-        gl.uniformMatrix4fv(locs.u_normalMatrix, false, this._normalMatrix)
+        gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._skinnedDynBuf, mesh._batchIndex * this._alignedSkinnedSize, 2176)
+      } else {
+        gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 128)
       }
 
       // Per-material uniforms (skip if same material + same program)
@@ -823,6 +960,9 @@ export class WebGL2Renderer implements Renderer {
   dispose() {
     this.destroyRenderTargets()
     const gl = this.gl
+    gl.deleteBuffer(this._frameUBO)
+    gl.deleteBuffer(this._objectDynBuf)
+    gl.deleteBuffer(this._skinnedDynBuf)
     gl.deleteProgram(this.lambertProgram)
     gl.deleteProgram(this.basicProgram)
     gl.deleteProgram(this.lambertSkinnedProgram)

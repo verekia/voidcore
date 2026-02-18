@@ -16,7 +16,7 @@
     "dev:example": "next dev",
     "build": "bun run --parallel 'build:*'",
     "build:example": "next build",
-    "build:library": "tsup",
+    "//build:library": "tsup",
     "start": "serve out",
     "postinstall": "bun typegen",
     "typegen": "next typegen",

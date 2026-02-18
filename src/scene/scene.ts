@@ -1,4 +1,4 @@
-import { Node, propagateDirty, updateWorldMatrices } from './node.ts'
+import { Node, updateWorldMatrices } from './node.ts'
 
 export interface AmbientLight {
   color: [number, number, number]
@@ -33,7 +33,6 @@ export class Scene extends Node {
   }
 
   updateGraph() {
-    propagateDirty(this)
     updateWorldMatrices(this)
   }
 

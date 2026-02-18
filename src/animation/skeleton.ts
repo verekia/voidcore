@@ -7,6 +7,7 @@ export class Skeleton {
   bones: Node[]
   boneInverseBindMatrices: Mat4[]
   boneMatrices: Float32Array
+  _dirty = true
 
   private _tempMat: Mat4 = mat4Create()
 
@@ -25,6 +26,7 @@ export class Skeleton {
   }
 
   update() {
+    if (!this._dirty) return
     for (let i = 0; i < this.bones.length; i++) {
       const bone = this.bones[i]!
       const ibm = this.boneInverseBindMatrices[i]!
@@ -32,5 +34,6 @@ export class Skeleton {
       mat4Multiply(this._tempMat, bone._worldMatrix, ibm)
       this.boneMatrices.set(this._tempMat, i * 16)
     }
+    this._dirty = false
   }
 }

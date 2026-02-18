@@ -1,5 +1,49 @@
 // Inline GLSL shaders for WebGL2
 
+// ─── Shared UBO block declarations ───────────────────────────────────
+//
+// FrameBlock (binding 0, 112 bytes std140):
+//   mat4  u_viewProjection       offset 0   (64 bytes)
+//   vec3  u_lightDirection       offset 64  (12 bytes + 4 pad)
+//   float _lightPad              offset 76
+//   vec3  u_lightColor           offset 80  (12 bytes)
+//   float u_lightIntensity       offset 92
+//   vec3  u_ambientColor         offset 96  (12 bytes)
+//   float u_ambientIntensity     offset 108
+//
+// ObjectBlock (binding 1, 128 bytes std140):
+//   mat4 u_worldMatrix    offset 0
+//   mat4 u_normalMatrix   offset 64
+//
+// SkinnedObjectBlock (binding 1, 2176 bytes std140):
+//   mat4 u_worldMatrix       offset 0
+//   mat4 u_normalMatrix      offset 64
+//   mat4 u_boneMatrices[32]  offset 128
+
+const FRAME_BLOCK = `
+layout(std140) uniform FrameBlock {
+  mat4 u_viewProjection;
+  vec3 u_lightDirection;
+  float _lightPad;
+  vec3 u_lightColor;
+  float u_lightIntensity;
+  vec3 u_ambientColor;
+  float u_ambientIntensity;
+};`
+
+const OBJECT_BLOCK = `
+layout(std140) uniform ObjectBlock {
+  mat4 u_worldMatrix;
+  mat4 u_normalMatrix;
+};`
+
+const SKINNED_OBJECT_BLOCK = `
+layout(std140) uniform SkinnedObjectBlock {
+  mat4 u_worldMatrix;
+  mat4 u_normalMatrix;
+  mat4 u_boneMatrices[32];
+};`
+
 export const LAMBERT_VERT = `#version 300 es
 precision highp float;
 
@@ -8,9 +52,8 @@ layout(location = 1) in vec3 a_normal;
 layout(location = 2) in vec2 a_uv;
 layout(location = 3) in float a_materialIndex;
 
-uniform mat4 u_viewProjection;
-uniform mat4 u_worldMatrix;
-uniform mat4 u_normalMatrix;
+${FRAME_BLOCK}
+${OBJECT_BLOCK}
 
 out vec3 v_worldPos;
 out vec3 v_normal;
@@ -40,11 +83,7 @@ struct PaletteEntry {
   vec4 emissive; // xyz = RGB, w = emissiveIntensity
 };
 
-uniform vec3 u_lightDirection;
-uniform vec3 u_lightColor;
-uniform float u_lightIntensity;
-uniform vec3 u_ambientColor;
-uniform float u_ambientIntensity;
+${FRAME_BLOCK}
 
 uniform vec3 u_baseColor;
 uniform float u_opacity;
@@ -89,10 +128,8 @@ layout(location = 3) in float a_materialIndex;
 layout(location = 4) in vec4 a_joints;
 layout(location = 5) in vec4 a_weights;
 
-uniform mat4 u_viewProjection;
-uniform mat4 u_worldMatrix;
-uniform mat4 u_normalMatrix;
-uniform mat4 u_boneMatrices[32];
+${FRAME_BLOCK}
+${SKINNED_OBJECT_BLOCK}
 
 out vec3 v_worldPos;
 out vec3 v_normal;
@@ -127,9 +164,8 @@ layout(location = 3) in float a_materialIndex;
 layout(location = 4) in vec4 a_joints;
 layout(location = 5) in vec4 a_weights;
 
-uniform mat4 u_viewProjection;
-uniform mat4 u_worldMatrix;
-uniform mat4 u_boneMatrices[32];
+${FRAME_BLOCK}
+${SKINNED_OBJECT_BLOCK}
 
 out vec2 v_uv;
 
@@ -153,8 +189,8 @@ layout(location = 0) in vec3 a_position;
 layout(location = 1) in vec3 a_normal;
 layout(location = 2) in vec2 a_uv;
 
-uniform mat4 u_viewProjection;
-uniform mat4 u_worldMatrix;
+${FRAME_BLOCK}
+${OBJECT_BLOCK}
 
 out vec2 v_uv;
 
