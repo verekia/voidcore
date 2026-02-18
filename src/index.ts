@@ -41,6 +41,9 @@ export {
   createAnimationMixer,
 } from './animation/index.ts'
 
+// Raycasting
+export { createRaycaster, Raycaster, buildMeshBVH, type RaycastHit } from './raycasting/index.ts'
+
 // Loaders
 export { loadGLTF } from './loaders/gltf.ts'
 

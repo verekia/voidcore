@@ -18,7 +18,7 @@ Audit of the Voidcore specs vs current implementation.
 | Bloom                   | ⚠️ Partial         |
 | Shadows (CSM)           | ❌ Not implemented |
 | Transparency (WBOIT)    | ❌ Not implemented |
-| Raycasting / BVH        | ❌ Not implemented |
+| Raycasting / BVH        | ✓ Implemented      |
 | HTML Overlay            | ❌ Not implemented |
 | React Bindings          | ❌ Not implemented |
 
@@ -36,28 +36,27 @@ Audit of the Voidcore specs vs current implementation.
 - **glTF Loader**: GLB parsing, mesh/skeleton/animation extraction, flat result lists (`meshes`, `skeletons`, `animations`, `textures`), `dispose()`
 - **Renderer**: WebGPU + WebGL2 backends, draw call sorting by pipeline→material→depth (32-bit radix sort), MSAA, frame stats API
 - **Shaders**: Dual WGSL + GLSL maintained separately
+- **Raycasting / BVH**: Two-level BVH (scene mesh + triangle level), binned SAH with 12 bins, slab ray-AABB, Möller-Trumbore ray-triangle, `Raycaster` class with `set`, `setFromCamera`, `intersectObject`, `intersectObjects`. Geometry BVH cached via `WeakMap`, invalidated on `needsUpdate`.
 
 ---
 
 ## Not Yet Implemented
 
-1. **Raycasting / BVH** (`RAYCASTING-BVH.md`) — No `Raycaster` class, no BVH construction (binned SAH), no ray-triangle intersection. Pointer events and selection are impossible.
+1. **HTML Overlay** (`HTML-OVERLAY.md`) — No `OverlayManager`, no world-to-screen projection, no CSS transform positioning, no occlusion testing.
 
-2. **HTML Overlay** (`HTML-OVERLAY.md`) — No `OverlayManager`, no world-to-screen projection, no CSS transform positioning, no occlusion testing.
+2. **React Bindings** (`REACT.md`) — No custom reconciler, no `<Canvas>`, no JSX scene elements, no `useFrame`/`useEngine`/`useGLTF`/`useAnimations`, no `<Html>` component, no pointer events.
 
-3. **React Bindings** (`REACT.md`) — No custom reconciler, no `<Canvas>`, no JSX scene elements, no `useFrame`/`useEngine`/`useGLTF`/`useAnimations`, no `<Html>` component, no pointer events.
+3. **Cascaded Shadow Maps** (`LIGHTING-SHADOWS.md`) — Depth pass, 3-cascade CSM, texel snapping, PCF filtering, cascade blending, shadow bias — none implemented. Light direction/color uniforms exist but shadow rendering is absent.
 
-4. **Cascaded Shadow Maps** (`LIGHTING-SHADOWS.md`) — Depth pass, 3-cascade CSM, texel snapping, PCF filtering, cascade blending, shadow bias — none implemented. Light direction/color uniforms exist but shadow rendering is absent.
+4. **WBOIT Transparency** (`TRANSPARENCY.md`) — Two-pass OIT (accumulation + revealage), McGuire weight function, MRT targets, composite pass — not implemented. The `transparent` flag exists but doesn't render correctly.
 
-5. **WBOIT Transparency** (`TRANSPARENCY.md`) — Two-pass OIT (accumulation + revealage), McGuire weight function, MRT targets, composite pass — not implemented. The `transparent` flag exists but doesn't render correctly.
+5. **Cubic spline interpolation** (`ANIMATION.md`) — Only linear and step implemented; cubic spline missing.
 
-6. **Cubic spline interpolation** (`ANIMATION.md`) — Only linear and step implemented; cubic spline missing.
+6. **Frustum culling in renderer** — Math functions (`frustumFromViewProjection`, `frustumContainsAABB`) exist in `math/index.ts` but are not hooked into the render loop.
 
-7. **Frustum culling in renderer** — Math functions (`frustumFromViewProjection`, `frustumContainsAABB`) exist in `math/index.ts` but are not hooked into the render loop.
+7. **Shader warm-up** — Pre-compilation of common variants during loading not implemented.
 
-8. **Shader warm-up** — Pre-compilation of common variants during loading not implemented.
-
-9. **`UnsupportedBackendError`** — Mentioned in spec but not found in code.
+8. **`UnsupportedBackendError`** — Mentioned in spec but not found in code.
 
 ---
 

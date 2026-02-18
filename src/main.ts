@@ -4,9 +4,13 @@ import {
   createPerspectiveCamera,
   createDirectionalLight,
   createLambertMaterial,
+  createBasicMaterial,
   createOrbitControls,
   loadGLTF,
   createAnimationMixer,
+  createSphereGeometry,
+  createMesh,
+  createRaycaster,
   Skeleton,
   Mesh,
   Group,
@@ -16,7 +20,7 @@ import {
 import type { AnimationClip, AnimationAction } from './index.ts'
 
 // ─── Configuration ──────────────────────────────────────────────────
-const CHARACTER_COUNT = 1000
+const CHARACTER_COUNT = 900
 const GRID_SPACING = 5
 
 export const main = async (canvas: HTMLCanvasElement) => {
@@ -132,6 +136,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
   const CLIP_DURATION = 2 // seconds per clip before crossfade
   const CROSSFADE_DURATION = 0.3
 
+  const roots: Node[] = []
   const mixers: ReturnType<typeof createAnimationMixer>[] = []
   const charActions: AnimationAction[][] = []
   const charCurrentClip: number[] = []
@@ -175,6 +180,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
       }
     }
 
+    roots.push(root)
     scene.add(root)
 
     // Animation — all characters cycle through all clips with staggered offsets
@@ -201,6 +207,54 @@ export const main = async (canvas: HTMLCanvasElement) => {
     }
   }
 
+  // ─── Sphere terrain ───────────────────────────────────────────
+  // Sphere top at z=10, large enough that all characters sit on the upper part
+  const SPHERE_RADIUS = 300
+  const SPHERE_CENTER_Z = 10 - SPHERE_RADIUS // = -290
+
+  const sphereGeo = createSphereGeometry({ radius: SPHERE_RADIUS, widthSegments: 64, heightSegments: 64 })
+  const sphereMat = createBasicMaterial({ color: [0.12, 0.14, 0.18] })
+  const sphere = createMesh(sphereGeo, sphereMat)
+  sphere.position[2] = SPHERE_CENTER_Z
+  sphere._dirtyLocal = true
+  scene.add(sphere)
+
+  // Update world matrices so the sphere's _worldMatrix is ready for raycasting
+  scene.updateGraph()
+
+  // Raycast each character downward from above to land it on the sphere surface
+  const raycaster = createRaycaster()
+  const rayDir: [number, number, number] = [0, 0, -1]
+  const RAY_START_Z = 100 // well above sphere top (z=10)
+
+  const ORBIT_RADIUS = 5
+  const ORBIT_SPEED = 3 // rad/s — one full circle in ~1 second
+
+  const charOriginX: number[] = []
+  const charOriginY: number[] = []
+  const charOrbitAngle: number[] = []
+
+  for (const root of roots) {
+    const x = root.position[0]!
+    const y = root.position[1]!
+    raycaster.set(new Float32Array([x, y, RAY_START_Z]), new Float32Array(rayDir))
+    const hits = raycaster.intersectObject(sphere)
+    if (hits.length > 0) {
+      root.position[2] = hits[0]!.point[2]!
+    }
+
+    // Store orbit origin and assign a random starting angle so characters spread out
+    charOriginX.push(x)
+    charOriginY.push(y)
+    const angle = Math.random() * Math.PI * 2
+    charOrbitAngle.push(angle)
+
+    // Apply initial orbit offset
+    root.position[0] = x + Math.cos(angle) * ORBIT_RADIUS
+    root.position[1] = y + Math.sin(angle) * ORBIT_RADIUS
+    root._dirtyLocal = true
+  }
+
   // ─── Stats overlay ────────────────────────────────────────────
   const statsDiv = document.createElement('div')
   statsDiv.style.cssText =
@@ -220,6 +274,15 @@ export const main = async (canvas: HTMLCanvasElement) => {
   engine.onFrame(dt => {
     controls.update(dt)
     elapsed += dt
+
+    for (let i = 0; i < roots.length; i++) {
+      // Circular orbit around each character's origin point
+      charOrbitAngle[i]! += ORBIT_SPEED * dt
+      const a = charOrbitAngle[i]!
+      roots[i]!.position[0] = charOriginX[i]! + Math.cos(a) * ORBIT_RADIUS
+      roots[i]!.position[1] = charOriginY[i]! + Math.sin(a) * ORBIT_RADIUS
+      roots[i]!._dirtyLocal = true
+    }
 
     for (let i = 0; i < mixers.length; i++) {
       // Crossfade to next clip when it's time
