@@ -30,6 +30,11 @@ export class Engine {
     this._frameCallbacks.push(callback)
   }
 
+  offFrame(callback: (deltaTime: number, elapsed: number) => void) {
+    const idx = this._frameCallbacks.indexOf(callback)
+    if (idx !== -1) this._frameCallbacks.splice(idx, 1)
+  }
+
   start(scene: Scene, camera: PerspectiveCamera) {
     if (this._running) return
     this._running = true

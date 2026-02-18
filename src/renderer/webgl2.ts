@@ -1,13 +1,10 @@
 import {
-  aabbTransform,
-  frustumContainsAABB,
   frustumFromViewProjection,
   mat4Create,
   mat4Invert,
   mat4Multiply,
   mat4Transpose,
   vec3Create,
-  vec3Normalize,
 } from '../math/index.ts'
 import { Mesh } from '../scene/mesh.ts'
 import { Node } from '../scene/node.ts'
@@ -23,6 +20,7 @@ import {
   BLOOM_UPSAMPLE_FRAG,
   BLIT_FRAG,
 } from './shaders.ts'
+import { collectVisibleMeshes, computeLightDir } from './shared.ts'
 import { createSortState, sortMeshes } from './sort.ts'
 
 import type { Geometry } from '../geometry/geometry.ts'
@@ -117,7 +115,7 @@ const cacheBlitLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): BlitU
 
 // ─── GPU buffer management ────────────────────────────────────────────
 
-const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry, _program: WebGLProgram) => {
+const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
   if (geometry._gpuBuffers) return
 
   // Unbind any active VAO to prevent corrupting its element array buffer
@@ -436,9 +434,10 @@ export class WebGL2Renderer implements Renderer {
   // Cached canvas dimensions
   private _displayW = 0
   private _displayH = 0
+  private _resizeObserver: ResizeObserver | null = null
 
   // Stats
-  private _lastFrameTime = 0
+  private _lastFrameTime = -1
   private _frameCount = 0
   private _fpsAccumulator = 0
   private _currentFps = 60
@@ -528,10 +527,11 @@ export class WebGL2Renderer implements Renderer {
     // Cache canvas dimensions
     this._displayW = canvas.clientWidth
     this._displayH = canvas.clientHeight
-    new ResizeObserver(() => {
+    this._resizeObserver = new ResizeObserver(() => {
       this._displayW = this.canvas.clientWidth
       this._displayH = this.canvas.clientHeight
-    }).observe(canvas)
+    })
+    this._resizeObserver.observe(canvas)
   }
 
   private _bindUBOBlocks(program: WebGLProgram, skinned: boolean) {
@@ -605,6 +605,7 @@ export class WebGL2Renderer implements Renderer {
   render(scene: Scene, camera: PerspectiveCamera) {
     const gl = this.gl
     const now = performance.now()
+    if (this._lastFrameTime < 0) this._lastFrameTime = now
     const dt = now - this._lastFrameTime
     this._lastFrameTime = now
 
@@ -640,49 +641,17 @@ export class WebGL2Renderer implements Renderer {
 
     // Collect visible meshes + find directional light in single traversal
     const meshes = this._meshes
-    meshes.length = 0
-    let culledCount = 0
-    let dirLight: DirectionalLight | null = null
-    const stack = this._traversalStack
-    stack.length = 0
-    stack.push(scene)
-    while (stack.length > 0) {
-      const node = stack.pop()!
-      if (!node.visible) continue
-      if (node.type === 'mesh') {
-        const mesh = node as Mesh
-        if (mesh.frustumCulled) {
-          aabbTransform(this._worldAABB, mesh.geometry.aabb, mesh._worldMatrix)
-          if (!frustumContainsAABB(this._frustumPlanes, this._worldAABB)) {
-            culledCount++
-          } else {
-            meshes.push(mesh)
-          }
-        } else {
-          meshes.push(mesh)
-        }
-      }
-      if (!dirLight && node.type === 'directionalLight') {
-        dirLight = node as DirectionalLight
-      }
-      const children = node.children
-      for (let i = children.length - 1; i >= 0; i--) {
-        stack.push(children[i]!)
-      }
-    }
+    const { culledCount, dirLight } = collectVisibleMeshes(
+      scene,
+      this._frustumPlanes,
+      this._worldAABB,
+      meshes,
+      this._traversalStack,
+    )
 
     // Compute light direction from world matrix
     const lightDir = this._lightDir
-    lightDir[0] = 0
-    lightDir[1] = 0
-    lightDir[2] = 0
-    if (dirLight) {
-      const lp = (dirLight as DirectionalLight)._worldMatrix
-      this._tempVec3[0] = lp[12]!
-      this._tempVec3[1] = lp[13]!
-      this._tempVec3[2] = lp[14]!
-      vec3Normalize(lightDir, this._tempVec3)
-    }
+    computeLightDir(lightDir, this._tempVec3, dirLight)
 
     this.ensureRenderTargets()
     const rt = this.renderTargets!
@@ -806,7 +775,7 @@ export class WebGL2Renderer implements Renderer {
         this._lastProgram = program
       }
 
-      ensureGPUBuffers(gl, mesh.geometry, program)
+      ensureGPUBuffers(gl, mesh.geometry)
       gl.bindVertexArray(mesh.geometry._gpuBuffers!.vao!)
 
       // Bind object UBO at the pre-filled offset (replaces all per-object uniformMatrix4fv)
@@ -970,5 +939,7 @@ export class WebGL2Renderer implements Renderer {
     gl.deleteProgram(this.bloomDownsampleProgram)
     gl.deleteProgram(this.bloomUpsampleProgram)
     gl.deleteProgram(this.blitProgram)
+    this._resizeObserver?.disconnect()
+    this._resizeObserver = null
   }
 }

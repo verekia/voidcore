@@ -133,6 +133,7 @@ export class OrbitControls {
     this.canvas.removeEventListener('pointerdown', this._onPointerDown)
     this.canvas.removeEventListener('pointermove', this._onPointerMove)
     this.canvas.removeEventListener('pointerup', this._onPointerUp)
+    this.canvas.removeEventListener('pointerleave', this._onPointerUp)
     this.canvas.removeEventListener('wheel', this._onWheel)
     this.canvas.removeEventListener('contextmenu', this._onContextMenu)
     this.canvas.removeEventListener('touchstart', this._onTouchStart)

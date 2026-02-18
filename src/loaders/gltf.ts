@@ -265,18 +265,7 @@ const decodeDraco = async (
 
 // ─── Main loader ─────────────────────────────────────────────────────
 
-const loadCache = new Map<string, Promise<GLTFResult>>()
-
-export const loadGLTF = async (url: string, _engine: unknown, options?: LoadOptions): Promise<GLTFResult> => {
-  let promise = loadCache.get(url)
-  if (!promise) {
-    promise = loadGLTFImpl(url, options)
-    loadCache.set(url, promise)
-  }
-  return promise
-}
-
-const loadGLTFImpl = async (url: string, options?: LoadOptions): Promise<GLTFResult> => {
+export const loadGLTF = async (url: string, options?: LoadOptions): Promise<GLTFResult> => {
   const response = await fetch(url)
   const buffer = await response.arrayBuffer()
   const { json, bin } = parseGLB(buffer)

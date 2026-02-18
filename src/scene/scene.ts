@@ -14,18 +14,8 @@ export class Scene extends Node {
     this.frustumCulled = false
     this.castShadow = false
     this.receiveShadow = false
-  }
-
-  override add(...nodes: Node[]) {
-    super.add(...nodes)
-    for (const node of nodes) {
-      this._registerNames(node)
-    }
-  }
-
-  override remove(child: Node) {
-    this._unregisterNames(child)
-    super.remove(child)
+    // Set _scene on the root so Node.add can register names
+    this._scene = this
   }
 
   getByName(name: string): Node | undefined {
@@ -36,12 +26,12 @@ export class Scene extends Node {
     updateWorldMatrices(this)
   }
 
-  private _registerNames(node: Node) {
+  _registerNames(node: Node) {
     if (node.name) this._nameMap.set(node.name, node)
     for (const child of node.children) this._registerNames(child)
   }
 
-  private _unregisterNames(node: Node) {
+  _unregisterNames(node: Node) {
     if (node.name) this._nameMap.delete(node.name)
     for (const child of node.children) this._unregisterNames(child)
   }

@@ -35,7 +35,6 @@ export {
   Skeleton,
   type AnimationClip,
   type KeyframeTrack,
-  sampleClip,
   AnimationMixer,
   AnimationAction,
   createAnimationMixer,

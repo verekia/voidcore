@@ -50,8 +50,6 @@ export class Material {
 
     if (this.opacity < 1.0) this.transparent = true
   }
-
-  dispose() {}
 }
 
 export interface MaterialOptions {

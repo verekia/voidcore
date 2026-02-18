@@ -4,6 +4,9 @@ import type { Mat4, Quat, Vec3 } from '../math/index.ts'
 
 export type NodeType = 'group' | 'mesh' | 'camera' | 'directionalLight'
 
+// Scratch for lookAt — avoids per-call allocation
+const _lookAtFwd = new Float32Array(3)
+
 export class Node {
   name = ''
   type: NodeType = 'group'
@@ -14,6 +17,7 @@ export class Node {
 
   parent: Node | null = null
   children: Node[] = []
+  _scene: { _registerNames(node: Node): void; _unregisterNames(node: Node): void } | null = null
 
   visible = true
   frustumCulled = true
@@ -31,14 +35,22 @@ export class Node {
       child.parent = this
       this.children.push(child)
       child._dirtyWorld = true
+      if (this._scene) {
+        propagateScene(child, this._scene)
+        this._scene._registerNames(child)
+      }
     }
   }
 
   remove(child: Node) {
     const idx = this.children.indexOf(child)
     if (idx !== -1) {
+      if (this._scene) {
+        this._scene._unregisterNames(child)
+      }
       this.children.splice(idx, 1)
       child.parent = null
+      propagateScene(child, null)
     }
   }
 
@@ -50,22 +62,19 @@ export class Node {
   }
 
   lookAt(target: Vec3 | [number, number, number]) {
-    const t = target instanceof Float32Array ? target : new Float32Array(target)
-    // Simplified lookAt - sets rotation to face target
-    const forward = vec3Create()
-    forward[0] = t[0]! - this.position[0]!
-    forward[1] = t[1]! - this.position[1]!
-    forward[2] = t[2]! - this.position[2]!
-    const len = Math.sqrt(forward[0]! ** 2 + forward[1]! ** 2 + forward[2]! ** 2)
+    _lookAtFwd[0] = target[0]! - this.position[0]!
+    _lookAtFwd[1] = target[1]! - this.position[1]!
+    _lookAtFwd[2] = target[2]! - this.position[2]!
+    const len = Math.sqrt(_lookAtFwd[0]! ** 2 + _lookAtFwd[1]! ** 2 + _lookAtFwd[2]! ** 2)
     if (len < 1e-6) return
-    forward[0]! /= len
-    forward[1]! /= len
-    forward[2]! /= len
+    const invLen = 1 / len
+    _lookAtFwd[0]! *= invLen
+    _lookAtFwd[1]! *= invLen
+    _lookAtFwd[2]! *= invLen
 
     // Z-up: compute rotation from default forward (0,1,0) to target direction
-    // Using a simplified approach with atan2
-    const yaw = Math.atan2(forward[0]!, forward[1]!)
-    const pitch = Math.asin(Math.max(-1, Math.min(1, forward[2]!)))
+    const yaw = Math.atan2(_lookAtFwd[0]!, _lookAtFwd[1]!)
+    const pitch = Math.asin(Math.max(-1, Math.min(1, _lookAtFwd[2]!)))
 
     // Convert to quaternion via ZXY order for Z-up
     const cy = Math.cos(yaw * 0.5),
@@ -81,16 +90,10 @@ export class Node {
   }
 }
 
-export const propagateDirty = (node: Node): void => {
-  if (node._dirtyLocal) node._dirtyWorld = true
-  if (node._dirtyWorld) {
-    for (let i = 0; i < node.children.length; i++) {
-      const child = node.children[i]!
-      if (!child._dirtyWorld) {
-        child._dirtyWorld = true
-        propagateDirty(child)
-      }
-    }
+const propagateScene = (node: Node, scene: Node['_scene']): void => {
+  node._scene = scene
+  for (let i = 0; i < node.children.length; i++) {
+    propagateScene(node.children[i]!, scene)
   }
 }
 

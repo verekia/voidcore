@@ -9,8 +9,10 @@ import {
   loadGLTF,
   createAnimationMixer,
   createSphereGeometry,
+  createBoxGeometry,
   createMesh,
   createRaycaster,
+  quatFromAxisAngle,
   Skeleton,
   Mesh,
   Group,
@@ -63,8 +65,8 @@ export const main = async (canvas: HTMLCanvasElement) => {
 
   // ─── Load assets ───────────────────────────────────────────────
   const [megaxeGltf, playerGltf] = await Promise.all([
-    loadGLTF('/static-bundle.glb', engine, { draco: { decoderPath: '/draco-1.5.7/' } }),
-    loadGLTF('/player-bundle.glb', engine, { draco: { decoderPath: '/draco-1.5.7/' } }),
+    loadGLTF('/static-bundle.glb', { draco: { decoderPath: '/draco-1.5.7/' } }),
+    loadGLTF('/player-bundle.glb', { draco: { decoderPath: '/draco-1.5.7/' } }),
   ])
 
   // Find megaxe template mesh
@@ -259,6 +261,19 @@ export const main = async (canvas: HTMLCanvasElement) => {
     root._dirtyLocal = true
   }
 
+  // ─── Big Rotating Cube ──────────────────────────────────────────
+  const cubeGeo = createBoxGeometry({ width: 10, height: 10, depth: 10 })
+  const cubeMat = createLambertMaterial({ color: [0.2, 0.6, 1.0] })
+  const cube = createMesh(cubeGeo, cubeMat)
+  cube.position[0] = 80
+  cube.position[1] = 0
+  cube.position[2] = 60
+  cube.scale[0] = 5
+  cube.scale[1] = 5
+  cube.scale[2] = 5
+  cube._dirtyLocal = true
+  scene.add(cube)
+
   // ─── Stats overlay ────────────────────────────────────────────
   const statsDiv = document.createElement('div')
   statsDiv.style.cssText =
@@ -274,6 +289,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
   document.body.appendChild(switchLink)
 
   // ─── Render Loop ──────────────────────────────────────────────
+  const cubeAxis = new Float32Array([0, 0, 1])
   let elapsed = 0
   engine.onFrame(dt => {
     controls.update(dt)
@@ -300,6 +316,10 @@ export const main = async (canvas: HTMLCanvasElement) => {
       }
       mixers[i]!.update(dt)
     }
+
+    // Rotate cube around Z axis (Z-up)
+    quatFromAxisAngle(cube.rotation, cubeAxis, elapsed)
+    cube._dirtyLocal = true
 
     const stats = engine.getStats()
     statsDiv.textContent = `${engine.backend.toUpperCase()} | ${Math.round(stats.fps)} FPS | Draw calls: ${stats.drawCalls}`

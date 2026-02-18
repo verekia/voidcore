@@ -44,12 +44,14 @@ export const sortMeshes = (state: SortState, meshes: Mesh[], meshCount: number, 
     const materialId = material._id & 0xfff
 
     // Depth: bits 9-0 (10 bits, quantized distance)
+    // Opaque: nearest first (ascending depth). Transparent: farthest first (inverted depth).
     const wm = mesh._worldMatrix
     const dx = wm[12]! - camX
     const dy = wm[13]! - camY
     const dz = wm[14]! - camZ
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
-    const depth = Math.min(dist * invFar * 1023, 1023) | 0
+    const rawDepth = Math.min(dist * invFar * 1023, 1023) | 0
+    const depth = layer === 1 ? 1023 - rawDepth : rawDepth
 
     keys[i] = (layer << 30) | (pipelineId << 22) | (materialId << 10) | depth
     indices[i] = i
