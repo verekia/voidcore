@@ -82,7 +82,10 @@ export class Node {
     _lookAtFwd[0] = target[0]! - this.position[0]!
     _lookAtFwd[1] = target[1]! - this.position[1]!
     _lookAtFwd[2] = target[2]! - this.position[2]!
-    const len = Math.sqrt(_lookAtFwd[0]! ** 2 + _lookAtFwd[1]! ** 2 + _lookAtFwd[2]! ** 2)
+    const fx = _lookAtFwd[0]!,
+      fy = _lookAtFwd[1]!,
+      fz = _lookAtFwd[2]!
+    const len = Math.sqrt(fx * fx + fy * fy + fz * fz)
     if (len < 1e-6) return
     const invLen = 1 / len
     _lookAtFwd[0]! *= invLen

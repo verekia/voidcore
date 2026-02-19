@@ -221,10 +221,21 @@ export const mat4Create = (): Mat4 => {
 }
 
 export const mat4Identity = (out: Mat4): Mat4 => {
-  out.fill(0)
   out[0] = 1
+  out[1] = 0
+  out[2] = 0
+  out[3] = 0
+  out[4] = 0
   out[5] = 1
+  out[6] = 0
+  out[7] = 0
+  out[8] = 0
+  out[9] = 0
   out[10] = 1
+  out[11] = 0
+  out[12] = 0
+  out[13] = 0
+  out[14] = 0
   out[15] = 1
   return out
 }
@@ -437,20 +448,32 @@ export const mat4Perspective = (
   depth: 'zero-to-one' | 'neg-one-to-one',
 ): Mat4 => {
   const f = 1 / Math.tan(fovY / 2)
-  out.fill(0)
   out[0] = f / aspect
+  out[1] = 0
+  out[2] = 0
+  out[3] = 0
+  out[4] = 0
   out[5] = f
+  out[6] = 0
+  out[7] = 0
+  out[8] = 0
+  out[9] = 0
 
   if (depth === 'zero-to-one') {
     out[10] = far / (near - far)
     out[11] = -1
+    out[12] = 0
+    out[13] = 0
     out[14] = (near * far) / (near - far)
   } else {
     out[10] = -(far + near) / (far - near)
     out[11] = -1
+    out[12] = 0
+    out[13] = 0
     out[14] = -(2 * far * near) / (far - near)
   }
 
+  out[15] = 0
   return out
 }
 
@@ -466,10 +489,18 @@ export const mat4Ortho = (
   const lr = 1 / (left - right)
   const bt = 1 / (bottom - top)
   const nf = 1 / (near - far)
-  out.fill(0)
   out[0] = -2 * lr
+  out[1] = 0
+  out[2] = 0
+  out[3] = 0
+  out[4] = 0
   out[5] = -2 * bt
+  out[6] = 0
+  out[7] = 0
+  out[8] = 0
+  out[9] = 0
   out[10] = 2 * nf
+  out[11] = 0
   out[12] = (left + right) * lr
   out[13] = (top + bottom) * bt
   out[14] = (far + near) * nf
@@ -489,10 +520,18 @@ export const mat4OrthoZO = (
   const lr = 1 / (left - right)
   const bt = 1 / (bottom - top)
   const nf = 1 / (near - far)
-  out.fill(0)
   out[0] = -2 * lr
+  out[1] = 0
+  out[2] = 0
+  out[3] = 0
+  out[4] = 0
   out[5] = -2 * bt
+  out[6] = 0
+  out[7] = 0
+  out[8] = 0
+  out[9] = 0
   out[10] = nf
+  out[11] = 0
   out[12] = (left + right) * lr
   out[13] = (top + bottom) * bt
   out[14] = near * nf
@@ -699,52 +738,61 @@ export const aabbFromPoints = (out: AABB, positions: Float32Array, count: number
   return out
 }
 
-const _aabbCorners = new Float32Array(24)
-const _aabbTv = new Float32Array(3)
-
 export const aabbTransform = (out: AABB, a: AABB, m: Mat4): AABB => {
-  const corners = _aabbCorners
-  corners[0] = a[0]!
-  corners[1] = a[1]!
-  corners[2] = a[2]!
-  corners[3] = a[3]!
-  corners[4] = a[1]!
-  corners[5] = a[2]!
-  corners[6] = a[0]!
-  corners[7] = a[4]!
-  corners[8] = a[2]!
-  corners[9] = a[3]!
-  corners[10] = a[4]!
-  corners[11] = a[2]!
-  corners[12] = a[0]!
-  corners[13] = a[1]!
-  corners[14] = a[5]!
-  corners[15] = a[3]!
-  corners[16] = a[1]!
-  corners[17] = a[5]!
-  corners[18] = a[0]!
-  corners[19] = a[4]!
-  corners[20] = a[5]!
-  corners[21] = a[3]!
-  corners[22] = a[4]!
-  corners[23] = a[5]!
-  out[0] = Infinity
-  out[1] = Infinity
-  out[2] = Infinity
-  out[3] = -Infinity
-  out[4] = -Infinity
-  out[5] = -Infinity
-  const tv = _aabbTv
-  for (let i = 0; i < 8; i++) {
-    vec3Set(tv, corners[i * 3]!, corners[i * 3 + 1]!, corners[i * 3 + 2]!)
-    vec3TransformMat4(tv, tv, m)
-    if (tv[0]! < out[0]!) out[0] = tv[0]!
-    if (tv[1]! < out[1]!) out[1] = tv[1]!
-    if (tv[2]! < out[2]!) out[2] = tv[2]!
-    if (tv[0]! > out[3]!) out[3] = tv[0]!
-    if (tv[1]! > out[4]!) out[4] = tv[1]!
-    if (tv[2]! > out[5]!) out[5] = tv[2]!
-  }
+  // Arvo's method: compute transformed AABB directly from matrix columns and extents.
+  // For each output axis, decompose the matrix-vector product into min/max contributions.
+  // This is ~3x faster than transforming all 8 corners through mat4.
+  const m0 = m[0]!,
+    m1 = m[1]!,
+    m2 = m[2]!
+  const m4 = m[4]!,
+    m5 = m[5]!,
+    m6 = m[6]!
+  const m8 = m[8]!,
+    m9 = m[9]!,
+    m10 = m[10]!
+  const tx = m[12]!,
+    ty = m[13]!,
+    tz = m[14]!
+
+  const minX = a[0]!,
+    minY = a[1]!,
+    minZ = a[2]!
+  const maxX = a[3]!,
+    maxY = a[4]!,
+    maxZ = a[5]!
+
+  // X-axis contribution
+  const xa = m0 * minX,
+    xb = m0 * maxX
+  const xc = m4 * minY,
+    xd = m4 * maxY
+  const xe = m8 * minZ,
+    xf = m8 * maxZ
+
+  // Y-axis contribution
+  const ya = m1 * minX,
+    yb = m1 * maxX
+  const yc = m5 * minY,
+    yd = m5 * maxY
+  const ye = m9 * minZ,
+    yf = m9 * maxZ
+
+  // Z-axis contribution
+  const za = m2 * minX,
+    zb = m2 * maxX
+  const zc = m6 * minY,
+    zd = m6 * maxY
+  const ze = m10 * minZ,
+    zf = m10 * maxZ
+
+  out[0] = (xa < xb ? xa : xb) + (xc < xd ? xc : xd) + (xe < xf ? xe : xf) + tx
+  out[3] = (xa > xb ? xa : xb) + (xc > xd ? xc : xd) + (xe > xf ? xe : xf) + tx
+  out[1] = (ya < yb ? ya : yb) + (yc < yd ? yc : yd) + (ye < yf ? ye : yf) + ty
+  out[4] = (ya > yb ? ya : yb) + (yc > yd ? yc : yd) + (ye > yf ? ye : yf) + ty
+  out[2] = (za < zb ? za : zb) + (zc < zd ? zc : zd) + (ze < zf ? ze : zf) + tz
+  out[5] = (za > zb ? za : zb) + (zc > zd ? zc : zd) + (ze > zf ? ze : zf) + tz
+
   return out
 }
 

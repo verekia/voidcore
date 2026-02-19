@@ -138,7 +138,7 @@ void main() {
 `
 
 export const SHADOW_DEPTH_FRAG = `#version 300 es
-precision highp float;
+precision mediump float; // Empty fragment shader — no precision needed
 void main() {}
 `
 
@@ -376,7 +376,7 @@ void main() {
 `
 
 export const BASIC_FRAG = `#version 300 es
-precision highp float;
+precision mediump float; // No precision-sensitive ops — mediump saves ALU registers on mobile GPUs
 
 in vec2 v_uv;
 
