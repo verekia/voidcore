@@ -58,7 +58,6 @@ export class OrbitControls {
   private _lastPinchDist = 0
 
   private _onChange: (() => void)[] = []
-  private _disposed = false
 
   constructor(camera: PerspectiveCamera, canvas: HTMLCanvasElement, opts: OrbitControlsOptions = {}) {
     this.camera = camera
@@ -120,9 +119,9 @@ export class OrbitControls {
 
       const panSpeed = (this.distance * Math.tan((this.camera.fov * Math.PI) / 180 / 2) * 2) / this.canvas.clientHeight
 
-      this.target[0]! += (rx * this._velocityPanX + ux * this._velocityPanY) * panSpeed
-      this.target[1]! += (ry * this._velocityPanX + uy * this._velocityPanY) * panSpeed
-      this.target[2]! += uz * this._velocityPanY * panSpeed
+      this.target[0] = this.target[0]! + (rx * this._velocityPanX + ux * this._velocityPanY) * panSpeed
+      this.target[1] = this.target[1]! + (ry * this._velocityPanX + uy * this._velocityPanY) * panSpeed
+      this.target[2] = this.target[2]! + uz * this._velocityPanY * panSpeed
     }
 
     // Compute camera position from spherical coordinates (Z-up)
@@ -144,7 +143,6 @@ export class OrbitControls {
   }
 
   dispose() {
-    this._disposed = true
     this.canvas.removeEventListener('pointerdown', this._onPointerDown)
     this.canvas.removeEventListener('pointermove', this._onPointerMove)
     this.canvas.removeEventListener('pointerup', this._onPointerUp)

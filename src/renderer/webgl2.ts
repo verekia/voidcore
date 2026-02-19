@@ -27,15 +27,10 @@ import {
   frustumFromViewProjection,
   mat4Create,
   mat4Invert,
-  mat4LookAt,
   mat4Multiply,
   mat4Ortho,
   mat4Transpose,
   vec3Create,
-  vec3Set,
-  vec3TransformMat4,
-  VEC3_UP,
-  VEC3_RIGHT,
 } from '../math/index.ts'
 import { Mesh } from '../scene/mesh.ts'
 import { Node } from '../scene/node.ts'
@@ -55,7 +50,15 @@ import {
   BLOOM_UPSAMPLE_FRAG,
   BLIT_FRAG,
 } from './shaders.ts'
-import { collectMeshes, computeLightDir, defaultMaxDpr, findDirectionalLight } from './shared.ts'
+import {
+  collectMeshes,
+  computeLightDir,
+  computeCascadeSplits,
+  computeCascadeMatrix,
+  defaultMaxDpr,
+  findDirectionalLight,
+  NUM_CASCADES,
+} from './shared.ts'
 import { createSortState, sortMeshes } from './sort.ts'
 
 import type { Geometry } from '../geometry/geometry.ts'
@@ -479,12 +482,9 @@ export class WebGL2Renderer implements Renderer {
   // Shadow scratch
   private _shadowMeshes: Mesh[] = []
   private _cascadeVPs: Mat4[] = [mat4Create(), mat4Create(), mat4Create()]
-  private _cascadeSplits = new Float32Array(3)
+  private _cascadeSplits = new Float32Array(NUM_CASCADES)
   private _shadowLightView: Mat4 = mat4Create()
   private _shadowLightProj: Mat4 = mat4Create()
-  private _shadowCorner: Vec3 = vec3Create()
-  private _shadowCenter: Vec3 = vec3Create()
-  private _cascadeCorners = new Float32Array(24) // Pre-allocated frustum corners for cascade computation
   private _frameNum = 0
 
   // Traversal
@@ -668,7 +668,7 @@ export class WebGL2Renderer implements Renderer {
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL)
 
     // Shadow FBOs (one per cascade layer)
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < NUM_CASCADES; i++) {
       const fbo = gl.createFramebuffer()!
       gl.bindFramebuffer(gl.FRAMEBUFFER, fbo)
       gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, this._shadowTexture, 0, i)
@@ -747,132 +747,29 @@ export class WebGL2Renderer implements Renderer {
 
   // ─── Cascade shadow map computation ─────────────────────────────
 
-  private computeCascadeSplits(camera: PerspectiveCamera): void {
-    const near = camera.near
-    const far = camera.far
-    const lambda = this.shadowLambda
-    for (let i = 0; i < 3; i++) {
-      const p = (i + 1) / 3
-      const log = near * Math.pow(far / near, p)
-      const linear = near + (far - near) * p
-      this._cascadeSplits[i] = lambda * log + (1 - lambda) * linear
-    }
+  private _computeCascadeSplits(camera: PerspectiveCamera): void {
+    computeCascadeSplits(this._cascadeSplits, camera, this.shadowLambda)
   }
 
-  private computeCascadeMatrix(
+  private _computeCascadeMatrix(
     cascadeIdx: number,
     camera: PerspectiveCamera,
     lightDir: Vec3,
     nearDist: number,
     farDist: number,
   ): void {
-    const V = camera._viewMatrix
-    const rx = V[0]!,
-      ry = V[4]!,
-      rz = V[8]!
-    const ux = V[1]!,
-      uy = V[5]!,
-      uz = V[9]!
-    const fx = -V[2]!,
-      fy = -V[6]!,
-      fz = -V[10]!
-    const px = camera.position[0]!,
-      py = camera.position[1]!,
-      pz = camera.position[2]!
-
-    const fovY = camera.fov * (Math.PI / 180)
-    const aspect = camera.aspect
-    const tanHalf = Math.tan(fovY / 2)
-
-    const nearH = tanHalf * nearDist
-    const nearW = nearH * aspect
-    const farH = tanHalf * farDist
-    const farW = farH * aspect
-
-    // Write into pre-allocated Float32Array (no allocation)
-    const corners = this._cascadeCorners
-    // Near
-    corners[0] = px + fx * nearDist - rx * nearW - ux * nearH
-    corners[1] = py + fy * nearDist - ry * nearW - uy * nearH
-    corners[2] = pz + fz * nearDist - rz * nearW - uz * nearH
-    corners[3] = px + fx * nearDist + rx * nearW - ux * nearH
-    corners[4] = py + fy * nearDist + ry * nearW - uy * nearH
-    corners[5] = pz + fz * nearDist + rz * nearW - uz * nearH
-    corners[6] = px + fx * nearDist + rx * nearW + ux * nearH
-    corners[7] = py + fy * nearDist + ry * nearW + uy * nearH
-    corners[8] = pz + fz * nearDist + rz * nearW + uz * nearH
-    corners[9] = px + fx * nearDist - rx * nearW + ux * nearH
-    corners[10] = py + fy * nearDist - ry * nearW + uy * nearH
-    corners[11] = pz + fz * nearDist - rz * nearW + uz * nearH
-    // Far
-    corners[12] = px + fx * farDist - rx * farW - ux * farH
-    corners[13] = py + fy * farDist - ry * farW - uy * farH
-    corners[14] = pz + fz * farDist - rz * farW - uz * farH
-    corners[15] = px + fx * farDist + rx * farW - ux * farH
-    corners[16] = py + fy * farDist + ry * farW - uy * farH
-    corners[17] = pz + fz * farDist + rz * farW - uz * farH
-    corners[18] = px + fx * farDist + rx * farW + ux * farH
-    corners[19] = py + fy * farDist + ry * farW + uy * farH
-    corners[20] = pz + fz * farDist + rz * farW + uz * farH
-    corners[21] = px + fx * farDist - rx * farW + ux * farH
-    corners[22] = py + fy * farDist - ry * farW + uy * farH
-    corners[23] = pz + fz * farDist - rz * farW + uz * farH
-
-    let cx = 0,
-      cy = 0,
-      cz = 0
-    for (let i = 0; i < 24; i += 3) {
-      cx += corners[i]!
-      cy += corners[i + 1]!
-      cz += corners[i + 2]!
-    }
-    cx /= 8
-    cy /= 8
-    cz /= 8
-
-    const center = this._shadowCenter
-    vec3Set(center, cx, cy, cz)
-    const offset = this.shadowBackExtend + farDist
-    const eye = this._shadowCorner
-    vec3Set(eye, cx + lightDir[0]! * offset, cy + lightDir[1]! * offset, cz + lightDir[2]! * offset)
-
-    const upVec = Math.abs(lightDir[2]!) > 0.99 ? VEC3_RIGHT : VEC3_UP
-    mat4LookAt(this._shadowLightView, eye, center, upVec)
-
-    let minX = Infinity,
-      minY = Infinity,
-      minZ = Infinity
-    let maxX = -Infinity,
-      maxY = -Infinity,
-      maxZ = -Infinity
-
-    for (let i = 0; i < 24; i += 3) {
-      vec3Set(this._shadowCorner, corners[i]!, corners[i + 1]!, corners[i + 2]!)
-      vec3TransformMat4(this._shadowCorner, this._shadowCorner, this._shadowLightView)
-      const lx = this._shadowCorner[0]!
-      const ly = this._shadowCorner[1]!
-      const lz = this._shadowCorner[2]!
-      if (lx < minX) minX = lx
-      if (lx > maxX) maxX = lx
-      if (ly < minY) minY = ly
-      if (ly > maxY) maxY = ly
-      if (lz < minZ) minZ = lz
-      if (lz > maxZ) maxZ = lz
-    }
-
-    minZ -= this.shadowBackExtend
-
-    const texelSizeX = (maxX - minX) / this.shadowResolution
-    const texelSizeY = (maxY - minY) / this.shadowResolution
-    minX = Math.floor(minX / texelSizeX) * texelSizeX
-    maxX = Math.ceil(maxX / texelSizeX) * texelSizeX
-    minY = Math.floor(minY / texelSizeY) * texelSizeY
-    maxY = Math.ceil(maxY / texelSizeY) * texelSizeY
-
-    // Orthographic projection ([-1,1] depth range for WebGL2)
-    mat4Ortho(this._shadowLightProj, minX, maxX, minY, maxY, -maxZ, -minZ)
-
-    mat4Multiply(this._cascadeVPs[cascadeIdx]!, this._shadowLightProj, this._shadowLightView)
+    computeCascadeMatrix(
+      this._cascadeVPs[cascadeIdx]!,
+      camera,
+      lightDir,
+      nearDist,
+      farDist,
+      this.shadowBackExtend,
+      this.shadowResolution,
+      this._shadowLightView,
+      this._shadowLightProj,
+      mat4Ortho,
+    )
   }
 
   private _createDynamicBuffers() {
@@ -991,11 +888,11 @@ export class WebGL2Renderer implements Renderer {
     // casters in the same pass as camera-visible meshes.
     let shadowFrustum: Float32Array | null = null
     if (shadowActive) {
-      this.computeCascadeSplits(camera)
-      for (let c = 0; c < 3; c++) {
+      this._computeCascadeSplits(camera)
+      for (let c = 0; c < NUM_CASCADES; c++) {
         const near = c === 0 ? camera.near : this._cascadeSplits[c - 1]!
         const far = this._cascadeSplits[c]!
-        this.computeCascadeMatrix(c, camera, lightDir, near, far)
+        this._computeCascadeMatrix(c, camera, lightDir, near, far)
       }
       frustumFromViewProjection(this._shadowFrustumPlanes, this._cascadeVPs[2]!)
       shadowFrustum = this._shadowFrustumPlanes
@@ -1149,7 +1046,7 @@ export class WebGL2Renderer implements Renderer {
       const shadowRes = this.shadowResolution
       const PAD = 0.3
 
-      for (let c = 0; c < 3; c++) {
+      for (let c = 0; c < NUM_CASCADES; c++) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, this._shadowFbos[c]!)
         gl.viewport(0, 0, shadowRes, shadowRes)
         gl.clear(gl.DEPTH_BUFFER_BIT)

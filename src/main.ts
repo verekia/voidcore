@@ -301,7 +301,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
 
       for (let i = 0; i < roots.length; i++) {
         // Circular orbit around each character's origin point
-        charOrbitAngle[i]! += ORBIT_SPEED * dt
+        charOrbitAngle[i] = charOrbitAngle[i]! + ORBIT_SPEED * dt
         const a = charOrbitAngle[i]!
         roots[i]!.position[0] = charOriginX[i]! + Math.cos(a) * ORBIT_RADIUS
         roots[i]!.position[1] = charOriginY[i]! + Math.sin(a) * ORBIT_RADIUS

@@ -288,6 +288,7 @@ const decodeDraco = async (
 
 export const loadGLTF = async (url: string, options?: LoadOptions): Promise<GLTFResult> => {
   const response = await fetch(url)
+  if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`)
   const buffer = await response.arrayBuffer()
   const { json, bin } = parseGLB(buffer)
 
@@ -648,15 +649,15 @@ const generateFlatNormals = (positions: Float32Array, indices: Uint16Array | Uin
       nz = ax * by - ay * bx
     const len = Math.sqrt(nx * nx + ny * ny + nz * nz)
     const inv = len > 1e-6 ? 1 / len : 0
-    normals[i0]! += nx * inv
-    normals[i0 + 1]! += ny * inv
-    normals[i0 + 2]! += nz * inv
-    normals[i1]! += nx * inv
-    normals[i1 + 1]! += ny * inv
-    normals[i1 + 2]! += nz * inv
-    normals[i2]! += nx * inv
-    normals[i2 + 1]! += ny * inv
-    normals[i2 + 2]! += nz * inv
+    normals[i0] = normals[i0]! + nx * inv
+    normals[i0 + 1] = normals[i0 + 1]! + ny * inv
+    normals[i0 + 2] = normals[i0 + 2]! + nz * inv
+    normals[i1] = normals[i1]! + nx * inv
+    normals[i1 + 1] = normals[i1 + 1]! + ny * inv
+    normals[i1 + 2] = normals[i1 + 2]! + nz * inv
+    normals[i2] = normals[i2]! + nx * inv
+    normals[i2 + 1] = normals[i2 + 1]! + ny * inv
+    normals[i2 + 2] = normals[i2 + 2]! + nz * inv
   }
   // Normalize
   for (let i = 0; i < normals.length; i += 3) {
