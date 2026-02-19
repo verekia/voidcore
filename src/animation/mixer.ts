@@ -58,7 +58,7 @@ export class AnimationAction {
   play(): this {
     this.playing = true
     this.time = 0
-    this._cachedIndices = null
+    if (this._cachedIndices) this._cachedIndices.fill(0)
     return this
   }
 
@@ -165,7 +165,7 @@ export class AnimationMixer {
   update(dt: number) {
     // 1. Advance times, update fades, collect active actions
     const active = this._active
-    active.length = 0
+    let activeCount = 0
     let totalWeight = 0
 
     for (let i = 0; i < this._actions.length; i++) {
@@ -213,18 +213,18 @@ export class AnimationMixer {
       }
 
       if (action.weight > 0) {
-        active.push(action)
+        active[activeCount++] = action
         totalWeight += action.weight
       }
     }
 
-    if (active.length === 0 || totalWeight <= 0) return
+    if (activeCount === 0 || totalWeight <= 0) return
 
     // 2. Sample and blend incrementally
     const n = this.skeleton.bones.length
     let accWeight = 0
 
-    for (let ai = 0; ai < active.length; ai++) {
+    for (let ai = 0; ai < activeCount; ai++) {
       const action = active[ai]!
       const nw = action.weight / totalWeight
       accWeight += nw

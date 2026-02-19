@@ -1,11 +1,15 @@
 // Shared Renderer Utilities – Logic used by both WebGPU and WebGL2 renderers.
 //
-// collectVisibleMeshes() – Walks the scene graph in a single pass to:
-//   1. Collect all visible Mesh nodes (skipping invisible ones)
-//   2. Perform frustum culling: transforms each mesh's bounding box into world space
-//      and checks if it intersects the camera's view frustum. Meshes fully outside the
-//      frustum are skipped (not sent to the GPU), saving draw calls.
-//   3. Find the first directional light in the scene
+// findDirectionalLight() – Quick scene graph traversal that returns the first directional
+//   light found. Stops early once a light is located. Used to determine light direction
+//   before computing cascade shadow maps.
+//
+// collectMeshes() – Walks the scene graph in a single pass to:
+//   1. Collect camera-visible Mesh nodes (frustum culled against the camera frustum)
+//   2. Collect shadow-only casters (meshes outside camera frustum but inside the broadest
+//      shadow cascade frustum). This merges what used to be two separate traversals into one.
+//   3. Skip invisible nodes and meshes outside both frustums
+//   All arrays use index-based writes instead of push/pop to minimize GC pressure.
 //
 // computeLightDir() – Extracts the light direction from a directional light's world matrix.
 //   The light's world position is treated as a direction vector (like the sun – infinitely
@@ -22,94 +26,70 @@ import type { Node } from '../scene/node.ts'
 export const defaultMaxDpr = (): number =>
   typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches ? 1.25 : 1.5
 
-// Pre-allocated result object to avoid per-frame allocations
-export interface TraversalResult {
-  culledCount: number
-  dirLight: DirectionalLight | null
+/**
+ * Find the first directional light in the scene graph.
+ * Uses a quick traversal that stops as soon as a light is found.
+ */
+export const findDirectionalLight = (root: Node, stack: Node[]): DirectionalLight | null => {
+  let stackTop = 0
+  stack[stackTop++] = root
+  while (stackTop > 0) {
+    const node = stack[--stackTop]!
+    if (!node.visible) continue
+    if (node.type === 'directionalLight') return node as DirectionalLight
+    const children = node.children
+    for (let i = children.length - 1; i >= 0; i--) {
+      stack[stackTop++] = children[i]!
+    }
+  }
+  return null
 }
 
-const _traversalResult: TraversalResult = { culledCount: 0, dirLight: null }
-
 /**
- * Collect visible meshes and find the first directional light in a single traversal.
- * Uses a pre-allocated stack and result object to avoid allocations.
+ * Collect camera-visible meshes and shadow-only casters in a single traversal.
+ * Uses index-based array writes to avoid push/pop GC overhead.
+ * Returns the number of fully culled meshes (outside both camera and shadow frustums).
  */
-export const collectVisibleMeshes = (
+export const collectMeshes = (
   root: Node,
-  frustumPlanes: Float32Array,
+  cameraFrustum: Float32Array,
+  shadowFrustum: Float32Array | null,
   worldAABB: AABB,
   meshes: Mesh[],
+  shadowMeshes: Mesh[],
   stack: Node[],
-): TraversalResult => {
-  meshes.length = 0
+): number => {
+  let meshCount = 0
+  let shadowCount = 0
   let culledCount = 0
-  let dirLight: DirectionalLight | null = null
-  stack.length = 0
-  stack.push(root)
-  while (stack.length > 0) {
-    const node = stack.pop()!
+  let stackTop = 0
+  stack[stackTop++] = root
+  while (stackTop > 0) {
+    const node = stack[--stackTop]!
     if (!node.visible) continue
     if (node.type === 'mesh') {
       const mesh = node as Mesh
       if (mesh.frustumCulled) {
         aabbTransform(worldAABB, mesh.geometry.aabb, mesh._worldMatrix)
-        if (!frustumContainsAABB(frustumPlanes, worldAABB)) {
-          culledCount++
+        if (frustumContainsAABB(cameraFrustum, worldAABB)) {
+          meshes[meshCount++] = mesh
+        } else if (shadowFrustum && mesh.castShadow && frustumContainsAABB(shadowFrustum, worldAABB)) {
+          shadowMeshes[shadowCount++] = mesh
         } else {
-          meshes.push(mesh)
+          culledCount++
         }
       } else {
-        meshes.push(mesh)
-      }
-    }
-    if (!dirLight && node.type === 'directionalLight') {
-      dirLight = node as DirectionalLight
-    }
-    const children = node.children
-    for (let i = children.length - 1; i >= 0; i--) {
-      stack.push(children[i]!)
-    }
-  }
-  _traversalResult.culledCount = culledCount
-  _traversalResult.dirLight = dirLight
-  return _traversalResult
-}
-
-/**
- * Collect shadow casters from the scene for a given cascade frustum.
- * Meshes already in the camera-visible batch (batchFrame === frameNum) are skipped.
- * Returns the number of shadow-only meshes found.
- */
-export const collectShadowCasters = (
-  root: Node,
-  frustumPlanes: Float32Array,
-  worldAABB: AABB,
-  shadowMeshes: Mesh[],
-  stack: Node[],
-  frameNum: number,
-): number => {
-  let count = 0
-  stack.length = 0
-  stack.push(root)
-  while (stack.length > 0) {
-    const node = stack.pop()!
-    if (!node.visible) continue
-    if (node.type === 'mesh') {
-      const mesh = node as Mesh
-      if (mesh.castShadow && mesh._batchFrame !== frameNum) {
-        aabbTransform(worldAABB, mesh.geometry.aabb, mesh._worldMatrix)
-        if (frustumContainsAABB(frustumPlanes, worldAABB)) {
-          shadowMeshes.push(mesh)
-          count++
-        }
+        meshes[meshCount++] = mesh
       }
     }
     const children = node.children
     for (let i = children.length - 1; i >= 0; i--) {
-      stack.push(children[i]!)
+      stack[stackTop++] = children[i]!
     }
   }
-  return count
+  meshes.length = meshCount
+  shadowMeshes.length = shadowCount
+  return culledCount
 }
 
 /** Compute normalized light direction from a directional light's world position. */

@@ -55,7 +55,7 @@ import {
   BLOOM_UPSAMPLE_FRAG,
   BLIT_FRAG,
 } from './shaders.ts'
-import { collectVisibleMeshes, collectShadowCasters, computeLightDir, defaultMaxDpr } from './shared.ts'
+import { collectMeshes, computeLightDir, defaultMaxDpr, findDirectionalLight } from './shared.ts'
 import { createSortState, sortMeshes } from './sort.ts'
 
 import type { Geometry } from '../geometry/geometry.ts'
@@ -511,6 +511,7 @@ export class WebGL2Renderer implements Renderer {
   private _invWorldMatrix: Mat4 = mat4Create()
   private _normalMatrix: Mat4 = mat4Create()
   private _frustumPlanes = new Float32Array(24)
+  private _shadowFrustumPlanes = new Float32Array(24)
   private _worldAABB: AABB = new Float32Array(6)
   private _lightDir = vec3Create()
   private _tempVec3 = new Float32Array(3)
@@ -967,37 +968,28 @@ export class WebGL2Renderer implements Renderer {
     // View-projection matrix (view matrix is set externally, e.g. by orbit controls)
     mat4Multiply(this._vpMatrix, camera._projectionMatrix, camera._viewMatrix)
 
-    // Frustum culling
+    // Camera frustum
     frustumFromViewProjection(this._frustumPlanes, this._vpMatrix)
 
-    // Collect visible meshes + find directional light in single traversal
-    const meshes = this._meshes
-    const { culledCount, dirLight } = collectVisibleMeshes(
-      scene,
-      this._frustumPlanes,
-      this._worldAABB,
-      meshes,
-      this._traversalStack,
-    )
+    // Find directional light (quick early-exit traversal)
+    const dirLight = findDirectionalLight(scene, this._traversalStack)
 
     // Compute light direction from world matrix
     const lightDir = this._lightDir
     computeLightDir(lightDir, this._tempVec3, dirLight)
 
-    // Radix sort meshes by layer > pipeline > material > depth
-    sortMeshes(this._sortState, meshes, meshes.length, camera)
-    const sortedIndices = this._sortState.indices
+    this._frameNum++
+    const frameNum = this._frameNum
+    const shadowActive = this.shadowEnabled && !!dirLight
 
     let drawCalls = 0
     let shadowDrawCalls = 0
     let triangles = 0
 
-    // ─── Frame counter for shadow batch dedup ─────────────────────
-    this._frameNum++
-    const frameNum = this._frameNum
-    const shadowActive = this.shadowEnabled && !!dirLight
-
     // ─── Cascade computation ─────────────────────────────────────
+    // Compute shadow cascades BEFORE traversal so we can collect shadow-only
+    // casters in the same pass as camera-visible meshes.
+    let shadowFrustum: Float32Array | null = null
     if (shadowActive) {
       this.computeCascadeSplits(camera)
       for (let c = 0; c < 3; c++) {
@@ -1005,17 +997,32 @@ export class WebGL2Renderer implements Renderer {
         const far = this._cascadeSplits[c]!
         this.computeCascadeMatrix(c, camera, lightDir, near, far)
       }
+      frustumFromViewProjection(this._shadowFrustumPlanes, this._cascadeVPs[2]!)
+      shadowFrustum = this._shadowFrustumPlanes
     }
 
-    // ─── Collect shadow-only meshes ──────────────────────────────
+    // ─── Single merged traversal: camera meshes + shadow-only casters ───
+    const meshes = this._meshes
     const shadowMeshes = this._shadowMeshes
-    shadowMeshes.length = 0
+    const culledCount = collectMeshes(
+      scene,
+      this._frustumPlanes,
+      shadowFrustum,
+      this._worldAABB,
+      meshes,
+      shadowMeshes,
+      this._traversalStack,
+    )
+
+    // Radix sort meshes by layer > pipeline > material > depth
+    sortMeshes(this._sortState, meshes, meshes.length, camera)
+    const sortedIndices = this._sortState.indices
 
     // ─── Batch fill: camera-visible meshes ───────────────────────
     const alignedObjFloats = this._alignedObjectSize / 4
     const alignedSkinnedFloats = this._alignedSkinnedSize / 4
 
-    // Count and mark _batchFrame for shadow dedup
+    // Count camera-visible meshes and mark _batchFrame
     let objCount = 0
     let skinnedCount = 0
     for (let si = 0; si < meshes.length; si++) {
@@ -1025,16 +1032,12 @@ export class WebGL2Renderer implements Renderer {
       else objCount++
     }
 
-    // Collect shadow-only casters using broadest cascade
-    if (shadowActive) {
-      frustumFromViewProjection(this._frustumPlanes, this._cascadeVPs[2]!)
-      collectShadowCasters(scene, this._frustumPlanes, this._worldAABB, shadowMeshes, this._traversalStack, frameNum)
-      for (let i = 0; i < shadowMeshes.length; i++) {
-        const sm = shadowMeshes[i]!
-        sm._isSkinned = !!sm.skeleton
-        if (sm._isSkinned) skinnedCount++
-        else objCount++
-      }
+    // Count shadow-only casters
+    for (let i = 0; i < shadowMeshes.length; i++) {
+      const sm = shadowMeshes[i]!
+      sm._isSkinned = !!sm.skeleton
+      if (sm._isSkinned) skinnedCount++
+      else objCount++
     }
 
     this._ensureDynamicCapacity(objCount, skinnedCount)

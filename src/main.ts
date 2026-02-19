@@ -21,7 +21,7 @@ import {
 import type { AnimationClip, AnimationAction } from './index.ts'
 
 // ─── Configuration ──────────────────────────────────────────────────
-const CHARACTER_COUNT = 900
+const CHARACTER_COUNT = 1200
 const GRID_SPACING = 5
 
 export const main = async (canvas: HTMLCanvasElement) => {
