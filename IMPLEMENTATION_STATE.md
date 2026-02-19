@@ -70,3 +70,41 @@ Audit of the Voidcore specs vs current implementation.
 4. **Vertex buffer layout**: Spec calls for separate-per-attribute buffers with conditional fetch (unused attributes skipped); `webgpu.ts` shows a fixed layout that doesn't appear conditional.
 
 5. **Bind group organization**: Spec defines 3 bind groups by update frequency (per-frame, per-material, per-object with dynamic offsets); actual slot assignments in code don't fully match this layout.
+
+---
+
+Here's a breakdown of what's left for the renderer based on the specs:
+
+## Critical Missing Features
+
+1. **WBOIT Transparency** (`specs/TRANSPARENCY.md`) — The biggest gap. No OIT accumulation buffer (RGBA16F), no revealage buffer (R8), no McGuire weight function, no composite pass. The `transparent` flag on materials exists but doesn't route to a separate render pass. The entire pass pipeline should be Shadow → Opaque → **Transparent (WBOIT)** → Resolve → **OIT Composite** → Bloom → Blit, but currently there's no transparent pass or composite step.
+
+2. **Bloom Post-Processing** (`specs/POST-PROCESSING.md`) — The framework exists (MRT emissive target, bloom texture chain) but the actual filtering is incomplete:
+   - **Downsample**: Spec requires 13-tap Jimenez filter with Karis average on the first mip (firefly suppression via `1/(1+luma)` weighting)
+   - **Upsample**: Spec requires 3×3 tent filter (9-tap)
+   - Need to verify the shader files to confirm what's actually wired up
+
+3. **Shader Warm-up** (`specs/RENDERER.md`) — No pre-compilation of common shader variants during loading. Spec lists 7 variants (lambert opaque+shadow+color texture, lambert+vertex colors, lambert+material index, lambert transparent, basic opaque, shadow depth-only, shadow depth-only+skinned).
+
+## Partially Implemented / Differs from Spec
+
+4. **Per-Cascade Shadow Frustum Culling** — Current code does a point-in-NDC check using mesh world center. Spec requires AABB-frustum intersection per cascade, which is more accurate at shadow map edges.
+
+5. **Conditional Vertex Attribute Fetch** (`specs/RENDERER.md`) — Vertex buffer layouts are hardcoded. Spec calls for separate-per-attribute buffers where unused attributes are skipped rather than always bound.
+
+6. **Bind Group Organization** — Mostly correct (group 0 per-frame, group 1 per-material, group 2 per-object with dynamic offsets), but shadow pass uses separate bind group layouts rather than the unified approach the spec describes.
+
+7. **WebGL2 State Cache** (`specs/RENDERER.md`) — No `StateCache` object to track current GL state and skip redundant calls (`gl.useProgram`, `gl.bindVertexArray`, etc.). Spec estimates 40-60% reduction in redundant GL calls.
+
+8. **WebGL2 Pipeline as State Bundle** — WebGPU correctly uses `GPURenderPipeline` objects, but the WebGL2 backend sets blend/depth/cull state ad-hoc during rendering rather than using pre-built state bundles.
+
+## Priority Order
+
+| Priority | Feature                                | Impact                                                                   |
+| -------- | -------------------------------------- | ------------------------------------------------------------------------ |
+| 1        | WBOIT Transparency                     | Transparency doesn't render correctly without it                         |
+| 2        | Bloom filters (13-tap down / 9-tap up) | Visual quality — bloom framework exists but filters are wrong or missing |
+| 3        | Shader warm-up                         | First-use frame hitches                                                  |
+| 4        | WebGL2 state cache                     | Performance on WebGL2 path                                               |
+| 5        | Per-cascade AABB culling               | Shadow accuracy at edges                                                 |
+| 6        | Conditional vertex fetch               | Memory/bandwidth savings                                                 |
