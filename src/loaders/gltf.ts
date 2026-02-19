@@ -21,7 +21,7 @@
 
 import { Skeleton } from '../animation/skeleton.ts'
 import { Geometry } from '../geometry/geometry.ts'
-import { Material, createLambertMaterial } from '../materials/material.ts'
+import { Material, LambertMaterial } from '../materials/material.ts'
 import { Group } from '../scene/group.ts'
 import { Mesh } from '../scene/mesh.ts'
 import { Node } from '../scene/node.ts'
@@ -424,7 +424,7 @@ export const loadGLTF = async (url: string, options?: LoadOptions): Promise<GLTF
             transparent: matDef.alphaMode === 'BLEND',
           })
         } else {
-          material = createLambertMaterial()
+          material = new LambertMaterial()
         }
 
         const mesh = new Mesh(geometry, material)

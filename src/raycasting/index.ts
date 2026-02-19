@@ -753,5 +753,3 @@ export class Raycaster {
     }
   }
 }
-
-export const createRaycaster = (): Raycaster => new Raycaster()

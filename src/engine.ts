@@ -4,8 +4,8 @@
 // entire application. Callbacks are registered with priorities (lower runs first) and
 // optional per-callback FPS throttling. A global FPS cap can limit the overall tick rate.
 //
-// createEngine()      – Async factory that picks the best available renderer (WebGPU or
-//                       WebGL2) and returns an Engine instance.
+// Engine.create()     – Async static method that picks the best available renderer (WebGPU
+//                       or WebGL2) and returns an Engine instance.
 // engine.register()   – Adds a callback to the scheduler with priority and FPS options.
 //                       Returns an unsubscribe function.
 // engine.start()      – Begins the scheduler loop.
@@ -91,9 +91,9 @@ export class Engine {
     this.scheduler.destroy()
     this.renderer.dispose()
   }
-}
 
-export const createEngine = async (canvas: HTMLCanvasElement, config: EngineConfig = {}): Promise<Engine> => {
-  const renderer = await createRenderer(canvas, config)
-  return new Engine(canvas, renderer)
+  static async create(canvas: HTMLCanvasElement, config: EngineConfig = {}): Promise<Engine> {
+    const renderer = await createRenderer(canvas, config)
+    return new Engine(canvas, renderer)
+  }
 }

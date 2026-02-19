@@ -8,9 +8,9 @@
 // Geometry also computes an axis-aligned bounding box (AABB) used for frustum culling
 // (skipping objects that are off-screen) and raycasting (click detection).
 //
-// createGeometry()       – Factory that wraps raw arrays into a Geometry object.
+// new Geometry(data)      – Wraps raw arrays into a Geometry object.
 // geometry.hasAttribute() – Checks if optional attributes (UVs, colors, joints, etc.) exist.
-// geometry.dispose()     – Releases GPU buffer references.
+// geometry.dispose()      – Releases GPU buffer references.
 
 import { aabbFromPoints } from '../math/index.ts'
 
@@ -79,5 +79,3 @@ export class Geometry {
     this._gpuBuffers = null
   }
 }
-
-export const createGeometry = (data: GeometryData): Geometry => new Geometry(data)
