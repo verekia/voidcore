@@ -275,6 +275,55 @@ export const main = async (canvas: HTMLCanvasElement) => {
   cube.castShadow = true
   scene.add(cube)
 
+  // ─── Transparent Cubes (WBOIT test) ───────────────────────────────
+  const TRANSPARENT_COUNT = 10
+  const TRANSPARENT_RING_RADIUS = 30
+  const TRANSPARENT_Z = 25
+  const TRANSPARENT_CUBE_SIZE = 10
+
+  const transparentCubeGeo = new BoxGeometry({
+    width: TRANSPARENT_CUBE_SIZE,
+    height: TRANSPARENT_CUBE_SIZE,
+    depth: TRANSPARENT_CUBE_SIZE,
+  })
+
+  const transparentColors: [number, number, number][] = [
+    [1.0, 0.2, 0.2], // red
+    [0.2, 1.0, 0.3], // green
+    [0.2, 0.4, 1.0], // blue
+    [1.0, 0.8, 0.1], // yellow
+    [1.0, 0.4, 0.0], // orange
+    [0.8, 0.2, 1.0], // purple
+    [0.0, 0.9, 0.9], // cyan
+    [1.0, 0.3, 0.6], // pink
+    [0.4, 1.0, 0.7], // mint
+    [1.0, 1.0, 1.0], // white
+  ]
+
+  const transparentCubes: Mesh[] = []
+  const transparentAxes: Float32Array[] = []
+  const transparentSpeeds: number[] = []
+
+  for (let i = 0; i < TRANSPARENT_COUNT; i++) {
+    const angle = (i / TRANSPARENT_COUNT) * Math.PI * 2
+    const mat = new LambertMaterial({ color: transparentColors[i]!, opacity: 0.4 })
+    const mesh = new Mesh(transparentCubeGeo, mat)
+    mesh.position[0] = Math.cos(angle) * TRANSPARENT_RING_RADIUS
+    mesh.position[1] = Math.sin(angle) * TRANSPARENT_RING_RADIUS
+    mesh.position[2] = TRANSPARENT_Z
+    mesh._dirtyLocal = true
+    scene.add(mesh)
+    transparentCubes.push(mesh)
+
+    // Each cube gets a unique rotation axis and speed
+    const ax = Math.random() - 0.5
+    const ay = Math.random() - 0.5
+    const az = Math.random() - 0.5
+    const len = Math.sqrt(ax * ax + ay * ay + az * az)
+    transparentAxes.push(new Float32Array([ax / len, ay / len, az / len]))
+    transparentSpeeds.push(1.5 + Math.random() * 2.0)
+  }
+
   // ─── Stats overlay ────────────────────────────────────────────
   const statsDiv = document.createElement('div')
   statsDiv.style.cssText =
@@ -323,6 +372,12 @@ export const main = async (canvas: HTMLCanvasElement) => {
       // Rotate cube around Z axis (Z-up)
       quatFromAxisAngle(cube.rotation, cubeAxis, elapsed)
       cube._dirtyLocal = true
+
+      // Rotate transparent cubes individually
+      for (let i = 0; i < transparentCubes.length; i++) {
+        quatFromAxisAngle(transparentCubes[i]!.rotation, transparentAxes[i]!, elapsed * transparentSpeeds[i]!)
+        transparentCubes[i]!._dirtyLocal = true
+      }
     },
     { priority: -1 },
   )
