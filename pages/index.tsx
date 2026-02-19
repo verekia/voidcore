@@ -6,6 +6,15 @@ const IndexPage = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
+    const fn = async () => {
+      const eruda = await import('eruda')
+      eruda.default.init()
+    }
+
+    fn()
+  }, [])
+
+  useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
 
