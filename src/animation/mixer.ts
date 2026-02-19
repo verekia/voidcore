@@ -9,7 +9,7 @@
 //
 // AnimationAction   – Controls playback of a single clip (play, stop, fadeIn, fadeOut, crossFadeTo).
 // AnimationMixer    – Manages multiple actions, blends them, and applies the result to bones.
-// createAnimationMixer() – Factory that creates a mixer for a given skeleton.
+// new AnimationMixer(skeleton) – Creates a mixer for a given skeleton.
 
 import { quatSlerp } from '../math/index.ts'
 
@@ -412,5 +412,3 @@ export class AnimationMixer {
     }
   }
 }
-
-export const createAnimationMixer = (skeleton: Skeleton): AnimationMixer => new AnimationMixer(skeleton)

@@ -24,35 +24,35 @@ A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 sup
 
 ```ts
 import {
-  createEngine,
-  createScene,
-  createPerspectiveCamera,
-  createMesh,
-  createBoxGeometry,
-  createLambertMaterial,
-  createDirectionalLight,
-  createOrbitControls,
+  Engine,
+  Scene,
+  PerspectiveCamera,
+  Mesh,
+  BoxGeometry,
+  LambertMaterial,
+  DirectionalLight,
+  OrbitControls,
 } from 'voidcore'
 
 const canvas = document.querySelector('canvas')!
 
-const engine = await createEngine(canvas)
-const scene = createScene()
-const camera = createPerspectiveCamera({ fov: 60 })
+const engine = await Engine.create(canvas)
+const scene = new Scene()
+const camera = new PerspectiveCamera({ fov: 60 })
 camera.position[0] = 5
 camera.position[1] = 5
 camera.position[2] = 5
 
-const box = createMesh(createBoxGeometry(), createLambertMaterial({ color: [0.8, 0.2, 0.3] }))
+const box = new Mesh(new BoxGeometry(), new LambertMaterial({ color: [0.8, 0.2, 0.3] }))
 scene.add(box)
 
-const light = createDirectionalLight({ intensity: 1.5 })
+const light = new DirectionalLight({ intensity: 1.5 })
 light.position[0] = 5
 light.position[1] = 5
 light.position[2] = 10
 scene.add(light)
 
-const controls = createOrbitControls(camera, canvas)
+const controls = new OrbitControls(camera, canvas)
 
 engine.register(
   ({ dt }) => {

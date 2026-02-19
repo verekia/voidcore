@@ -1,19 +1,18 @@
 import {
-  createEngine,
-  createScene,
-  createPerspectiveCamera,
-  createDirectionalLight,
-  createLambertMaterial,
-  createOrbitControls,
+  Engine,
+  Scene,
+  PerspectiveCamera,
+  DirectionalLight,
+  LambertMaterial,
+  OrbitControls,
   loadGLTF,
-  createAnimationMixer,
-  createSphereGeometry,
-  createBoxGeometry,
-  createMesh,
-  createRaycaster,
+  AnimationMixer,
+  SphereGeometry,
+  BoxGeometry,
+  Mesh,
+  Raycaster,
   quatFromAxisAngle,
   Skeleton,
-  Mesh,
   Group,
   Node,
 } from './index.ts'
@@ -29,7 +28,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
   const params = new URLSearchParams(window.location.search)
   const forceWebGL = params.has('webgl')
 
-  const engine = await createEngine(canvas, {
+  const engine = await Engine.create(canvas, {
     antialias: true,
     bloom: { intensity: 0.8 },
     shadows: true,
@@ -37,11 +36,11 @@ export const main = async (canvas: HTMLCanvasElement) => {
   })
 
   // ─── Scene ──────────────────────────────────────────────────────
-  const scene = createScene()
+  const scene = new Scene()
   scene.ambientLight = { color: [0.5, 0.5, 0.6], intensity: 0.4 }
 
   // ─── Directional Light ──────────────────────────────────────────
-  const sun = createDirectionalLight({ color: [1, 0.95, 0.9], intensity: 1.2 })
+  const sun = new DirectionalLight({ color: [1, 0.95, 0.9], intensity: 1.2 })
   sun.position[0] = 30
   sun.position[1] = 30
   sun.position[2] = 50
@@ -49,14 +48,14 @@ export const main = async (canvas: HTMLCanvasElement) => {
   scene.add(sun)
 
   // ─── Camera + Orbit Controls ────────────────────────────────────
-  const camera = createPerspectiveCamera({ fov: 55, near: 0.1, far: 500 })
+  const camera = new PerspectiveCamera({ fov: 55, near: 0.1, far: 500 })
   camera.position[0] = 0
   camera.position[1] = -230
   camera.position[2] = 60
   camera._dirtyLocal = true
   camera._dirtyWorld = true
 
-  const controls = createOrbitControls(camera, canvas, {
+  const controls = new OrbitControls(camera, canvas, {
     target: [0, 0, 1.5],
     dampingFactor: 0.08,
     minDistance: 2,
@@ -78,7 +77,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
     }
   }
 
-  const megaxeMaterial = createLambertMaterial({
+  const megaxeMaterial = new LambertMaterial({
     palette: [
       { color: [0.95, 0.93, 0.9] },
       { color: [0.08, 0.08, 0.1] },
@@ -139,7 +138,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
   const CROSSFADE_DURATION = 0.3
 
   const roots: Node[] = []
-  const mixers: ReturnType<typeof createAnimationMixer>[] = []
+  const mixers: AnimationMixer[] = []
   const charActions: AnimationAction[][] = []
   const charCurrentClip: number[] = []
   const charNextSwitch: number[] = []
@@ -191,7 +190,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
 
     // Animation — all characters cycle through all clips with staggered offsets
     if (playerClips.length > 0) {
-      const mixer = createAnimationMixer(skeleton)
+      const mixer = new AnimationMixer(skeleton)
       const actions: AnimationAction[] = []
       for (const clip of playerClips) {
         actions.push(mixer.clipAction(clip))
@@ -218,9 +217,9 @@ export const main = async (canvas: HTMLCanvasElement) => {
   const SPHERE_RADIUS = 300
   const SPHERE_CENTER_Z = 10 - SPHERE_RADIUS // = -290
 
-  const sphereGeo = createSphereGeometry({ radius: SPHERE_RADIUS, widthSegments: 64, heightSegments: 64 })
-  const sphereMat = createLambertMaterial({ color: [0.12, 0.14, 0.18] })
-  const sphere = createMesh(sphereGeo, sphereMat)
+  const sphereGeo = new SphereGeometry({ radius: SPHERE_RADIUS, widthSegments: 64, heightSegments: 64 })
+  const sphereMat = new LambertMaterial({ color: [0.12, 0.14, 0.18] })
+  const sphere = new Mesh(sphereGeo, sphereMat)
   sphere.castShadow = false
   sphere.position[2] = SPHERE_CENTER_Z
   sphere._dirtyLocal = true
@@ -230,7 +229,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
   scene.updateGraph()
 
   // Raycast each character downward from above to land it on the sphere surface
-  const raycaster = createRaycaster()
+  const raycaster = new Raycaster()
   const rayDir: [number, number, number] = [0, 0, -1]
   const RAY_START_Z = 100 // well above sphere top (z=10)
 
@@ -263,9 +262,9 @@ export const main = async (canvas: HTMLCanvasElement) => {
   }
 
   // ─── Big Rotating Cube ──────────────────────────────────────────
-  const cubeGeo = createBoxGeometry({ width: 10, height: 10, depth: 10 })
-  const cubeMat = createLambertMaterial({ color: [0.2, 0.6, 1.0] })
-  const cube = createMesh(cubeGeo, cubeMat)
+  const cubeGeo = new BoxGeometry({ width: 10, height: 10, depth: 10 })
+  const cubeMat = new LambertMaterial({ color: [0.2, 0.6, 1.0] })
+  const cube = new Mesh(cubeGeo, cubeMat)
   cube.position[0] = 80
   cube.position[1] = 0
   cube.position[2] = 60

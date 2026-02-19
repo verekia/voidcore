@@ -12,12 +12,18 @@
 //   Projection matrix – Converts 3D eye-space coords to clip space (applies perspective)
 //   View matrix       – Converts world-space coords to eye-space (set by orbit controls)
 //
-// createPerspectiveCamera() – Factory with default values (60° FOV, 0.1–1000 range).
+// new PerspectiveCamera()   – Constructor with default values (60° FOV, 0.1–1000 range).
 
 import { mat4Create, mat4Perspective } from '../math/index.ts'
 import { Node } from './node.ts'
 
 import type { Mat4 } from '../math/index.ts'
+
+export interface CameraOptions {
+  fov?: number
+  near?: number
+  far?: number
+}
 
 export class PerspectiveCamera extends Node {
   fov: number
@@ -30,12 +36,12 @@ export class PerspectiveCamera extends Node {
   _viewProjectionMatrix: Mat4 = mat4Create()
   _projectionDirty = true
 
-  constructor(fov = 60, near = 0.1, far = 1000) {
+  constructor(opts: CameraOptions = {}) {
     super()
     this.type = 'camera'
-    this.fov = fov
-    this.near = near
-    this.far = far
+    this.fov = opts.fov ?? 60
+    this.near = opts.near ?? 0.1
+    this.far = opts.far ?? 1000
     this.frustumCulled = false
     this.castShadow = false
     this.receiveShadow = false
@@ -46,12 +52,3 @@ export class PerspectiveCamera extends Node {
     this._projectionDirty = false
   }
 }
-
-export interface CameraOptions {
-  fov?: number
-  near?: number
-  far?: number
-}
-
-export const createPerspectiveCamera = (opts: CameraOptions = {}): PerspectiveCamera =>
-  new PerspectiveCamera(opts.fov ?? 60, opts.near ?? 0.1, opts.far ?? 1000)

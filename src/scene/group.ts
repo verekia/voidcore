@@ -4,10 +4,8 @@
 // can move, rotate, or scale them as a unit. For example, a "car" group might contain
 // separate mesh children for the body, wheels, and windows.
 //
-// createGroup() – Factory that creates an empty group node.
+// new Group() – Creates an empty group node.
 
 import { Node } from './node.ts'
 
 export class Group extends Node {}
-
-export const createGroup = (): Group => new Group()
