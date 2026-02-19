@@ -17,6 +17,8 @@
 //   Uniform buffer – CPU-to-GPU data (matrices, colors) uploaded once and read by shaders.
 //   MSAA          – Multi-sample anti-aliasing (4x) to smooth jagged edges.
 //   MRT           – Multiple render targets: color and emissive are written simultaneously.
+//   Vertex packing – Normals use snorm8x4, UVs use float16x2, bone weights use unorm8x4
+//                    to reduce vertex buffer size (~40% smaller than all-float32).
 //
 // WebGPURenderer.create()  – Async factory that initializes the GPU device and pipelines.
 // WebGPURenderer.render()  – Draws one frame.
@@ -38,6 +40,7 @@ import {
 } from '../math/index.ts'
 import { Mesh } from '../scene/mesh.ts'
 import { Node } from '../scene/node.ts'
+import { packNormalsSnorm8, packUVsFloat16, packWeightsUnorm8 } from './pack.ts'
 import {
   LAMBERT_WGSL,
   BASIC_WGSL,
@@ -125,15 +128,15 @@ const SKINNED_OBJECT_UB_SIZE = 2176
 
 const VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
   { arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' as GPUVertexFormat }] },
-  { arrayStride: 12, attributes: [{ shaderLocation: 1, offset: 0, format: 'float32x3' as GPUVertexFormat }] },
-  { arrayStride: 8, attributes: [{ shaderLocation: 2, offset: 0, format: 'float32x2' as GPUVertexFormat }] },
+  { arrayStride: 4, attributes: [{ shaderLocation: 1, offset: 0, format: 'snorm8x4' as GPUVertexFormat }] },
+  { arrayStride: 4, attributes: [{ shaderLocation: 2, offset: 0, format: 'float16x2' as GPUVertexFormat }] },
   { arrayStride: 4, attributes: [{ shaderLocation: 3, offset: 0, format: 'float32' as GPUVertexFormat }] },
 ]
 
 const SKINNED_VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
   ...VERTEX_BUFFER_LAYOUT,
   { arrayStride: 4, attributes: [{ shaderLocation: 4, offset: 0, format: 'uint8x4' as GPUVertexFormat }] },
-  { arrayStride: 16, attributes: [{ shaderLocation: 5, offset: 0, format: 'float32x4' as GPUVertexFormat }] },
+  { arrayStride: 4, attributes: [{ shaderLocation: 5, offset: 0, format: 'unorm8x4' as GPUVertexFormat }] },
 ]
 
 // Shadow depth pass: position only
@@ -145,7 +148,7 @@ const SHADOW_VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
 const SHADOW_SKINNED_VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
   { arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' as GPUVertexFormat }] },
   { arrayStride: 4, attributes: [{ shaderLocation: 1, offset: 0, format: 'uint8x4' as GPUVertexFormat }] },
-  { arrayStride: 16, attributes: [{ shaderLocation: 2, offset: 0, format: 'float32x4' as GPUVertexFormat }] },
+  { arrayStride: 4, attributes: [{ shaderLocation: 2, offset: 0, format: 'unorm8x4' as GPUVertexFormat }] },
 ]
 
 // ─── Renderer ─────────────────────────────────────────────────────────
@@ -1017,24 +1020,21 @@ export class WebGPURenderer implements Renderer {
       geometry.positions.byteLength,
     )
 
+    // Pack normals: float32x3 → snorm8x4 (12 → 4 bytes/vertex)
+    const packedNormals = packNormalsSnorm8(geometry.normals, geometry.vertexCount)
     const normalBuf = d.createBuffer({
-      size: geometry.normals.byteLength,
+      size: packedNormals.byteLength,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     })
-    d.queue.writeBuffer(normalBuf, 0, geometry.normals.buffer, geometry.normals.byteOffset, geometry.normals.byteLength)
+    d.queue.writeBuffer(normalBuf, 0, packedNormals.buffer, packedNormals.byteOffset, packedNormals.byteLength)
 
-    // UVs: use geometry UVs or zero-filled
-    let uvData: Float32Array
-    if (geometry.uvs) {
-      uvData = geometry.uvs
-    } else {
-      uvData = new Float32Array(geometry.vertexCount * 2)
-    }
+    // Pack UVs: float32x2 → float16x2 (8 → 4 bytes/vertex)
+    const packedUVs = geometry.uvs ? packUVsFloat16(geometry.uvs) : new Uint16Array(geometry.vertexCount * 2)
     const uvBuf = d.createBuffer({
-      size: uvData.byteLength,
+      size: packedUVs.byteLength,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     })
-    d.queue.writeBuffer(uvBuf, 0, uvData.buffer, uvData.byteOffset, uvData.byteLength)
+    d.queue.writeBuffer(uvBuf, 0, packedUVs.buffer, packedUVs.byteOffset, packedUVs.byteLength)
 
     // Material indices: convert Uint8 to Float32 or zero-filled
     let matIdxData: Float32Array
@@ -1072,20 +1072,15 @@ export class WebGPURenderer implements Renderer {
       d.queue.writeBuffer(jointsBuf, 0, jointsU8.buffer, jointsU8.byteOffset, jointsU8.byteLength)
     }
 
-    // Weights buffer (float32x4)
+    // Pack weights: float32x4 → unorm8x4 (16 → 4 bytes/vertex)
     let weightsBuf: GPUBuffer | undefined
     if (geometry.weights) {
+      const packedWeights = packWeightsUnorm8(geometry.weights)
       weightsBuf = d.createBuffer({
-        size: geometry.weights.byteLength,
+        size: Math.max(packedWeights.byteLength, 4),
         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
       })
-      d.queue.writeBuffer(
-        weightsBuf,
-        0,
-        geometry.weights.buffer,
-        geometry.weights.byteOffset,
-        geometry.weights.byteLength,
-      )
+      d.queue.writeBuffer(weightsBuf, 0, packedWeights.buffer, packedWeights.byteOffset, packedWeights.byteLength)
     }
 
     // Destroy old buffers
