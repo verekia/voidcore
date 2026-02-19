@@ -333,7 +333,8 @@ export const main = async (canvas: HTMLCanvasElement) => {
     () => {
       engine.render(scene, camera)
       const stats = engine.getStats()
-      statsDiv.textContent = `${engine.backend.toUpperCase()} | ${Math.round(stats.fps)} FPS | Draw calls: ${stats.drawCalls}`
+      const shadowSuffix = stats.shadowDrawCalls > 0 ? ` (+${stats.shadowDrawCalls} CSM)` : ''
+      statsDiv.textContent = `${engine.backend.toUpperCase()} | ${Math.round(stats.fps)} FPS | Draw calls: ${stats.drawCalls}${shadowSuffix}`
     },
     { priority: 0 },
   )

@@ -532,6 +532,7 @@ export class WebGL2Renderer implements Renderer {
     fps: 60,
     frameTime: 0,
     drawCalls: 0,
+    shadowDrawCalls: 0,
     triangles: 0,
     visibleObjects: 0,
     culledObjects: 0,
@@ -983,6 +984,7 @@ export class WebGL2Renderer implements Renderer {
     const sortedIndices = this._sortState.indices
 
     let drawCalls = 0
+    let shadowDrawCalls = 0
     let triangles = 0
 
     // ─── Frame counter for shadow batch dedup ─────────────────────
@@ -1194,7 +1196,7 @@ export class WebGL2Renderer implements Renderer {
           }
 
           gl.drawElements(gl.TRIANGLES, mesh.geometry.indexCount, idxType, 0)
-          drawCalls++
+          shadowDrawCalls++
         }
 
         // Draw shadow-only casters
@@ -1237,7 +1239,7 @@ export class WebGL2Renderer implements Renderer {
           }
 
           gl.drawElements(gl.TRIANGLES, mesh.geometry.indexCount, idxType, 0)
-          drawCalls++
+          shadowDrawCalls++
         }
       }
 
@@ -1445,6 +1447,7 @@ export class WebGL2Renderer implements Renderer {
     this.stats.fps = this._currentFps
     this.stats.frameTime = dt
     this.stats.drawCalls = drawCalls
+    this.stats.shadowDrawCalls = shadowDrawCalls
     this.stats.triangles = triangles
     this.stats.visibleObjects = meshes.length
     this.stats.culledObjects = culledCount

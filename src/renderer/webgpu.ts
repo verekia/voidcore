@@ -295,6 +295,7 @@ export class WebGPURenderer implements Renderer {
     fps: 60,
     frameTime: 0,
     drawCalls: 0,
+    shadowDrawCalls: 0,
     triangles: 0,
     visibleObjects: 0,
     culledObjects: 0,
@@ -1421,6 +1422,7 @@ export class WebGPURenderer implements Renderer {
     const shadowActive = this.shadowEnabled && !!dirLight
 
     let drawCalls = 0
+    let shadowDrawCalls = 0
     let triangles = 0
 
     // ─── Cascade computation ─────────────────────────────────────
@@ -1633,7 +1635,7 @@ export class WebGPURenderer implements Renderer {
           shadowPass.setBindGroup(0, this.shadowBG, [c * this._alignedShadowSize])
           shadowPass.setIndexBuffer(geoBufs.index, geoBufs.indexFormat)
           shadowPass.drawIndexed(geoBufs.indexCount)
-          drawCalls++
+          shadowDrawCalls++
         }
 
         // Draw shadow-only casters
@@ -1667,7 +1669,7 @@ export class WebGPURenderer implements Renderer {
           shadowPass.setBindGroup(0, this.shadowBG, [c * this._alignedShadowSize])
           shadowPass.setIndexBuffer(geoBufs.index, geoBufs.indexFormat)
           shadowPass.drawIndexed(geoBufs.indexCount)
-          drawCalls++
+          shadowDrawCalls++
         }
 
         shadowPass.end()
@@ -1807,6 +1809,7 @@ export class WebGPURenderer implements Renderer {
     this.stats.fps = this._currentFps
     this.stats.frameTime = dt
     this.stats.drawCalls = drawCalls
+    this.stats.shadowDrawCalls = shadowDrawCalls
     this.stats.triangles = triangles
     this.stats.visibleObjects = meshes.length
     this.stats.culledObjects = culledCount

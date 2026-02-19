@@ -35,6 +35,7 @@ export interface FrameStats {
   fps: number
   frameTime: number
   drawCalls: number
+  shadowDrawCalls: number
   triangles: number
   visibleObjects: number
   culledObjects: number
