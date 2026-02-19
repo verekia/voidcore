@@ -16,6 +16,10 @@
 //   - Clip space depth is [-1, 1] instead of WebGPU's [0, 1]
 //   - Shadow uses mat4Ortho ([-1,1] depth) instead of mat4OrthoZO ([0,1] depth)
 //
+// Vertex packing: normals → snorm8, UVs → float16, material indices → uint8,
+// joints → uint8, bone weights → unorm8. This reduces vertex buffer size by ~50%
+// compared to using float32 for everything.
+//
 // WebGL2Renderer.render()  – Draws one frame.
 // WebGL2Renderer.dispose() – Releases all GPU resources.
 
@@ -35,6 +39,7 @@ import {
 } from '../math/index.ts'
 import { Mesh } from '../scene/mesh.ts'
 import { Node } from '../scene/node.ts'
+import { packNormalsSnorm8, packUVsFloat16, packWeightsUnorm8 } from './pack.ts'
 import {
   LAMBERT_VERT,
   LAMBERT_FRAG,
@@ -174,51 +179,47 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
   gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer)
   gl.bufferData(gl.ARRAY_BUFFER, geometry.positions, gl.STATIC_DRAW)
 
+  // Pack normals: float32x3 → snorm8x4 (12 → 4 bytes/vertex)
+  const packedNormals = packNormalsSnorm8(geometry.normals, geometry.vertexCount)
   const normBuffer = gl.createBuffer()!
   gl.bindBuffer(gl.ARRAY_BUFFER, normBuffer)
-  gl.bufferData(gl.ARRAY_BUFFER, geometry.normals, gl.STATIC_DRAW)
+  gl.bufferData(gl.ARRAY_BUFFER, packedNormals, gl.STATIC_DRAW)
 
   const idxBuffer = gl.createBuffer()!
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuffer)
   gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geometry.indices, gl.STATIC_DRAW)
 
+  // Pack UVs: float32x2 → float16x2 (8 → 4 bytes/vertex)
   let uvBuffer: WebGLBuffer | undefined
   if (geometry.uvs) {
     uvBuffer = gl.createBuffer()!
     gl.bindBuffer(gl.ARRAY_BUFFER, uvBuffer)
-    gl.bufferData(gl.ARRAY_BUFFER, geometry.uvs, gl.STATIC_DRAW)
+    gl.bufferData(gl.ARRAY_BUFFER, packUVsFloat16(geometry.uvs), gl.STATIC_DRAW)
   }
 
+  // Material index — upload Uint8Array directly (no Float32 conversion needed)
   let matIdxBuffer: WebGLBuffer | undefined
   if (geometry.materialIndices) {
     matIdxBuffer = gl.createBuffer()!
     gl.bindBuffer(gl.ARRAY_BUFFER, matIdxBuffer)
-    // Convert Uint8 to Float32 for the shader attribute
-    const floatIndices = new Float32Array(geometry.materialIndices.length)
-    for (let i = 0; i < geometry.materialIndices.length; i++) {
-      floatIndices[i] = geometry.materialIndices[i]!
-    }
-    gl.bufferData(gl.ARRAY_BUFFER, floatIndices, gl.STATIC_DRAW)
+    gl.bufferData(gl.ARRAY_BUFFER, geometry.materialIndices, gl.STATIC_DRAW)
   }
 
-  // Joints buffer (location 4) — convert to float for vertexAttribPointer
+  // Joints buffer — upload Uint8Array directly (no Float32 conversion needed)
   let jointsBuffer: WebGLBuffer | undefined
   if (geometry.joints) {
+    const jointsU8 = geometry.joints instanceof Uint8Array ? geometry.joints : new Uint8Array(geometry.joints)
     jointsBuffer = gl.createBuffer()!
     gl.bindBuffer(gl.ARRAY_BUFFER, jointsBuffer)
-    const floatJoints = new Float32Array(geometry.joints.length)
-    for (let i = 0; i < geometry.joints.length; i++) {
-      floatJoints[i] = geometry.joints[i]!
-    }
-    gl.bufferData(gl.ARRAY_BUFFER, floatJoints, gl.STATIC_DRAW)
+    gl.bufferData(gl.ARRAY_BUFFER, jointsU8, gl.STATIC_DRAW)
   }
 
-  // Weights buffer (location 5)
+  // Pack weights: float32x4 → unorm8x4 (16 → 4 bytes/vertex)
   let weightsBuffer: WebGLBuffer | undefined
   if (geometry.weights) {
     weightsBuffer = gl.createBuffer()!
     gl.bindBuffer(gl.ARRAY_BUFFER, weightsBuffer)
-    gl.bufferData(gl.ARRAY_BUFFER, geometry.weights, gl.STATIC_DRAW)
+    gl.bufferData(gl.ARRAY_BUFFER, packWeightsUnorm8(geometry.weights), gl.STATIC_DRAW)
   }
 
   // Create VAO
@@ -230,42 +231,42 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
   gl.enableVertexAttribArray(0)
   gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0)
 
-  // Normal (location 1)
+  // Normal (location 1) — snorm8x4: BYTE normalized, GPU auto-converts to [-1,1] float
   gl.bindBuffer(gl.ARRAY_BUFFER, normBuffer)
   gl.enableVertexAttribArray(1)
-  gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0)
+  gl.vertexAttribPointer(1, 4, gl.BYTE, true, 0, 0)
 
-  // UV (location 2)
+  // UV (location 2) — float16x2: HALF_FLOAT, GPU auto-converts to float
   if (uvBuffer) {
     gl.bindBuffer(gl.ARRAY_BUFFER, uvBuffer)
     gl.enableVertexAttribArray(2)
-    gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 0, 0)
+    gl.vertexAttribPointer(2, 2, gl.HALF_FLOAT, false, 0, 0)
   }
 
-  // Material index (location 3)
+  // Material index (location 3) — uint8 not normalized: byte value N becomes float N.0
   if (matIdxBuffer) {
     gl.bindBuffer(gl.ARRAY_BUFFER, matIdxBuffer)
     gl.enableVertexAttribArray(3)
-    gl.vertexAttribPointer(3, 1, gl.FLOAT, false, 0, 0)
+    gl.vertexAttribPointer(3, 1, gl.UNSIGNED_BYTE, false, 1, 0)
   } else {
     gl.disableVertexAttribArray(3)
     gl.vertexAttrib1f(3, 0.0)
   }
 
-  // Joints (location 4) — as vec4 float
+  // Joints (location 4) — uint8 not normalized: byte value N becomes float N.0
   if (jointsBuffer) {
     gl.bindBuffer(gl.ARRAY_BUFFER, jointsBuffer)
     gl.enableVertexAttribArray(4)
-    gl.vertexAttribPointer(4, 4, gl.FLOAT, false, 0, 0)
+    gl.vertexAttribPointer(4, 4, gl.UNSIGNED_BYTE, false, 0, 0)
   } else {
     gl.disableVertexAttribArray(4)
   }
 
-  // Weights (location 5) — as vec4 float
+  // Weights (location 5) — unorm8x4: UNSIGNED_BYTE normalized, GPU maps [0,255]→[0.0,1.0]
   if (weightsBuffer) {
     gl.bindBuffer(gl.ARRAY_BUFFER, weightsBuffer)
     gl.enableVertexAttribArray(5)
-    gl.vertexAttribPointer(5, 4, gl.FLOAT, false, 0, 0)
+    gl.vertexAttribPointer(5, 4, gl.UNSIGNED_BYTE, true, 0, 0)
   } else {
     gl.disableVertexAttribArray(5)
   }
@@ -721,17 +722,17 @@ export class WebGL2Renderer implements Renderer {
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0)
 
     if (skinned) {
-      // Joints (location 4)
+      // Joints (location 4) — uint8 not normalized
       if (bufs.joints) {
         gl.bindBuffer(gl.ARRAY_BUFFER, bufs.joints)
         gl.enableVertexAttribArray(4)
-        gl.vertexAttribPointer(4, 4, gl.FLOAT, false, 0, 0)
+        gl.vertexAttribPointer(4, 4, gl.UNSIGNED_BYTE, false, 0, 0)
       }
-      // Weights (location 5)
+      // Weights (location 5) — unorm8 normalized
       if (bufs.weights) {
         gl.bindBuffer(gl.ARRAY_BUFFER, bufs.weights)
         gl.enableVertexAttribArray(5)
-        gl.vertexAttribPointer(5, 4, gl.FLOAT, false, 0, 0)
+        gl.vertexAttribPointer(5, 4, gl.UNSIGNED_BYTE, true, 0, 0)
       }
     }
 
