@@ -29,7 +29,7 @@ const floatToHalf = (val: number): number => {
   // Extract sign, exponent, mantissa from float32
   const sign = (b >>> 16) & 0x8000
   const exp = ((b >>> 23) & 0xff) - 112 // Rebias exponent: f32 bias 127 → f16 bias 15
-  const man = (b & 0x7fffff) >>> 13 // Truncate mantissa from 23 to 10 bits
+  const man = (b & 0x7fffff) >>> 13 // Truncate mantissa from 23 to 10 bits (rounds toward zero)
 
   if (exp <= 0) return sign // Underflow → ±0 (handles f32 zero and denormals)
   if (exp >= 31) return sign | 0x7c00 // Overflow → ±Infinity (handles f32 inf/NaN)

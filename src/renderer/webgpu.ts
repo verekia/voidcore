@@ -1036,7 +1036,8 @@ export class WebGPURenderer implements Renderer {
     })
     d.queue.writeBuffer(uvBuf, 0, packedUVs.buffer, packedUVs.byteOffset, packedUVs.byteLength)
 
-    // Material indices: convert Uint8 to Float32 or zero-filled
+    // Material indices: convert Uint8 to Float32 (WebGPU has no uint8 scalar vertex format,
+    // so we can't match WebGL2's raw Uint8 upload — the smallest integer format is uint8x2)
     let matIdxData: Float32Array
     if (geometry.materialIndices) {
       matIdxData = new Float32Array(geometry.materialIndices.length)

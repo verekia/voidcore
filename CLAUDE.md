@@ -33,6 +33,7 @@ src/
     shaders.ts           – GLSL shaders
     shaders-wgsl.ts      – WGSL shaders
     shared.ts            – Shared traversal/culling utilities
+    pack.ts              – Vertex attribute packing (snorm8, float16, unorm8)
     sort.ts              – Radix sort for draw order
   scene/                 – Scene graph nodes (Node, Scene, Mesh, Group, Camera, Light)
 pages/                   – Next.js example app (not part of the engine)
