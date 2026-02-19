@@ -15,6 +15,7 @@ import {
   Skeleton,
   Group,
   Node,
+  createOverlayManager,
 } from './index.ts'
 
 import type { AnimationClip, AnimationAction } from './index.ts'
@@ -275,6 +276,14 @@ export const main = async (canvas: HTMLCanvasElement) => {
   cube.castShadow = true
   scene.add(cube)
 
+  // ─── HTML Overlay ─────────────────────────────────────────────────
+  const overlay = createOverlayManager(canvas)
+  const labelDiv = document.createElement('div')
+  labelDiv.textContent = 'Big Cube'
+  labelDiv.style.cssText =
+    'color:#fff;font:bold 16px monospace;background:rgba(0,0,0,0.6);padding:4px 10px;border-radius:4px;white-space:nowrap'
+  overlay.add({ element: labelDiv, node: cube, center: true })
+
   // ─── Transparent Cubes (WBOIT test) ───────────────────────────────
   const TRANSPARENT_COUNT = 10
   const TRANSPARENT_RING_RADIUS = 30
@@ -388,6 +397,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
   engine.register(
     ({ elapsed }) => {
       engine.render(scene, camera)
+      overlay.update(camera, canvas.clientWidth, canvas.clientHeight)
       if (elapsed - lastStatsUpdate >= 0.5) {
         lastStatsUpdate = elapsed
         const stats = engine.getStats()

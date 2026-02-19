@@ -17,6 +17,7 @@ A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 sup
 - **Raycasting** – BVH-accelerated ray-mesh intersection for mouse picking
 - **DPR limiting** – Configurable max device pixel ratio (1.25 mobile / 1.5 desktop default)
 - **Priority scheduler** – Single rAF loop with priority-ordered callbacks and FPS capping
+- **HTML overlay** – DOM elements tracking 3D world positions with dirty checking, depth z-index, distance scaling
 - **Orbit controls** – Mouse/touch camera controls with damping and inertia
 - **Zero-allocation math** – Float32Array-backed vectors, matrices, and quaternions
 - **Z-up coordinate system** – Right-handed, Z-up convention throughout
@@ -97,6 +98,7 @@ The engine is organized into focused modules:
 | `math/`        | Linear algebra primitives (vec3, mat4, quat, AABB)   |
 | `animation/`   | Skeletal animation system                            |
 | `raycasting/`  | BVH-accelerated ray intersection                     |
+| `overlay.ts`   | HTML overlay (DOM elements tracking 3D positions)    |
 | `controls/`    | Camera interaction (orbit controls)                  |
 | `loaders/`     | Asset importers (glTF/GLB)                           |
 

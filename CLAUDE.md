@@ -11,6 +11,7 @@ VoidCore is a performant 3D graphics engine written in TypeScript. It supports b
 - **Rendering**: Dual-backend (WebGPU/WebGL2), MSAA, MRT (color + emissive), 3-cascade shadow maps (CSM), bloom post-processing, configurable DPR limiting. Transparency uses WBOIT (Weighted Blended OIT) when `OES_draw_buffers_indexed` is available, with a sorted alpha-blend fallback for devices that lack the extension (some Android GPUs).
 - **Scheduler**: Single rAF loop with priority-ordered callbacks, global/per-callback FPS caps. Both `maxFps` and `maxDpr` can be changed dynamically at runtime.
 - **Scene graph**: Tree of Nodes with dirty-flag world matrix propagation.
+- **HTML overlay**: DOM elements tracked to 3D world positions via CSS transforms. Supports node tracking with offset, centering, dirty checking, depth-based z-index, distance scaling, and per-element pointer events.
 
 ## Project Structure
 
@@ -35,6 +36,7 @@ src/
     shared.ts            – Shared traversal/culling utilities
     pack.ts              – Vertex attribute packing (snorm8, float16, unorm8)
     sort.ts              – Radix sort for draw order
+  overlay.ts             – HTML overlay manager (DOM elements tracking 3D positions)
   scene/                 – Scene graph nodes (Node, Scene, Mesh, Group, Camera, Light)
 pages/                   – Next.js example app (not part of the engine)
 ```

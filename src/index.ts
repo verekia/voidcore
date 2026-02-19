@@ -42,6 +42,9 @@ export { Raycaster, buildMeshBVH, type RaycastHit } from './raycasting/index.ts'
 // Loaders
 export { loadGLTF } from './loaders/gltf.ts'
 
+// Overlay
+export { createOverlayManager, type OverlayHandle, type OverlayOptions } from './overlay.ts'
+
 // Math
 export {
   type Vec2,
