@@ -68,35 +68,23 @@ export const applyProps = (
       continue
     }
 
-    // Transform arrays: copy element-by-element into Float32Array, set dirty flag
+    // Transform arrays: use setters which handle dirty flags automatically
     if (key === 'position' && Array.isArray(newVal)) {
-      obj.position[0] = newVal[0]
-      obj.position[1] = newVal[1]
-      obj.position[2] = newVal[2]
-      obj._dirtyLocal = true
+      obj.setPosition(newVal[0], newVal[1], newVal[2])
       continue
     }
 
     if (key === 'rotation' && Array.isArray(newVal)) {
-      obj.rotation[0] = newVal[0]
-      obj.rotation[1] = newVal[1]
-      obj.rotation[2] = newVal[2]
-      obj.rotation[3] = newVal[3]
-      obj._dirtyLocal = true
+      obj.setRotation(newVal[0], newVal[1], newVal[2], newVal[3])
       continue
     }
 
     if (key === 'scale') {
       if (typeof newVal === 'number') {
-        obj.scale[0] = newVal
-        obj.scale[1] = newVal
-        obj.scale[2] = newVal
+        obj.setScale(newVal)
       } else if (Array.isArray(newVal)) {
-        obj.scale[0] = newVal[0]
-        obj.scale[1] = newVal[1]
-        obj.scale[2] = newVal[2]
+        obj.setScale(newVal[0], newVal[1], newVal[2])
       }
-      obj._dirtyLocal = true
       continue
     }
 

@@ -448,23 +448,13 @@ export const loadGLTF = async (url: string, options?: LoadOptions): Promise<GLTF
 
     // Apply transforms
     if (nodeDef.translation) {
-      node.position[0] = nodeDef.translation[0]
-      node.position[1] = nodeDef.translation[1]
-      node.position[2] = nodeDef.translation[2]
-      node._dirtyLocal = true
+      node.setPosition(nodeDef.translation[0], nodeDef.translation[1], nodeDef.translation[2])
     }
     if (nodeDef.rotation) {
-      node.rotation[0] = nodeDef.rotation[0]
-      node.rotation[1] = nodeDef.rotation[1]
-      node.rotation[2] = nodeDef.rotation[2]
-      node.rotation[3] = nodeDef.rotation[3]
-      node._dirtyLocal = true
+      node.setRotation(nodeDef.rotation[0], nodeDef.rotation[1], nodeDef.rotation[2], nodeDef.rotation[3])
     }
     if (nodeDef.scale) {
-      node.scale[0] = nodeDef.scale[0]
-      node.scale[1] = nodeDef.scale[1]
-      node.scale[2] = nodeDef.scale[2]
-      node._dirtyLocal = true
+      node.setScale(nodeDef.scale[0], nodeDef.scale[1], nodeDef.scale[2])
     }
 
     nodeMap.set(nodeIdx, node)

@@ -42,19 +42,12 @@ export const main = async (canvas: HTMLCanvasElement) => {
 
   // ─── Directional Light ──────────────────────────────────────────
   const sun = new DirectionalLight({ color: [1, 0.95, 0.9], intensity: 1.2 })
-  sun.position[0] = 30
-  sun.position[1] = 30
-  sun.position[2] = 50
-  sun._dirtyLocal = true
+  sun.setPosition(30, 30, 50)
   scene.add(sun)
 
   // ─── Camera + Orbit Controls ────────────────────────────────────
   const camera = new PerspectiveCamera({ fov: 55, near: 0.1, far: 500 })
-  camera.position[0] = 0
-  camera.position[1] = -230
-  camera.position[2] = 60
-  camera._dirtyLocal = true
-  camera._dirtyWorld = true
+  camera.setPosition(0, -230, 60)
 
   const controls = new OrbitControls(camera, canvas, {
     target: [0, 0, 1.5],
@@ -111,17 +104,9 @@ export const main = async (canvas: HTMLCanvasElement) => {
       clone.name = src.name
       clone.visible = src.visible
       clone.frustumCulled = src.frustumCulled
-      clone.position[0] = src.position[0]!
-      clone.position[1] = src.position[1]!
-      clone.position[2] = src.position[2]!
-      clone.rotation[0] = src.rotation[0]!
-      clone.rotation[1] = src.rotation[1]!
-      clone.rotation[2] = src.rotation[2]!
-      clone.rotation[3] = src.rotation[3]!
-      clone.scale[0] = src.scale[0]!
-      clone.scale[1] = src.scale[1]!
-      clone.scale[2] = src.scale[2]!
-      clone._dirtyLocal = true
+      clone.setPosition(src.position[0]!, src.position[1]!, src.position[2]!)
+      clone.setRotation(src.rotation[0]!, src.rotation[1]!, src.rotation[2]!, src.rotation[3]!)
+      clone.setScale(src.scale[0]!, src.scale[1]!, src.scale[2]!)
 
       nodeMap.set(src, clone)
 
@@ -168,20 +153,14 @@ export const main = async (canvas: HTMLCanvasElement) => {
     // Position in grid
     const col = i % cols
     const row = Math.floor(i / cols)
-    root.position[0] = (col - (cols - 1) / 2) * GRID_SPACING
-    root.position[1] = (row - (rows - 1) / 2) * GRID_SPACING
-    root._dirtyLocal = true
+    root.setPosition((col - (cols - 1) / 2) * GRID_SPACING, (row - (rows - 1) / 2) * GRID_SPACING, 0)
 
     // Attach megaxe clone
     if (megaxeTemplate) {
       const handBone = skeleton.getBone('Hand.R')
       if (handBone) {
         const axeClone = new Mesh(megaxeTemplate.geometry, megaxeMaterial)
-        axeClone.rotation[0] = 0
-        axeClone.rotation[1] = 0
-        axeClone.rotation[2] = 1
-        axeClone.rotation[3] = 0
-        axeClone._dirtyLocal = true
+        axeClone.setRotation(0, 0, 1, 0)
         handBone.add(axeClone)
       }
     }
@@ -222,8 +201,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
   const sphereMat = new LambertMaterial({ color: [0.12, 0.14, 0.18] })
   const sphere = new Mesh(sphereGeo, sphereMat)
   sphere.castShadow = false
-  sphere.position[2] = SPHERE_CENTER_Z
-  sphere._dirtyLocal = true
+  sphere.setPosition(0, 0, SPHERE_CENTER_Z)
   scene.add(sphere)
 
   // Update world matrices so the sphere's _worldMatrix is ready for raycasting
@@ -246,9 +224,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
     const y = root.position[1]!
     raycaster.set(new Float32Array([x, y, RAY_START_Z]), new Float32Array(rayDir))
     const hits = raycaster.intersectObject(sphere)
-    if (hits.length > 0) {
-      root.position[2] = hits[0]!.point[2]!
-    }
+    const z = hits.length > 0 ? hits[0]!.point[2]! : root.position[2]!
 
     // Store orbit origin and assign a random starting angle so characters spread out
     charOriginX.push(x)
@@ -257,22 +233,15 @@ export const main = async (canvas: HTMLCanvasElement) => {
     charOrbitAngle.push(angle)
 
     // Apply initial orbit offset
-    root.position[0] = x + Math.cos(angle) * ORBIT_RADIUS
-    root.position[1] = y + Math.sin(angle) * ORBIT_RADIUS
-    root._dirtyLocal = true
+    root.setPosition(x + Math.cos(angle) * ORBIT_RADIUS, y + Math.sin(angle) * ORBIT_RADIUS, z)
   }
 
   // ─── Big Rotating Cube ──────────────────────────────────────────
   const cubeGeo = new BoxGeometry({ width: 10, height: 10, depth: 10 })
   const cubeMat = new LambertMaterial({ color: [0.2, 0.6, 1.0] })
   const cube = new Mesh(cubeGeo, cubeMat)
-  cube.position[0] = 80
-  cube.position[1] = 0
-  cube.position[2] = 60
-  cube.scale[0] = 5
-  cube.scale[1] = 5
-  cube.scale[2] = 5
-  cube._dirtyLocal = true
+  cube.setPosition(80, 0, 60)
+  cube.setScale(5)
   cube.castShadow = true
   scene.add(cube)
 
@@ -317,10 +286,11 @@ export const main = async (canvas: HTMLCanvasElement) => {
     const angle = (i / TRANSPARENT_COUNT) * Math.PI * 2
     const mat = new LambertMaterial({ color: transparentColors[i]!, opacity: 0.4 })
     const mesh = new Mesh(transparentCubeGeo, mat)
-    mesh.position[0] = Math.cos(angle) * TRANSPARENT_RING_RADIUS
-    mesh.position[1] = Math.sin(angle) * TRANSPARENT_RING_RADIUS
-    mesh.position[2] = TRANSPARENT_Z
-    mesh._dirtyLocal = true
+    mesh.setPosition(
+      Math.cos(angle) * TRANSPARENT_RING_RADIUS,
+      Math.sin(angle) * TRANSPARENT_RING_RADIUS,
+      TRANSPARENT_Z,
+    )
     scene.add(mesh)
     transparentCubes.push(mesh)
 
@@ -360,9 +330,8 @@ export const main = async (canvas: HTMLCanvasElement) => {
         // Circular orbit around each character's origin point
         charOrbitAngle[i] = charOrbitAngle[i]! + ORBIT_SPEED * dt
         const a = charOrbitAngle[i]!
-        roots[i]!.position[0] = charOriginX[i]! + Math.cos(a) * ORBIT_RADIUS
-        roots[i]!.position[1] = charOriginY[i]! + Math.sin(a) * ORBIT_RADIUS
-        roots[i]!._dirtyLocal = true
+        roots[i]!.setPositionX(charOriginX[i]! + Math.cos(a) * ORBIT_RADIUS)
+        roots[i]!.setPositionY(charOriginY[i]! + Math.sin(a) * ORBIT_RADIUS)
       }
 
       for (let i = 0; i < mixers.length; i++) {
@@ -380,12 +349,12 @@ export const main = async (canvas: HTMLCanvasElement) => {
 
       // Rotate cube around Z axis (Z-up)
       quatFromAxisAngle(cube.rotation, cubeAxis, elapsed)
-      cube._dirtyLocal = true
+      cube.markTransformDirty()
 
       // Rotate transparent cubes individually
       for (let i = 0; i < transparentCubes.length; i++) {
         quatFromAxisAngle(transparentCubes[i]!.rotation, transparentAxes[i]!, elapsed * transparentSpeeds[i]!)
-        transparentCubes[i]!._dirtyLocal = true
+        transparentCubes[i]!.markTransformDirty()
       }
     },
     { priority: -1 },

@@ -9,6 +9,13 @@
 // If either the local matrix or a parent changed, the world matrix is recomputed as
 // worldMatrix = parent.worldMatrix × localMatrix.
 //
+// node.setPosition(x, y, z) – Sets position and marks the transform dirty.
+// node.setPositionX/Y/Z(v) – Sets a single position component and marks dirty.
+// node.setRotation(x, y, z, w) – Sets quaternion rotation and marks the transform dirty.
+// node.setScale(x, y, z) or node.setScale(s) – Sets scale (uniform or per-axis) and marks dirty.
+// node.setScaleX/Y/Z(v) – Sets a single scale component and marks dirty.
+// node.markTransformDirty() – Marks the local transform as needing recalculation (use after
+//   directly writing to the position/rotation/scale Float32Arrays via math utilities).
 // node.add()     – Adds child nodes (reparenting if already attached elsewhere).
 // node.remove()  – Detaches a child node.
 // node.traverse() – Walks the subtree, calling a callback on each node.
@@ -102,10 +109,68 @@ export class Node {
     const cp = Math.cos(pitch * 0.5),
       sp = Math.sin(pitch * 0.5)
 
-    this.rotation[0] = -sp * sy
-    this.rotation[1] = sp * cy
-    this.rotation[2] = sy * cp
-    this.rotation[3] = cy * cp
+    this.setRotation(-sp * sy, sp * cy, sy * cp, cy * cp)
+  }
+
+  setPosition(x: number, y: number, z: number) {
+    this.position[0] = x
+    this.position[1] = y
+    this.position[2] = z
+    this._dirtyLocal = true
+  }
+
+  setPositionX(x: number) {
+    this.position[0] = x
+    this._dirtyLocal = true
+  }
+
+  setPositionY(y: number) {
+    this.position[1] = y
+    this._dirtyLocal = true
+  }
+
+  setPositionZ(z: number) {
+    this.position[2] = z
+    this._dirtyLocal = true
+  }
+
+  setRotation(x: number, y: number, z: number, w: number) {
+    this.rotation[0] = x
+    this.rotation[1] = y
+    this.rotation[2] = z
+    this.rotation[3] = w
+    this._dirtyLocal = true
+  }
+
+  setScale(x: number, y?: number, z?: number) {
+    if (y === undefined) {
+      this.scale[0] = x
+      this.scale[1] = x
+      this.scale[2] = x
+    } else {
+      this.scale[0] = x
+      this.scale[1] = y
+      this.scale[2] = z!
+    }
+    this._dirtyLocal = true
+  }
+
+  setScaleX(x: number) {
+    this.scale[0] = x
+    this._dirtyLocal = true
+  }
+
+  setScaleY(y: number) {
+    this.scale[1] = y
+    this._dirtyLocal = true
+  }
+
+  setScaleZ(z: number) {
+    this.scale[2] = z
+    this._dirtyLocal = true
+  }
+
+  markTransformDirty() {
     this._dirtyLocal = true
   }
 }

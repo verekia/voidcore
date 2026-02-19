@@ -5,7 +5,7 @@ A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 sup
 ## Features
 
 - **Dual rendering backends** – WebGPU (modern, fast) with automatic WebGL2 fallback
-- **Scene graph** – Hierarchical node system with dirty-flag matrix propagation
+- **Scene graph** – Hierarchical node system with dirty-flag matrix propagation and transform setters (`setPosition`, `setPositionX/Y/Z`, `setRotation`, `setScale`, `setScaleX/Y/Z`)
 - **Skeletal animation** – Clip-based animation with blending, crossfading, and loop modes
 - **Procedural geometry** – Box, sphere, plane, cone, cylinder, capsule, circle
 - **glTF/GLB loading** – Import 3D models with Draco compression support
@@ -41,17 +41,13 @@ const canvas = document.querySelector('canvas')!
 const engine = await Engine.create(canvas)
 const scene = new Scene()
 const camera = new PerspectiveCamera({ fov: 60 })
-camera.position[0] = 5
-camera.position[1] = 5
-camera.position[2] = 5
+camera.setPosition(5, 5, 5)
 
 const box = new Mesh(new BoxGeometry(), new LambertMaterial({ color: [0.8, 0.2, 0.3] }))
 scene.add(box)
 
 const light = new DirectionalLight({ intensity: 1.5 })
-light.position[0] = 5
-light.position[1] = 5
-light.position[2] = 10
+light.setPosition(5, 5, 10)
 scene.add(light)
 
 const controls = new OrbitControls(camera, canvas)
@@ -89,7 +85,7 @@ const RotatingBox = () => {
     const mesh = ref.current
     if (!mesh) return
     quatFromAxisAngle(mesh.rotation, [0, 0, 1], elapsed)
-    mesh._dirtyLocal = true
+    mesh.markTransformDirty()
   })
 
   return (

@@ -107,11 +107,7 @@ export const Canvas = ({
         far: cameraProps?.far ?? 1000,
       })
       if (cameraProps?.position) {
-        camera.position[0] = cameraProps.position[0]
-        camera.position[1] = cameraProps.position[1]
-        camera.position[2] = cameraProps.position[2]
-        camera._dirtyLocal = true
-        camera._dirtyWorld = true
+        camera.setPosition(cameraProps.position[0], cameraProps.position[1], cameraProps.position[2])
       }
 
       const raycaster = new Raycaster()

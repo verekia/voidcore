@@ -285,17 +285,14 @@ export class AnimationMixer {
       const p = bi * 3
       const r = bi * 4
 
-      bone.position[0] = this._blendedPos[p]!
-      bone.position[1] = this._blendedPos[p + 1]!
-      bone.position[2] = this._blendedPos[p + 2]!
-      bone.rotation[0] = this._blendedRot[r]!
-      bone.rotation[1] = this._blendedRot[r + 1]!
-      bone.rotation[2] = this._blendedRot[r + 2]!
-      bone.rotation[3] = this._blendedRot[r + 3]!
-      bone.scale[0] = this._blendedScale[p]!
-      bone.scale[1] = this._blendedScale[p + 1]!
-      bone.scale[2] = this._blendedScale[p + 2]!
-      bone._dirtyLocal = true
+      bone.setPosition(this._blendedPos[p]!, this._blendedPos[p + 1]!, this._blendedPos[p + 2]!)
+      bone.setRotation(
+        this._blendedRot[r]!,
+        this._blendedRot[r + 1]!,
+        this._blendedRot[r + 2]!,
+        this._blendedRot[r + 3]!,
+      )
+      bone.setScale(this._blendedScale[p]!, this._blendedScale[p + 1]!, this._blendedScale[p + 2]!)
     }
     this.skeleton._dirty = true
   }

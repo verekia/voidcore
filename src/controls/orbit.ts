@@ -132,11 +132,11 @@ export class OrbitControls {
 
     // Compute camera position from spherical coordinates (Z-up)
     const cosEl = Math.cos(this.elevation)
-    this.camera.position[0] = this.target[0]! + this.distance * cosEl * Math.cos(this.azimuth)
-    this.camera.position[1] = this.target[1]! + this.distance * cosEl * Math.sin(this.azimuth)
-    this.camera.position[2] = this.target[2]! + this.distance * Math.sin(this.elevation)
-    this.camera._dirtyLocal = true
-    this.camera._dirtyWorld = true
+    this.camera.setPosition(
+      this.target[0]! + this.distance * cosEl * Math.cos(this.azimuth),
+      this.target[1]! + this.distance * cosEl * Math.sin(this.azimuth),
+      this.target[2]! + this.distance * Math.sin(this.elevation),
+    )
 
     // Compute view matrix directly (bypasses Node.lookAt quaternion convention)
     mat4LookAt(this.camera._viewMatrix, this.camera.position, this.target, VEC3_UP)

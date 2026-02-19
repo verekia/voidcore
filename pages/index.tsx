@@ -82,7 +82,7 @@ const RotatingCube = () => {
     const mesh = meshRef.current
     if (!mesh) return
     quatFromAxisAngle(mesh.rotation, cubeAxis, elapsed)
-    mesh._dirtyLocal = true
+    mesh.markTransformDirty()
   })
 
   return (
@@ -148,7 +148,7 @@ const TransparentCube = ({ index }: { index: number }) => {
     const mesh = meshRef.current
     if (!mesh) return
     quatFromAxisAngle(mesh.rotation, axis, elapsed * speed)
-    mesh._dirtyLocal = true
+    mesh.markTransformDirty()
   })
 
   return (
@@ -240,17 +240,9 @@ const Characters = ({ count }: { count: number }) => {
         clone.name = src.name
         clone.visible = src.visible
         clone.frustumCulled = src.frustumCulled
-        clone.position[0] = src.position[0]!
-        clone.position[1] = src.position[1]!
-        clone.position[2] = src.position[2]!
-        clone.rotation[0] = src.rotation[0]!
-        clone.rotation[1] = src.rotation[1]!
-        clone.rotation[2] = src.rotation[2]!
-        clone.rotation[3] = src.rotation[3]!
-        clone.scale[0] = src.scale[0]!
-        clone.scale[1] = src.scale[1]!
-        clone.scale[2] = src.scale[2]!
-        clone._dirtyLocal = true
+        clone.setPosition(src.position[0]!, src.position[1]!, src.position[2]!)
+        clone.setRotation(src.rotation[0]!, src.rotation[1]!, src.rotation[2]!, src.rotation[3]!)
+        clone.setScale(src.scale[0]!, src.scale[1]!, src.scale[2]!)
         nodeMap.set(src, clone)
         for (const child of src.children) {
           clone.add(cloneNode(child))
@@ -287,19 +279,13 @@ const Characters = ({ count }: { count: number }) => {
 
       const col = i % cols
       const row = Math.floor(i / cols)
-      root.position[0] = (col - (cols - 1) / 2) * GRID_SPACING
-      root.position[1] = (row - (cols - 1) / 2) * GRID_SPACING
-      root._dirtyLocal = true
+      root.setPosition((col - (cols - 1) / 2) * GRID_SPACING, (row - (cols - 1) / 2) * GRID_SPACING, 0)
 
       if (megaxeTemplate) {
         const handBone = skeleton.getBone('Hand.R')
         if (handBone) {
           const axeClone = new Mesh(megaxeTemplate.geometry, megaxeMaterial)
-          axeClone.rotation[0] = 0
-          axeClone.rotation[1] = 0
-          axeClone.rotation[2] = 1
-          axeClone.rotation[3] = 0
-          axeClone._dirtyLocal = true
+          axeClone.setRotation(0, 0, 1, 0)
           handBone.add(axeClone)
         }
       }
@@ -351,11 +337,12 @@ const Characters = ({ count }: { count: number }) => {
       const x = root.position[0]!
       const y = root.position[1]!
 
+      let z = root.position[2]!
       if (sphereMesh) {
         raycaster.set(new Float32Array([x, y, RAY_START_Z]), new Float32Array(rayDir))
         const hits = raycaster.intersectObject(sphereMesh)
         if (hits.length > 0) {
-          root.position[2] = hits[0]!.point[2]!
+          z = hits[0]!.point[2]!
         }
       }
 
@@ -363,9 +350,7 @@ const Characters = ({ count }: { count: number }) => {
       charOriginY.push(y)
       const a = Math.random() * Math.PI * 2
       charOrbitAngle.push(a)
-      root.position[0] = x + Math.cos(a) * ORBIT_RADIUS
-      root.position[1] = y + Math.sin(a) * ORBIT_RADIUS
-      root._dirtyLocal = true
+      root.setPosition(x + Math.cos(a) * ORBIT_RADIUS, y + Math.sin(a) * ORBIT_RADIUS, z)
     }
 
     stateRef.current = {
@@ -390,9 +375,8 @@ const Characters = ({ count }: { count: number }) => {
     for (let i = 0; i < roots.length; i++) {
       charOrbitAngle[i] = charOrbitAngle[i]! + ORBIT_SPEED * dt
       const a = charOrbitAngle[i]!
-      roots[i]!.position[0] = charOriginX[i]! + Math.cos(a) * ORBIT_RADIUS
-      roots[i]!.position[1] = charOriginY[i]! + Math.sin(a) * ORBIT_RADIUS
-      roots[i]!._dirtyLocal = true
+      roots[i]!.setPositionX(charOriginX[i]! + Math.cos(a) * ORBIT_RADIUS)
+      roots[i]!.setPositionY(charOriginY[i]! + Math.sin(a) * ORBIT_RADIUS)
     }
 
     for (let i = 0; i < mixers.length; i++) {

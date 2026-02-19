@@ -10,7 +10,7 @@ VoidCore is a performant 3D graphics engine written in TypeScript. It supports b
 - **Math**: All types are Float32Array-backed with a "write into output" pattern (zero allocation).
 - **Rendering**: Dual-backend (WebGPU/WebGL2), MSAA, MRT (color + emissive), 3-cascade shadow maps (CSM), bloom post-processing, configurable DPR limiting. Transparency uses WBOIT (Weighted Blended OIT) when `OES_draw_buffers_indexed` is available, with a sorted alpha-blend fallback for devices that lack the extension (some Android GPUs).
 - **Scheduler**: Single rAF loop with priority-ordered callbacks, global/per-callback FPS caps. Both `maxFps` and `maxDpr` can be changed dynamically at runtime.
-- **Scene graph**: Tree of Nodes with dirty-flag world matrix propagation.
+- **Scene graph**: Tree of Nodes with dirty-flag world matrix propagation. Transforms are set via `setPosition(x, y, z)`, `setRotation(x, y, z, w)`, `setScale(x, y, z)` / `setScale(s)` which automatically mark the node dirty. Per-component setters are also available: `setPositionX/Y/Z(v)`, `setScaleX/Y/Z(v)`. `markTransformDirty()` is available for code that writes directly to the underlying Float32Arrays (e.g., `quatFromAxisAngle`).
 - **HTML overlay**: DOM elements tracked to 3D world positions via CSS transforms. Supports node tracking with offset, centering, dirty checking, depth-based z-index, distance scaling, and per-element pointer events.
 - **React bindings**: Optional declarative layer via `voidcore/react` subpath. Uses a custom `react-reconciler` to map JSX elements (`<mesh>`, `<boxGeometry>`, `<lambertMaterial>`, etc.) to engine objects. Provides hooks (`useFrame`, `useEngine`, `useGLTF`, `useAnimations`) and a `<Canvas>` root component.
 
