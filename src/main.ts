@@ -21,7 +21,7 @@ import {
 import type { AnimationClip, AnimationAction } from './index.ts'
 
 // ─── Configuration ──────────────────────────────────────────────────
-const CHARACTER_COUNT = 1200
+const CHARACTER_COUNT = 800
 const GRID_SPACING = 5
 
 export const main = async (canvas: HTMLCanvasElement) => {
@@ -334,7 +334,8 @@ export const main = async (canvas: HTMLCanvasElement) => {
       engine.render(scene, camera)
       const stats = engine.getStats()
       const shadowSuffix = stats.shadowDrawCalls > 0 ? ` (+${stats.shadowDrawCalls} CSM)` : ''
-      statsDiv.textContent = `${engine.backend.toUpperCase()} | ${Math.round(stats.fps)} FPS | Draw calls: ${stats.drawCalls}${shadowSuffix}`
+      const dpr = Math.min(window.devicePixelRatio, engine.maxDpr)
+      statsDiv.textContent = `${engine.backend.toUpperCase()} | ${Math.round(stats.fps)} FPS | DPR: ${dpr.toFixed(2)} | Draw calls: ${stats.drawCalls}${shadowSuffix}`
     },
     { priority: 0 },
   )
