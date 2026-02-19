@@ -5,6 +5,7 @@
 // can optionally have a Skeleton for skeletal animation (skinned meshes).
 //
 // new Mesh(geometry, material) – Creates a mesh from a geometry and material.
+// Both parameters are optional to support deferred attachment (e.g. React reconciler).
 
 import { Node } from './node.ts'
 
@@ -13,17 +14,17 @@ import type { Geometry } from '../geometry/geometry.ts'
 import type { Material } from '../materials/material.ts'
 
 export class Mesh extends Node {
-  geometry: Geometry
-  material: Material
+  geometry!: Geometry
+  material!: Material
   skeleton?: Skeleton
   _batchIndex = 0
   _batchFrame = -1
   _isSkinned = false
 
-  constructor(geometry: Geometry, material: Material) {
+  constructor(geometry?: Geometry, material?: Material) {
     super()
     this.type = 'mesh'
-    this.geometry = geometry
-    this.material = material
+    if (geometry) this.geometry = geometry
+    if (material) this.material = material
   }
 }

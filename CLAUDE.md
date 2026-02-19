@@ -12,6 +12,7 @@ VoidCore is a performant 3D graphics engine written in TypeScript. It supports b
 - **Scheduler**: Single rAF loop with priority-ordered callbacks, global/per-callback FPS caps. Both `maxFps` and `maxDpr` can be changed dynamically at runtime.
 - **Scene graph**: Tree of Nodes with dirty-flag world matrix propagation.
 - **HTML overlay**: DOM elements tracked to 3D world positions via CSS transforms. Supports node tracking with offset, centering, dirty checking, depth-based z-index, distance scaling, and per-element pointer events.
+- **React bindings**: Optional declarative layer via `voidcore/react` subpath. Uses a custom `react-reconciler` to map JSX elements (`<mesh>`, `<boxGeometry>`, `<lambertMaterial>`, etc.) to engine objects. Provides hooks (`useFrame`, `useEngine`, `useGLTF`, `useAnimations`) and a `<Canvas>` root component.
 
 ## Project Structure
 
@@ -38,7 +39,16 @@ src/
     sort.ts              – Radix sort for draw order
   overlay.ts             – HTML overlay manager (DOM elements tracking 3D positions)
   scene/                 – Scene graph nodes (Node, Scene, Mesh, Group, Camera, Light)
-pages/                   – Next.js example app (not part of the engine)
+  react/                 – React declarative bindings (voidcore/react subpath)
+    Canvas.tsx           – Root component (engine init, reconciler mount, rAF loop)
+    reconciler.ts        – Custom react-reconciler host config
+    types.ts             – JSX catalogue, prop types, IntrinsicElements
+    hooks.ts             – useFrame, useEngine, useLoader, useGLTF, useAnimations
+    events.ts            – Pointer event system (raycast-based)
+    context.ts           – React context for engine state
+    Html.tsx             – DOM overlay projected to 3D coordinates
+    index.ts             – Barrel export
+pages/                   – Next.js example app (uses React bindings)
 ```
 
 ## Commands

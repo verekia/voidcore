@@ -6,6 +6,7 @@
       "name": "mana-engine",
       "dependencies": {
         "eruda": "3.4.3",
+        "react-reconciler": "^0.31.0",
       },
       "devDependencies": {
         "@tailwindcss/postcss": "4.1.18",
@@ -13,6 +14,7 @@
         "@types/node": "25.0.9",
         "@types/react": "19.2.8",
         "@types/react-dom": "19.2.3",
+        "@types/react-reconciler": "^0.33.0",
         "@typescript/native-preview": "^7.0.0-dev.20260206.1",
         "@webgpu/types": "^0.1.69",
         "babel-plugin-react-compiler": "1.0.0",
@@ -28,6 +30,14 @@
         "tsup": "8.5.1",
         "typescript": "5.9.3",
       },
+      "peerDependencies": {
+        "react": ">=18",
+        "react-dom": ">=18",
+      },
+      "optionalPeers": [
+        "react",
+        "react-dom",
+      ],
     },
   },
   "packages": {
@@ -295,6 +305,8 @@
 
     "@types/react-dom": ["@types/react-dom@19.2.3", "", { "peerDependencies": { "@types/react": "^19.2.0" } }, "sha512-jp2L/eY6fn+KgVVQAOqYItbF0VY/YApe5Mz2F0aykSO8gx31bYCZyvSeYxCHKvzHG5eZjc+zyaS5BrBWya2+kQ=="],
 
+    "@types/react-reconciler": ["@types/react-reconciler@0.33.0", "", { "peerDependencies": { "@types/react": "*" } }, "sha512-HZOXsKT0tGI9LlUw2LuedXsVeB88wFa536vVL0M6vE8zN63nI+sSr1ByxmPToP5K5bukaVscyeCJcF9guVNJ1g=="],
+
     "@typescript/native-preview": ["@typescript/native-preview@7.0.0-dev.20260210.1", "", { "optionalDependencies": { "@typescript/native-preview-darwin-arm64": "7.0.0-dev.20260210.1", "@typescript/native-preview-darwin-x64": "7.0.0-dev.20260210.1", "@typescript/native-preview-linux-arm": "7.0.0-dev.20260210.1", "@typescript/native-preview-linux-arm64": "7.0.0-dev.20260210.1", "@typescript/native-preview-linux-x64": "7.0.0-dev.20260210.1", "@typescript/native-preview-win32-arm64": "7.0.0-dev.20260210.1", "@typescript/native-preview-win32-x64": "7.0.0-dev.20260210.1" }, "bin": { "tsgo": "bin/tsgo.js" } }, "sha512-vy52DLNMYVTizp02/Uu8TrHQrt3BU0b7foE7qqxPAZF63zXpwvGg1g4EAgFtu7ZDJlYrAlUqSdZg6INb/3iY6w=="],
 
     "@typescript/native-preview-darwin-arm64": ["@typescript/native-preview-darwin-arm64@7.0.0-dev.20260210.1", "", { "os": "darwin", "cpu": "arm64" }, "sha512-taEYpsrCbdcyHkqNMBiVcqKR7ZHMC1jwTBM9kn3eUgOjXn68ASRrmyzYBdrujluBJMO7rl+Gm5QRT68onYt53A=="],
@@ -541,6 +553,8 @@
 
     "react-dom": ["react-dom@19.2.3", "", { "dependencies": { "scheduler": "^0.27.0" }, "peerDependencies": { "react": "^19.2.3" } }, "sha512-yELu4WmLPw5Mr/lmeEpox5rw3RETacE++JgHqQzd2dg+YbJuat3jH4ingc+WPZhxaoFzdv9y33G+F7Nl5O0GBg=="],
 
+    "react-reconciler": ["react-reconciler@0.31.0", "", { "dependencies": { "scheduler": "^0.25.0" }, "peerDependencies": { "react": "^19.0.0" } }, "sha512-7Ob7Z+URmesIsIVRjnLoDGwBEG/tVitidU0nMsqX/eeJaLY89RISO/10ERe0MqmzuKUUB1rmY+h1itMbUHg9BQ=="],
+
     "readdirp": ["readdirp@4.1.2", "", {}, "sha512-GDhwkLfywWL2s6vEjyhri+eXmfH6j1L7JE27WhqLeYzoh/A3DBaYGEj2H/HFZCn/kMfim73FXxEJTw06WtxQwg=="],
 
     "registry-auth-token": ["registry-auth-token@3.3.2", "", { "dependencies": { "rc": "^1.1.6", "safe-buffer": "^5.0.1" } }, "sha512-JL39c60XlzCVgNrO+qq68FoNb56w/m7JYvGR2jT5iR1xBrUA3Mfx5Twk5rqTThPmQKMWydGmq8oFtDlxfrmxnQ=="],
@@ -652,6 +666,8 @@
     "mime-types/mime-db": ["mime-db@1.33.0", "", {}, "sha512-BHJ/EKruNIqJf/QahvxwQZXKygOQ256myeN/Ew+THcAa5q+PjyTTMMeNQC4DZw5AwfvelsUrA6B67NKMqXDbzQ=="],
 
     "next/postcss": ["postcss@8.4.31", "", { "dependencies": { "nanoid": "^3.3.6", "picocolors": "^1.0.0", "source-map-js": "^1.0.2" } }, "sha512-PS08Iboia9mts/2ygV3eLpY5ghnUcfLV/EXTOW1E2qYxJKGGBUtNjN76FYHnMs36RmARn41bC0AZmn+rR0OVpQ=="],
+
+    "react-reconciler/scheduler": ["scheduler@0.25.0", "", {}, "sha512-xFVuu11jh+xcO7JOAGJNOXld8/TcEHK/4CituBUeUb5hqxJLj9YuemAEuvm9gQ/+pgXYfbQuqAkiYu+u7YEsNA=="],
 
     "serve-handler/bytes": ["bytes@3.0.0", "", {}, "sha512-pMhOfFDPiv9t5jjIXkHosWmkSyQbvsgEVNkz0ERHbuLh2T/7j4Mqqpz523Fe8MVY89KC6Sh/QfS2sM+SjgFDcw=="],
 

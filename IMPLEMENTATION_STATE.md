@@ -4,23 +4,23 @@ Audit of the Voidcore specs vs current implementation.
 
 ## Feature Completion Matrix
 
-| Feature Category        | Status             |
-| ----------------------- | ------------------ |
-| Math Library            | ✓ Implemented      |
-| Scene Graph             | ✓ Implemented      |
-| Materials               | ✓ Implemented      |
-| Geometry                | ✓ Implemented      |
-| Controls (Orbit)        | ✓ Implemented      |
-| glTF Loader (core)      | ✓ Implemented      |
-| Engine Core / Lifecycle | ✓ Implemented      |
-| Shadows (CSM)           | ✓ Implemented      |
-| Raycasting / BVH        | ✓ Implemented      |
-| Transparency (WBOIT)    | ✓ Implemented      |
-| HTML Overlay            | ✓ Implemented      |
-| Animation               | ⚠️ Partial         |
-| Renderer Core           | ⚠️ Partial         |
-| Bloom                   | ⚠️ Partial         |
-| React Bindings          | ❌ Not implemented |
+| Feature Category        | Status        |
+| ----------------------- | ------------- |
+| Math Library            | ✓ Implemented |
+| Scene Graph             | ✓ Implemented |
+| Materials               | ✓ Implemented |
+| Geometry                | ✓ Implemented |
+| Controls (Orbit)        | ✓ Implemented |
+| glTF Loader (core)      | ✓ Implemented |
+| Engine Core / Lifecycle | ✓ Implemented |
+| Shadows (CSM)           | ✓ Implemented |
+| Raycasting / BVH        | ✓ Implemented |
+| Transparency (WBOIT)    | ✓ Implemented |
+| HTML Overlay            | ✓ Implemented |
+| React Bindings          | ✓ Implemented |
+| Animation               | ⚠️ Partial    |
+| Renderer Core           | ⚠️ Partial    |
+| Bloom                   | ⚠️ Partial    |
 
 ---
 

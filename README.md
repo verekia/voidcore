@@ -75,6 +75,47 @@ engine.maxDpr = 1.5 // Cap resolution scaling (default: 1.25 mobile, 1.5 desktop
 engine.start()
 ```
 
+## React Bindings
+
+An optional declarative layer is available via the `voidcore/react` subpath:
+
+```tsx
+import { Canvas, Html, useFrame, useGLTF } from 'voidcore/react'
+
+const RotatingBox = () => {
+  const ref = useRef(null)
+
+  useFrame(({ elapsed }) => {
+    const mesh = ref.current
+    if (!mesh) return
+    quatFromAxisAngle(mesh.rotation, [0, 0, 1], elapsed)
+    mesh._dirtyLocal = true
+  })
+
+  return (
+    <mesh ref={ref} position={[0, 0, 1]} castShadow>
+      <boxGeometry />
+      <lambertMaterial args={[{ color: [0.8, 0.2, 0.3] }]} />
+      <Html center>
+        <div style={{ color: '#fff', background: 'rgba(0,0,0,0.6)', padding: '4px 8px' }}>Hello</div>
+      </Html>
+    </mesh>
+  )
+}
+
+const App = () => (
+  <Canvas
+    shadows
+    antialias
+    camera={{ fov: 55, position: [0, -10, 5] }}
+    ambientLight={{ color: [0.5, 0.5, 0.6], intensity: 0.4 }}
+  >
+    <directionalLight args={[{ intensity: 1.2 }]} position={[5, 5, 10]} castShadow />
+    <RotatingBox />
+  </Canvas>
+)
+```
+
 ## Development
 
 ```bash
