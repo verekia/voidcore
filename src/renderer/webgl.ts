@@ -8,6 +8,10 @@
 // Shadow mapping uses 3-cascade CSM (Cascaded Shadow Maps) with PCF 3×3 filtering, matching
 // the WebGPU renderer. Shadow depth is rendered into a TEXTURE_2D_ARRAY with comparison mode.
 //
+// A GL state cache (_set* helpers) eliminates redundant state calls between consecutive draws.
+// The radix sort groups meshes by pipeline > material > depth, so the cache yields significant
+// savings — especially in the shadow pass (3 cascades × N draws with only 2 programs).
+//
 // Key differences from WebGPU:
 //   - Uses GLSL shaders instead of WGSL
 //   - Uses Uniform Buffer Objects (UBOs) with bindBufferRange for per-object data
@@ -552,9 +556,19 @@ export class WebGLRenderer implements Renderer {
   // Per-draw-buffer blend extension (for WBOIT)
   private _drawBuffersIndexed: OES_draw_buffers_indexed | null = null
 
-  // Material tracking for skipping redundant uniform uploads
-  private _lastMaterial: Material | null = null
-  private _lastProgram: WebGLProgram | null = null
+  // ─── GL state cache ─────────────────────────────────────────────
+  private _glProgram: WebGLProgram | null = null
+  private _glVAO: WebGLVertexArrayObject | null = null
+  private _glMaterial: Material | null = null
+  private _glDepthTest = true
+  private _glDepthMask = true
+  private _glBlend = false
+  private _glCullFace = true
+  private _glCullMode = 0x0405 // gl.BACK
+  private _glColorMaskAll = true // simplified: all channels same
+  private _glViewportW = -1
+  private _glViewportH = -1
+  private _glFbo: WebGLFramebuffer | null | undefined = undefined // undefined = unknown
 
   private renderTargets: RenderTargets | null = null
   private samples: number
@@ -961,6 +975,74 @@ export class WebGLRenderer implements Renderer {
     this.renderTargets = null
   }
 
+  // ─── GL state cache helpers ──────────────────────────────────────
+
+  private _setProgram(p: WebGLProgram): boolean {
+    if (p === this._glProgram) return false
+    this.gl.useProgram(p)
+    this._glProgram = p
+    this._glMaterial = null // force material re-upload on program change
+    return true
+  }
+
+  private _setVAO(vao: WebGLVertexArrayObject | null): void {
+    if (vao === this._glVAO) return
+    this.gl.bindVertexArray(vao)
+    this._glVAO = vao
+  }
+
+  private _setDepthTest(on: boolean): void {
+    if (on === this._glDepthTest) return
+    if (on) this.gl.enable(this.gl.DEPTH_TEST)
+    else this.gl.disable(this.gl.DEPTH_TEST)
+    this._glDepthTest = on
+  }
+
+  private _setDepthMask(on: boolean): void {
+    if (on === this._glDepthMask) return
+    this.gl.depthMask(on)
+    this._glDepthMask = on
+  }
+
+  private _setBlend(on: boolean): void {
+    if (on === this._glBlend) return
+    if (on) this.gl.enable(this.gl.BLEND)
+    else this.gl.disable(this.gl.BLEND)
+    this._glBlend = on
+  }
+
+  private _setCullFace(on: boolean): void {
+    if (on === this._glCullFace) return
+    if (on) this.gl.enable(this.gl.CULL_FACE)
+    else this.gl.disable(this.gl.CULL_FACE)
+    this._glCullFace = on
+  }
+
+  private _setCullMode(mode: number): void {
+    if (mode === this._glCullMode) return
+    this.gl.cullFace(mode)
+    this._glCullMode = mode
+  }
+
+  private _setColorMask(on: boolean): void {
+    if (on === this._glColorMaskAll) return
+    this.gl.colorMask(on, on, on, on)
+    this._glColorMaskAll = on
+  }
+
+  private _setViewport(w: number, h: number): void {
+    if (w === this._glViewportW && h === this._glViewportH) return
+    this.gl.viewport(0, 0, w, h)
+    this._glViewportW = w
+    this._glViewportH = h
+  }
+
+  private _setFbo(fbo: WebGLFramebuffer | null): void {
+    if (fbo === this._glFbo) return
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, fbo)
+    this._glFbo = fbo
+  }
+
   render(scene: Scene, camera: PerspectiveCamera) {
     const gl = this.gl
     const now = performance.now()
@@ -976,6 +1058,20 @@ export class WebGLRenderer implements Renderer {
       this._frameCount = 0
       this._fpsAccumulator = 0
     }
+
+    // Reset GL state cache (matches state left by previous frame's cleanup)
+    this._glProgram = null
+    this._glVAO = null
+    this._glMaterial = null
+    this._glDepthTest = true
+    this._glDepthMask = true
+    this._glBlend = false
+    this._glCullFace = true
+    this._glCullMode = 0x0405
+    this._glColorMaskAll = true
+    this._glViewportW = -1
+    this._glViewportH = -1
+    this._glFbo = undefined
 
     // Resize canvas if needed
     const dpr = Math.min(window.devicePixelRatio, this._maxDpr)
@@ -1170,15 +1266,15 @@ export class WebGLRenderer implements Renderer {
 
     // ─── Shadow render pass (3 cascades, depth-only) ─────────────
     if (shadowActive) {
-      gl.cullFace(gl.FRONT)
-      gl.colorMask(false, false, false, false)
+      this._setCullMode(gl.FRONT)
+      this._setColorMask(false)
 
       const shadowRes = this.shadowResolution
       const PAD = 0.3
 
       for (let c = 0; c < NUM_CASCADES; c++) {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, this._shadowFbos[c]!)
-        gl.viewport(0, 0, shadowRes, shadowRes)
+        this._setFbo(this._shadowFbos[c]!)
+        this._setViewport(shadowRes, shadowRes)
         gl.clear(gl.DEPTH_BUFFER_BIT)
 
         // Write shadow UBO for this cascade
@@ -1209,8 +1305,8 @@ export class WebGLRenderer implements Renderer {
           const idxType = mesh.geometry.indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT
 
           if (mesh._isSkinned) {
-            gl.useProgram(this.shadowDepthSkinnedProgram)
-            gl.bindVertexArray(this.ensureShadowVAO(mesh.geometry, true))
+            this._setProgram(this.shadowDepthSkinnedProgram)
+            this._setVAO(this.ensureShadowVAO(mesh.geometry, true))
             gl.bindBufferRange(
               gl.UNIFORM_BUFFER,
               1,
@@ -1219,8 +1315,8 @@ export class WebGLRenderer implements Renderer {
               2176,
             )
           } else {
-            gl.useProgram(this.shadowDepthProgram)
-            gl.bindVertexArray(this.ensureShadowVAO(mesh.geometry, false))
+            this._setProgram(this.shadowDepthProgram)
+            this._setVAO(this.ensureShadowVAO(mesh.geometry, false))
             gl.bindBufferRange(
               gl.UNIFORM_BUFFER,
               1,
@@ -1252,8 +1348,8 @@ export class WebGLRenderer implements Renderer {
           const idxType = mesh.geometry.indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT
 
           if (mesh._isSkinned) {
-            gl.useProgram(this.shadowDepthSkinnedProgram)
-            gl.bindVertexArray(this.ensureShadowVAO(mesh.geometry, true))
+            this._setProgram(this.shadowDepthSkinnedProgram)
+            this._setVAO(this.ensureShadowVAO(mesh.geometry, true))
             gl.bindBufferRange(
               gl.UNIFORM_BUFFER,
               1,
@@ -1262,8 +1358,8 @@ export class WebGLRenderer implements Renderer {
               2176,
             )
           } else {
-            gl.useProgram(this.shadowDepthProgram)
-            gl.bindVertexArray(this.ensureShadowVAO(mesh.geometry, false))
+            this._setProgram(this.shadowDepthProgram)
+            this._setVAO(this.ensureShadowVAO(mesh.geometry, false))
             gl.bindBufferRange(
               gl.UNIFORM_BUFFER,
               1,
@@ -1278,22 +1374,22 @@ export class WebGLRenderer implements Renderer {
         }
       }
 
-      gl.bindVertexArray(null)
-      gl.cullFace(gl.BACK)
-      gl.colorMask(true, true, true, true)
+      this._setVAO(null)
+      this._setCullMode(gl.BACK)
+      this._setColorMask(true)
     }
 
     this.ensureRenderTargets()
     const rt = this.renderTargets!
 
     // ─── Opaque pass (MSAA MRT) ────────────────────────────────────
-    gl.bindFramebuffer(gl.FRAMEBUFFER, rt.msaaFbo)
+    this._setFbo(rt.msaaFbo)
     gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1])
-    gl.viewport(0, 0, rt.width, rt.height)
+    this._setViewport(rt.width, rt.height)
     gl.clearColor(0, 0, 0, 1.0)
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
-    gl.enable(gl.DEPTH_TEST)
-    gl.depthMask(true)
+    this._setDepthTest(true)
+    this._setDepthMask(true)
 
     // Bind shadow texture to unit 2
     gl.activeTexture(gl.TEXTURE2)
@@ -1303,9 +1399,6 @@ export class WebGLRenderer implements Renderer {
     const transparentStart = findTransparentStart(this._sortState, meshes.length)
 
     // ─── Opaque draw loop ───────────────────────────────────────────
-    this._lastMaterial = null
-    this._lastProgram = null
-
     for (let si = 0; si < transparentStart; si++) {
       const mesh = meshes[sortedIndices[si]!]!
       let program: WebGLProgram
@@ -1328,17 +1421,15 @@ export class WebGLRenderer implements Renderer {
         }
       }
 
-      const programChanged = program !== this._lastProgram
+      const programChanged = this._setProgram(program)
       if (programChanged) {
-        gl.useProgram(program)
-        this._lastProgram = program
         if (mesh.material.type === 'lambert') {
           gl.uniform1i(locs.u_shadowMap, 2)
         }
       }
 
       ensureGPUBuffers(gl, mesh.geometry)
-      gl.bindVertexArray((mesh.geometry._gpuBuffers as GPUBuffers).vao!)
+      this._setVAO((mesh.geometry._gpuBuffers as GPUBuffers).vao!)
 
       if (mesh._isSkinned) {
         gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._skinnedDynBuf, mesh._batchIndex * this._alignedSkinnedSize, 2176)
@@ -1346,9 +1437,9 @@ export class WebGLRenderer implements Renderer {
         gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 128)
       }
 
-      const materialChanged = mesh.material !== this._lastMaterial || programChanged
+      const materialChanged = mesh.material !== this._glMaterial || programChanged
       if (materialChanged) {
-        this._lastMaterial = mesh.material
+        this._glMaterial = mesh.material
         gl.uniform3fv(locs.u_baseColor, mesh.material.color)
         gl.uniform1f(locs.u_opacity, mesh.material.opacity)
         if (mesh.material.type === 'lambert') {
@@ -1383,7 +1474,7 @@ export class WebGLRenderer implements Renderer {
       triangles += mesh.geometry.indexCount / 3
     }
 
-    gl.bindVertexArray(null)
+    this._setVAO(null)
 
     // ─── MSAA Resolve ──────────────────────────────────────────────
     // Resolve color
@@ -1400,6 +1491,7 @@ export class WebGLRenderer implements Renderer {
     // Resolve depth (MSAA → 1x for transparent pass depth testing)
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, rt.resolvedDepthFbo)
     gl.blitFramebuffer(0, 0, rt.width, rt.height, 0, 0, rt.width, rt.height, gl.DEPTH_BUFFER_BIT, gl.NEAREST)
+    this._glFbo = undefined // DRAW_FRAMEBUFFER changed outside cache
 
     // ─── Transparent pass ─────────────────────────────────────────
     if (transparentStart < meshes.length) {
@@ -1407,45 +1499,40 @@ export class WebGLRenderer implements Renderer {
 
       if (useWBOIT) {
         // ─── WBOIT path (requires OES_draw_buffers_indexed) ───────
-        gl.bindFramebuffer(gl.FRAMEBUFFER, rt.oitFbo)
+        this._setFbo(rt.oitFbo)
         gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1])
-        gl.viewport(0, 0, rt.width, rt.height)
+        this._setViewport(rt.width, rt.height)
 
         // Clear accum to (0,0,0,0), reveal to (1,0,0,1)
         gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0])
         gl.clearBufferfv(gl.COLOR, 1, [1, 0, 0, 1])
 
-        gl.enable(gl.DEPTH_TEST)
-        gl.depthMask(false)
-        gl.depthFunc(gl.LEQUAL)
+        this._setDepthTest(true)
+        this._setDepthMask(false)
 
-        gl.enable(gl.BLEND)
+        this._setBlend(true)
         const dbi = this._drawBuffersIndexed!
         dbi.blendFunciOES(0, gl.ONE, gl.ONE)
         dbi.blendFunciOES(1, gl.ZERO, gl.ONE_MINUS_SRC_ALPHA)
       } else {
         // ─── Simple alpha-blend fallback (no per-buffer blend) ────
-        gl.bindFramebuffer(gl.FRAMEBUFFER, rt.resolvedColorFbo)
+        this._setFbo(rt.resolvedColorFbo)
         gl.drawBuffers([gl.COLOR_ATTACHMENT0])
-        gl.viewport(0, 0, rt.width, rt.height)
+        this._setViewport(rt.width, rt.height)
 
-        gl.enable(gl.DEPTH_TEST)
-        gl.depthMask(false)
-        gl.depthFunc(gl.LEQUAL)
+        this._setDepthTest(true)
+        this._setDepthMask(false)
 
-        gl.enable(gl.BLEND)
+        this._setBlend(true)
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
       }
 
       // Disable back-face culling for transparent objects
-      gl.disable(gl.CULL_FACE)
+      this._setCullFace(false)
 
       // Bind shadow texture to unit 2
       gl.activeTexture(gl.TEXTURE2)
       gl.bindTexture(gl.TEXTURE_2D_ARRAY, this._shadowTexture)
-
-      this._lastMaterial = null
-      this._lastProgram = null
 
       for (let si = transparentStart; si < meshes.length; si++) {
         const mesh = meshes[sortedIndices[si]!]!
@@ -1491,17 +1578,15 @@ export class WebGLRenderer implements Renderer {
           }
         }
 
-        const programChanged = program !== this._lastProgram
+        const programChanged = this._setProgram(program)
         if (programChanged) {
-          gl.useProgram(program)
-          this._lastProgram = program
           if (mesh.material.type === 'lambert') {
             gl.uniform1i(locs.u_shadowMap, 2)
           }
         }
 
         ensureGPUBuffers(gl, mesh.geometry)
-        gl.bindVertexArray((mesh.geometry._gpuBuffers as GPUBuffers).vao!)
+        this._setVAO((mesh.geometry._gpuBuffers as GPUBuffers).vao!)
 
         if (mesh._isSkinned) {
           gl.bindBufferRange(
@@ -1515,9 +1600,9 @@ export class WebGLRenderer implements Renderer {
           gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 128)
         }
 
-        const materialChanged = mesh.material !== this._lastMaterial || programChanged
+        const materialChanged = mesh.material !== this._glMaterial || programChanged
         if (materialChanged) {
-          this._lastMaterial = mesh.material
+          this._glMaterial = mesh.material
           gl.uniform3fv(locs.u_baseColor, mesh.material.color)
           gl.uniform1f(locs.u_opacity, mesh.material.opacity)
           if (mesh.material.type === 'lambert') {
@@ -1552,10 +1637,10 @@ export class WebGLRenderer implements Renderer {
         triangles += mesh.geometry.indexCount / 3
       }
 
-      gl.bindVertexArray(null)
-      gl.disable(gl.BLEND)
-      gl.enable(gl.CULL_FACE)
-      gl.depthMask(true)
+      this._setVAO(null)
+      this._setBlend(false)
+      this._setCullFace(true)
+      this._setDepthMask(true)
 
       // ─── OIT Composite (WBOIT path only) ──────────────────────────
       if (useWBOIT) {
@@ -1563,14 +1648,15 @@ export class WebGLRenderer implements Renderer {
         gl.bindFramebuffer(gl.READ_FRAMEBUFFER, rt.resolvedColorFbo)
         gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, rt.opaqueColorFbo)
         gl.blitFramebuffer(0, 0, rt.width, rt.height, 0, 0, rt.width, rt.height, gl.COLOR_BUFFER_BIT, gl.NEAREST)
+        this._glFbo = undefined // DRAW_FRAMEBUFFER changed outside cache
 
         // Composite: blend transparent result over opaque color
-        gl.bindFramebuffer(gl.FRAMEBUFFER, rt.resolvedColorFbo)
-        gl.viewport(0, 0, rt.width, rt.height)
-        gl.disable(gl.DEPTH_TEST)
-        gl.depthMask(false)
+        this._setFbo(rt.resolvedColorFbo)
+        this._setViewport(rt.width, rt.height)
+        this._setDepthTest(false)
+        this._setDepthMask(false)
 
-        gl.useProgram(this.oitCompositeProgram)
+        this._setProgram(this.oitCompositeProgram)
         const oitLocs = this._oitCompositeLocs
 
         gl.activeTexture(gl.TEXTURE0)
@@ -1591,19 +1677,19 @@ export class WebGLRenderer implements Renderer {
 
     // ─── Bloom ─────────────────────────────────────────────────────
     if (this.bloomEnabled && this.bloomLevels > 0) {
-      gl.disable(gl.DEPTH_TEST)
-      gl.depthMask(false)
+      this._setDepthTest(false)
+      this._setDepthMask(false)
 
       // Downsample chain
-      gl.useProgram(this.bloomDownsampleProgram)
+      this._setProgram(this.bloomDownsampleProgram)
       let srcTex = rt.resolvedEmissiveTex
       let srcW = rt.width
       let srcH = rt.height
 
       const downLocs = this._bloomDownLocs
       for (let i = 0; i < this.bloomLevels; i++) {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, rt.bloomFbos[i]!)
-        gl.viewport(0, 0, rt.bloomWidths[i]!, rt.bloomHeights[i]!)
+        this._setFbo(rt.bloomFbos[i]!)
+        this._setViewport(rt.bloomWidths[i]!, rt.bloomHeights[i]!)
 
         gl.activeTexture(gl.TEXTURE0)
         gl.bindTexture(gl.TEXTURE_2D, srcTex)
@@ -1619,14 +1705,14 @@ export class WebGLRenderer implements Renderer {
       }
 
       // Upsample chain (additive)
-      gl.useProgram(this.bloomUpsampleProgram)
-      gl.enable(gl.BLEND)
+      this._setProgram(this.bloomUpsampleProgram)
+      this._setBlend(true)
       gl.blendFunc(gl.ONE, gl.ONE)
 
       const upLocs = this._bloomUpLocs
       for (let i = this.bloomLevels - 1; i > 0; i--) {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, rt.bloomFbos[i - 1]!)
-        gl.viewport(0, 0, rt.bloomWidths[i - 1]!, rt.bloomHeights[i - 1]!)
+        this._setFbo(rt.bloomFbos[i - 1]!)
+        this._setViewport(rt.bloomWidths[i - 1]!, rt.bloomHeights[i - 1]!)
 
         gl.activeTexture(gl.TEXTURE0)
         gl.bindTexture(gl.TEXTURE_2D, rt.bloomTextures[i]!)
@@ -1636,16 +1722,16 @@ export class WebGLRenderer implements Renderer {
         gl.drawArrays(gl.TRIANGLES, 0, 3)
       }
 
-      gl.disable(gl.BLEND)
+      this._setBlend(false)
     }
 
     // ─── Final blit ────────────────────────────────────────────────
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
-    gl.viewport(0, 0, rt.width, rt.height)
-    gl.disable(gl.DEPTH_TEST)
-    gl.depthMask(false)
+    this._setFbo(null)
+    this._setViewport(rt.width, rt.height)
+    this._setDepthTest(false)
+    this._setDepthMask(false)
 
-    gl.useProgram(this.blitProgram)
+    this._setProgram(this.blitProgram)
     const blitLocs = this._blitLocs
 
     gl.activeTexture(gl.TEXTURE0)
@@ -1664,8 +1750,8 @@ export class WebGLRenderer implements Renderer {
     gl.drawArrays(gl.TRIANGLES, 0, 3)
 
     // Re-enable depth for next frame
-    gl.enable(gl.DEPTH_TEST)
-    gl.depthMask(true)
+    this._setDepthTest(true)
+    this._setDepthMask(true)
 
     // Update stats
     this.stats.fps = this._currentFps

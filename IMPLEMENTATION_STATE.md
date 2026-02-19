@@ -71,14 +71,11 @@ Audit of the Voidcore specs vs current implementation.
 
 3. **Bind Group Organization** — Shadow pass uses separate bind group layouts rather than the unified approach the spec describes.
 
-4. **WebGL2 State Cache** (`specs/RENDERER.md`) — Only `_lastMaterial` and `_lastProgram` are tracked. VAO bindings, UBO bindings, texture bindings, framebuffer bindings, and blend/depth/cull state are set redundantly. Spec estimates 40-60% reduction in redundant GL calls with a full `StateCache`.
-
-5. **WebGL2 Pipeline as State Bundle** — WebGPU correctly uses `GPURenderPipeline` objects, but the WebGL2 backend sets blend/depth/cull state ad-hoc during rendering rather than using pre-built state bundles.
+4. **WebGL2 Pipeline as State Bundle** — WebGPU correctly uses `GPURenderPipeline` objects, but the WebGL2 backend sets blend/depth/cull state ad-hoc during rendering rather than using pre-built state bundles.
 
 ## Priority Order
 
-| Priority | Feature                  | Impact                     |
-| -------- | ------------------------ | -------------------------- |
-| 1        | WebGL2 state cache       | Performance on WebGL2 path |
-| 2        | Per-cascade AABB culling | Shadow accuracy at edges   |
-| 3        | Conditional vertex fetch | Memory/bandwidth savings   |
+| Priority | Feature                  | Impact                   |
+| -------- | ------------------------ | ------------------------ |
+| 1        | Per-cascade AABB culling | Shadow accuracy at edges |
+| 2        | Conditional vertex fetch | Memory/bandwidth savings |
