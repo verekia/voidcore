@@ -138,7 +138,7 @@ void main() {
 `
 
 export const SHADOW_DEPTH_FRAG = `#version 300 es
-precision mediump float; // Empty fragment shader — no precision needed
+precision mediump float; // mediump sufficient — shader body is empty
 void main() {}
 `
 

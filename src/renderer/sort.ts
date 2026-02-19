@@ -25,7 +25,6 @@ import type { Mesh } from '../scene/mesh.ts'
 export interface SortState {
   keys: Uint32Array
   indices: Uint32Array
-  temp: Uint32Array
   tempIndices: Uint32Array
   counts: Uint32Array
   capacity: number
@@ -34,7 +33,6 @@ export interface SortState {
 export const createSortState = (maxObjects: number): SortState => ({
   keys: new Uint32Array(maxObjects),
   indices: new Uint32Array(maxObjects),
-  temp: new Uint32Array(maxObjects),
   tempIndices: new Uint32Array(maxObjects),
   counts: new Uint32Array(256),
   capacity: maxObjects,
@@ -46,7 +44,6 @@ const ensureSortCapacity = (state: SortState, needed: number): void => {
   const cap = Math.max(needed, state.capacity * 2)
   state.keys = new Uint32Array(cap)
   state.indices = new Uint32Array(cap)
-  state.temp = new Uint32Array(cap)
   state.tempIndices = new Uint32Array(cap)
   state.capacity = cap
 }
@@ -61,7 +58,7 @@ export const sortMeshes = (state: SortState, meshes: Mesh[], meshCount: number, 
   const camX = camera._worldMatrix[12]!
   const camY = camera._worldMatrix[13]!
   const camZ = camera._worldMatrix[14]!
-  const invFarSq = 1 / (camera.far * camera.far)
+  const invFar = 1 / camera.far
 
   // Build sort keys and initial indices
   for (let i = 0; i < meshCount; i++) {
@@ -79,14 +76,13 @@ export const sortMeshes = (state: SortState, meshes: Mesh[], meshCount: number, 
     const materialId = material._id & 0xfff
 
     // Depth: bits 9-0 (10 bits, quantized distance)
-    // Use squared distance to avoid per-mesh Math.sqrt — ordering is preserved.
     // Opaque: nearest first (ascending depth). Transparent: farthest first (inverted depth).
     const wm = mesh._worldMatrix
     const dx = wm[12]! - camX
     const dy = wm[13]! - camY
     const dz = wm[14]! - camZ
-    const distSq = dx * dx + dy * dy + dz * dz
-    const rawDepth = Math.min(distSq * invFarSq * 1023, 1023) | 0
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
+    const rawDepth = Math.min(dist * invFar * 1023, 1023) | 0
     const depth = layer === 1 ? 1023 - rawDepth : rawDepth
 
     keys[i] = (layer << 30) | (pipelineId << 22) | (materialId << 10) | depth
