@@ -16,7 +16,11 @@ import { quatSlerp } from '../math/index.ts'
 import type { AnimationClip, KeyframeTrack } from './clip.ts'
 import type { Skeleton } from './skeleton.ts'
 
-const easeInOutQuad = (t: number): number => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2)
+const easeInOutQuad = (t: number): number => {
+  if (t < 0.5) return 2 * t * t
+  const u = -2 * t + 2
+  return 1 - (u * u) / 2
+}
 
 const binarySearch = (times: Float32Array, t: number): number => {
   let lo = 0
@@ -45,7 +49,7 @@ export class AnimationAction {
   _fadeDuration = 0
   _fadeElapsed = 0
   _fading = false
-  _cachedIndices: number[] | null = null
+  _cachedIndices: Int32Array | null = null
 
   constructor(clip: AnimationClip) {
     this.clip = clip
@@ -303,7 +307,7 @@ export class AnimationMixer {
     // Lazily allocate cached indices array
     let cached = action._cachedIndices
     if (!cached) {
-      cached = Array.from({ length: clip.tracks.length }, () => 0)
+      cached = new Int32Array(clip.tracks.length)
       action._cachedIndices = cached
     }
 

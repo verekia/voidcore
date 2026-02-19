@@ -14,7 +14,8 @@
 // Uses a 4-pass LSD (Least Significant Digit) radix sort with an 8-bit radix.
 // Radix sort is O(n) and stable, making it ideal for the thousands of meshes a scene
 // might contain. The sort state (buffers, histograms) is pre-allocated to avoid
-// per-frame allocations.
+// per-frame allocations. Passes ping-pong between two index arrays to eliminate
+// per-pass copy-back overhead.
 //
 // sortMeshes() – Sorts meshes in-place by the composite key described above.
 
@@ -24,23 +25,34 @@ import type { Mesh } from '../scene/mesh.ts'
 export interface SortState {
   keys: Uint32Array
   indices: Uint32Array
-  temp: Uint32Array
   tempIndices: Uint32Array
   counts: Uint32Array
+  capacity: number
 }
 
 export const createSortState = (maxObjects: number): SortState => ({
   keys: new Uint32Array(maxObjects),
   indices: new Uint32Array(maxObjects),
-  temp: new Uint32Array(maxObjects),
   tempIndices: new Uint32Array(maxObjects),
   counts: new Uint32Array(256),
+  capacity: maxObjects,
 })
+
+/** Grow sort buffers if needed. Uses doubling strategy to amortize allocations. */
+const ensureSortCapacity = (state: SortState, needed: number): void => {
+  if (needed <= state.capacity) return
+  const cap = Math.max(needed, state.capacity * 2)
+  state.keys = new Uint32Array(cap)
+  state.indices = new Uint32Array(cap)
+  state.tempIndices = new Uint32Array(cap)
+  state.capacity = cap
+}
 
 export const sortMeshes = (state: SortState, meshes: Mesh[], meshCount: number, camera: PerspectiveCamera): void => {
   if (meshCount === 0) return
+  ensureSortCapacity(state, meshCount)
 
-  const { keys, indices, temp, tempIndices, counts } = state
+  const { keys, indices, tempIndices, counts } = state
 
   // Camera position from view matrix inverse (world position is in _worldMatrix elements 12,13,14)
   const camX = camera._worldMatrix[12]!
@@ -78,6 +90,12 @@ export const sortMeshes = (state: SortState, meshes: Mesh[], meshCount: number, 
   }
 
   // 4-pass LSD radix sort (8-bit radix per pass)
+  // Ping-pong between indices and tempIndices to avoid per-pass copy-back.
+  // Even passes: read from src, scatter to dst.
+  // After 4 passes (even count), result is back in indices.
+  let src = indices
+  let dst = tempIndices
+
   for (let pass = 0; pass < 4; pass++) {
     const shift = pass * 8
 
@@ -86,7 +104,7 @@ export const sortMeshes = (state: SortState, meshes: Mesh[], meshCount: number, 
 
     // Build histogram
     for (let i = 0; i < meshCount; i++) {
-      const bucket = (keys[indices[i]!]! >>> shift) & 0xff
+      const bucket = (keys[src[i]!]! >>> shift) & 0xff
       counts[bucket]!++
     }
 
@@ -100,17 +118,18 @@ export const sortMeshes = (state: SortState, meshes: Mesh[], meshCount: number, 
 
     // Scatter
     for (let i = 0; i < meshCount; i++) {
-      const idx = indices[i]!
+      const idx = src[i]!
       const bucket = (keys[idx]! >>> shift) & 0xff
       const dest = counts[bucket]!
-      temp[dest] = keys[idx]!
-      tempIndices[dest] = idx
+      dst[dest] = idx
       counts[bucket] = dest + 1
     }
 
-    // Copy back (swap references would be better but typed arrays can't be swapped)
-    for (let i = 0; i < meshCount; i++) {
-      indices[i] = tempIndices[i]!
-    }
+    // Swap src and dst for next pass
+    const tmp = src
+    src = dst
+    dst = tmp
   }
+  // After 4 passes, src points to 'indices' (since we swapped an even number of times).
+  // Result is already in state.indices — no final copy needed.
 }

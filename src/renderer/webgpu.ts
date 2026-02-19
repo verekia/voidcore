@@ -282,6 +282,7 @@ export class WebGPURenderer implements Renderer {
   private _shadowLightProj: Mat4 = mat4Create()
   private _shadowCorner: Vec3 = vec3Create()
   private _shadowCenter: Vec3 = vec3Create()
+  private _cascadeCorners = new Float32Array(24) // Pre-allocated frustum corners for cascade computation
   private _frameNum = 0
 
   // Cached canvas dimensions
@@ -1253,42 +1254,42 @@ export class WebGPURenderer implements Renderer {
 
     const fovY = camera.fov * (Math.PI / 180)
     const aspect = camera.aspect
+    const tanHalf = Math.tan(fovY / 2)
 
-    const nearH = Math.tan(fovY / 2) * nearDist
+    const nearH = tanHalf * nearDist
     const nearW = nearH * aspect
-    const farH = Math.tan(fovY / 2) * farDist
+    const farH = tanHalf * farDist
     const farW = farH * aspect
 
-    // 8 frustum corners: 4 near + 4 far
-    // Order: bottom-left, bottom-right, top-right, top-left
-    const corners = [
-      // Near
-      px + fx * nearDist - rx * nearW - ux * nearH,
-      py + fy * nearDist - ry * nearW - uy * nearH,
-      pz + fz * nearDist - rz * nearW - uz * nearH,
-      px + fx * nearDist + rx * nearW - ux * nearH,
-      py + fy * nearDist + ry * nearW - uy * nearH,
-      pz + fz * nearDist + rz * nearW - uz * nearH,
-      px + fx * nearDist + rx * nearW + ux * nearH,
-      py + fy * nearDist + ry * nearW + uy * nearH,
-      pz + fz * nearDist + rz * nearW + uz * nearH,
-      px + fx * nearDist - rx * nearW + ux * nearH,
-      py + fy * nearDist - ry * nearW + uy * nearH,
-      pz + fz * nearDist - rz * nearW + uz * nearH,
-      // Far
-      px + fx * farDist - rx * farW - ux * farH,
-      py + fy * farDist - ry * farW - uy * farH,
-      pz + fz * farDist - rz * farW - uz * farH,
-      px + fx * farDist + rx * farW - ux * farH,
-      py + fy * farDist + ry * farW - uy * farH,
-      pz + fz * farDist + rz * farW - uz * farH,
-      px + fx * farDist + rx * farW + ux * farH,
-      py + fy * farDist + ry * farW + uy * farH,
-      pz + fz * farDist + rz * farW + uz * farH,
-      px + fx * farDist - rx * farW + ux * farH,
-      py + fy * farDist - ry * farW + uy * farH,
-      pz + fz * farDist - rz * farW + uz * farH,
-    ]
+    // 8 frustum corners written into pre-allocated Float32Array (no allocation)
+    // Order: 4 near + 4 far, each bottom-left, bottom-right, top-right, top-left
+    const corners = this._cascadeCorners
+    // Near
+    corners[0] = px + fx * nearDist - rx * nearW - ux * nearH
+    corners[1] = py + fy * nearDist - ry * nearW - uy * nearH
+    corners[2] = pz + fz * nearDist - rz * nearW - uz * nearH
+    corners[3] = px + fx * nearDist + rx * nearW - ux * nearH
+    corners[4] = py + fy * nearDist + ry * nearW - uy * nearH
+    corners[5] = pz + fz * nearDist + rz * nearW - uz * nearH
+    corners[6] = px + fx * nearDist + rx * nearW + ux * nearH
+    corners[7] = py + fy * nearDist + ry * nearW + uy * nearH
+    corners[8] = pz + fz * nearDist + rz * nearW + uz * nearH
+    corners[9] = px + fx * nearDist - rx * nearW + ux * nearH
+    corners[10] = py + fy * nearDist - ry * nearW + uy * nearH
+    corners[11] = pz + fz * nearDist - rz * nearW + uz * nearH
+    // Far
+    corners[12] = px + fx * farDist - rx * farW - ux * farH
+    corners[13] = py + fy * farDist - ry * farW - uy * farH
+    corners[14] = pz + fz * farDist - rz * farW - uz * farH
+    corners[15] = px + fx * farDist + rx * farW - ux * farH
+    corners[16] = py + fy * farDist + ry * farW - uy * farH
+    corners[17] = pz + fz * farDist + rz * farW - uz * farH
+    corners[18] = px + fx * farDist + rx * farW + ux * farH
+    corners[19] = py + fy * farDist + ry * farW + uy * farH
+    corners[20] = pz + fz * farDist + rz * farW + uz * farH
+    corners[21] = px + fx * farDist - rx * farW + ux * farH
+    corners[22] = py + fy * farDist - ry * farW + uy * farH
+    corners[23] = pz + fz * farDist - rz * farW + uz * farH
 
     // Frustum center
     let cx = 0,
