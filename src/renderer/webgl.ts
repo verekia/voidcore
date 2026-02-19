@@ -342,6 +342,7 @@ const createRenderTargets = (
   h: number,
   samples: number,
   bloomLevels: number,
+  needsAlphaBlendFallback: boolean,
 ): RenderTargets => {
   // MSAA FBO with color + emissive + depth renderbuffers
   const msaaFbo = gl.createFramebuffer()!
@@ -425,6 +426,13 @@ const createRenderTargets = (
   const resolvedDepthRb = gl.createRenderbuffer()!
   gl.bindRenderbuffer(gl.RENDERBUFFER, resolvedDepthRb)
   gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h)
+
+  // Attach depth to resolvedColorFbo only when WBOIT is unavailable, so the
+  // alpha-blend fallback can render directly into it with depth testing.
+  if (needsAlphaBlendFallback) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, resolvedColorFbo)
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, resolvedDepthRb)
+  }
 
   const resolvedDepthFbo = gl.createFramebuffer()!
   gl.bindFramebuffer(gl.FRAMEBUFFER, resolvedDepthFbo)
@@ -919,7 +927,14 @@ export class WebGLRenderer implements Renderer {
     if (this.renderTargets && this.renderTargets.width === w && this.renderTargets.height === h) return
     // Destroy old targets
     if (this.renderTargets) this.destroyRenderTargets()
-    this.renderTargets = createRenderTargets(this.gl, w, h, this.samples, this.bloomLevels)
+    this.renderTargets = createRenderTargets(
+      this.gl,
+      w,
+      h,
+      this.samples,
+      this.bloomLevels,
+      this._drawBuffersIndexed === null,
+    )
   }
 
   private destroyRenderTargets() {
@@ -1386,31 +1401,40 @@ export class WebGLRenderer implements Renderer {
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, rt.resolvedDepthFbo)
     gl.blitFramebuffer(0, 0, rt.width, rt.height, 0, 0, rt.width, rt.height, gl.DEPTH_BUFFER_BIT, gl.NEAREST)
 
-    // ─── Transparent pass (WBOIT) ─────────────────────────────────
+    // ─── Transparent pass ─────────────────────────────────────────
     if (transparentStart < meshes.length) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, rt.oitFbo)
-      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1])
-      gl.viewport(0, 0, rt.width, rt.height)
+      const useWBOIT = !!this._drawBuffersIndexed
 
-      // Clear accum to (0,0,0,0), reveal to (1,0,0,1)
-      gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0])
-      gl.clearBufferfv(gl.COLOR, 1, [1, 0, 0, 1])
+      if (useWBOIT) {
+        // ─── WBOIT path (requires OES_draw_buffers_indexed) ───────
+        gl.bindFramebuffer(gl.FRAMEBUFFER, rt.oitFbo)
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1])
+        gl.viewport(0, 0, rt.width, rt.height)
 
-      // Depth test on (reads resolved depth), depth write off
-      gl.enable(gl.DEPTH_TEST)
-      gl.depthMask(false)
-      gl.depthFunc(gl.LEQUAL)
+        // Clear accum to (0,0,0,0), reveal to (1,0,0,1)
+        gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0])
+        gl.clearBufferfv(gl.COLOR, 1, [1, 0, 0, 1])
 
-      // WBOIT blending: accum = ONE/ONE additive, reveal = ZERO/ONE_MINUS_SRC_ALPHA
-      gl.enable(gl.BLEND)
-      const dbi = this._drawBuffersIndexed
-      if (dbi) {
+        gl.enable(gl.DEPTH_TEST)
+        gl.depthMask(false)
+        gl.depthFunc(gl.LEQUAL)
+
+        gl.enable(gl.BLEND)
+        const dbi = this._drawBuffersIndexed!
         dbi.blendFunciOES(0, gl.ONE, gl.ONE)
         dbi.blendFunciOES(1, gl.ZERO, gl.ONE_MINUS_SRC_ALPHA)
       } else {
-        // Fallback when OES_draw_buffers_indexed is unavailable (some Android devices).
-        // Uses a single blend func for both attachments — transparency will be approximate.
-        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+        // ─── Simple alpha-blend fallback (no per-buffer blend) ────
+        gl.bindFramebuffer(gl.FRAMEBUFFER, rt.resolvedColorFbo)
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0])
+        gl.viewport(0, 0, rt.width, rt.height)
+
+        gl.enable(gl.DEPTH_TEST)
+        gl.depthMask(false)
+        gl.depthFunc(gl.LEQUAL)
+
+        gl.enable(gl.BLEND)
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
       }
 
       // Disable back-face culling for transparent objects
@@ -1427,21 +1451,43 @@ export class WebGLRenderer implements Renderer {
         const mesh = meshes[sortedIndices[si]!]!
         let program: WebGLProgram
         let locs: SceneUniformLocs
-        if (mesh._isSkinned) {
-          if (mesh.material.type === 'lambert') {
-            program = this.lambertSkinnedTransparentProgram
-            locs = this._lambertSkinnedTransparentLocs
+        if (useWBOIT) {
+          // WBOIT shaders output weighted accum + revealage into MRT
+          if (mesh._isSkinned) {
+            if (mesh.material.type === 'lambert') {
+              program = this.lambertSkinnedTransparentProgram
+              locs = this._lambertSkinnedTransparentLocs
+            } else {
+              program = this.basicSkinnedTransparentProgram
+              locs = this._basicSkinnedTransparentLocs
+            }
           } else {
-            program = this.basicSkinnedTransparentProgram
-            locs = this._basicSkinnedTransparentLocs
+            if (mesh.material.type === 'lambert') {
+              program = this.lambertTransparentProgram
+              locs = this._lambertTransparentLocs
+            } else {
+              program = this.basicTransparentProgram
+              locs = this._basicTransparentLocs
+            }
           }
         } else {
-          if (mesh.material.type === 'lambert') {
-            program = this.lambertTransparentProgram
-            locs = this._lambertTransparentLocs
+          // Fallback: reuse opaque shaders (they output fragColor with alpha)
+          if (mesh._isSkinned) {
+            if (mesh.material.type === 'lambert') {
+              program = this.lambertSkinnedProgram
+              locs = this._lambertSkinnedLocs
+            } else {
+              program = this.basicSkinnedProgram
+              locs = this._basicSkinnedLocs
+            }
           } else {
-            program = this.basicTransparentProgram
-            locs = this._basicTransparentLocs
+            if (mesh.material.type === 'lambert') {
+              program = this.lambertProgram
+              locs = this._lambertLocs
+            } else {
+              program = this.basicProgram
+              locs = this._basicLocs
+            }
           }
         }
 
@@ -1511,34 +1557,36 @@ export class WebGLRenderer implements Renderer {
       gl.enable(gl.CULL_FACE)
       gl.depthMask(true)
 
-      // ─── OIT Composite ───────────────────────────────────────────
-      // Copy opaque color to avoid feedback loop (reads opaqueColorTex, writes resolvedColorFbo)
-      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, rt.resolvedColorFbo)
-      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, rt.opaqueColorFbo)
-      gl.blitFramebuffer(0, 0, rt.width, rt.height, 0, 0, rt.width, rt.height, gl.COLOR_BUFFER_BIT, gl.NEAREST)
+      // ─── OIT Composite (WBOIT path only) ──────────────────────────
+      if (useWBOIT) {
+        // Copy opaque color to avoid feedback loop (reads opaqueColorTex, writes resolvedColorFbo)
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, rt.resolvedColorFbo)
+        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, rt.opaqueColorFbo)
+        gl.blitFramebuffer(0, 0, rt.width, rt.height, 0, 0, rt.width, rt.height, gl.COLOR_BUFFER_BIT, gl.NEAREST)
 
-      // Composite: blend transparent result over opaque color
-      gl.bindFramebuffer(gl.FRAMEBUFFER, rt.resolvedColorFbo)
-      gl.viewport(0, 0, rt.width, rt.height)
-      gl.disable(gl.DEPTH_TEST)
-      gl.depthMask(false)
+        // Composite: blend transparent result over opaque color
+        gl.bindFramebuffer(gl.FRAMEBUFFER, rt.resolvedColorFbo)
+        gl.viewport(0, 0, rt.width, rt.height)
+        gl.disable(gl.DEPTH_TEST)
+        gl.depthMask(false)
 
-      gl.useProgram(this.oitCompositeProgram)
-      const oitLocs = this._oitCompositeLocs
+        gl.useProgram(this.oitCompositeProgram)
+        const oitLocs = this._oitCompositeLocs
 
-      gl.activeTexture(gl.TEXTURE0)
-      gl.bindTexture(gl.TEXTURE_2D, rt.oitAccumTex)
-      gl.uniform1i(oitLocs.u_accumTexture, 0)
+        gl.activeTexture(gl.TEXTURE0)
+        gl.bindTexture(gl.TEXTURE_2D, rt.oitAccumTex)
+        gl.uniform1i(oitLocs.u_accumTexture, 0)
 
-      gl.activeTexture(gl.TEXTURE1)
-      gl.bindTexture(gl.TEXTURE_2D, rt.oitRevealTex)
-      gl.uniform1i(oitLocs.u_revealTexture, 1)
+        gl.activeTexture(gl.TEXTURE1)
+        gl.bindTexture(gl.TEXTURE_2D, rt.oitRevealTex)
+        gl.uniform1i(oitLocs.u_revealTexture, 1)
 
-      gl.activeTexture(gl.TEXTURE2)
-      gl.bindTexture(gl.TEXTURE_2D, rt.opaqueColorTex)
-      gl.uniform1i(oitLocs.u_opaqueTexture, 2)
+        gl.activeTexture(gl.TEXTURE2)
+        gl.bindTexture(gl.TEXTURE_2D, rt.opaqueColorTex)
+        gl.uniform1i(oitLocs.u_opaqueTexture, 2)
 
-      gl.drawArrays(gl.TRIANGLES, 0, 3)
+        gl.drawArrays(gl.TRIANGLES, 0, 3)
+      }
     }
 
     // ─── Bloom ─────────────────────────────────────────────────────

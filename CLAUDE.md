@@ -8,7 +8,7 @@ VoidCore is a performant 3D graphics engine written in TypeScript. It supports b
 
 - **Coordinate system**: Z-up, right-handed. Forward is +Y, right is +X, up is +Z.
 - **Math**: All types are Float32Array-backed with a "write into output" pattern (zero allocation).
-- **Rendering**: Dual-backend (WebGPU/WebGL2), MSAA, MRT (color + emissive), 3-cascade shadow maps (CSM), bloom post-processing, configurable DPR limiting.
+- **Rendering**: Dual-backend (WebGPU/WebGL2), MSAA, MRT (color + emissive), 3-cascade shadow maps (CSM), bloom post-processing, configurable DPR limiting. Transparency uses WBOIT (Weighted Blended OIT) when `OES_draw_buffers_indexed` is available, with a sorted alpha-blend fallback for devices that lack the extension (some Android GPUs).
 - **Scheduler**: Single rAF loop with priority-ordered callbacks, global/per-callback FPS caps. Both `maxFps` and `maxDpr` can be changed dynamically at runtime.
 - **Scene graph**: Tree of Nodes with dirty-flag world matrix propagation.
 
