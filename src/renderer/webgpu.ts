@@ -49,7 +49,7 @@ import {
   BLOOM_UP_WGSL,
   BLIT_WGSL,
 } from './shaders-wgsl.ts'
-import { collectVisibleMeshes, collectShadowCasters, computeLightDir } from './shared.ts'
+import { collectVisibleMeshes, collectShadowCasters, computeLightDir, defaultMaxDpr } from './shared.ts'
 import { createSortState, sortMeshes } from './sort.ts'
 
 import type { Geometry } from '../geometry/geometry.ts'
@@ -152,6 +152,17 @@ const SHADOW_SKINNED_VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
 
 export class WebGPURenderer implements Renderer {
   readonly backend = 'webgpu' as const
+
+  // DPR limiting
+  private _maxDpr: number = 1.5
+
+  get maxDpr(): number {
+    return this._maxDpr
+  }
+
+  set maxDpr(value: number) {
+    this._maxDpr = value
+  }
 
   private device: GPUDevice
   private context: GPUCanvasContext
@@ -773,7 +784,7 @@ export class WebGPURenderer implements Renderer {
       })
     }
 
-    return new WebGPURenderer(
+    const renderer = new WebGPURenderer(
       device,
       context,
       format,
@@ -815,6 +826,8 @@ export class WebGPURenderer implements Renderer {
       dummyShadowTexture,
       shadowTexture,
     )
+    renderer.maxDpr = config.maxDpr === false ? Infinity : (config.maxDpr ?? defaultMaxDpr())
+    return renderer
   }
 
   // ─── Render targets ──────────────────────────────────────────────
@@ -1364,7 +1377,7 @@ export class WebGPURenderer implements Renderer {
     }
 
     // Resize canvas if needed
-    const dpr = Math.min(window.devicePixelRatio, 2)
+    const dpr = Math.min(window.devicePixelRatio, this._maxDpr)
     const displayW = Math.floor(this._displayW * dpr)
     const displayH = Math.floor(this._displayH * dpr)
     if (this.canvas.width !== displayW || this.canvas.height !== displayH) {

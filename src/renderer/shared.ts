@@ -18,6 +18,10 @@ import type { AABB } from '../math/index.ts'
 import type { DirectionalLight } from '../scene/light.ts'
 import type { Node } from '../scene/node.ts'
 
+/** Default max DPR: 1.25 on mobile (coarse pointer), 1.5 on desktop. */
+export const defaultMaxDpr = (): number =>
+  typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches ? 1.25 : 1.5
+
 // Pre-allocated result object to avoid per-frame allocations
 export interface TraversalResult {
   culledCount: number

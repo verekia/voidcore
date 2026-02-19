@@ -1,8 +1,11 @@
 // WebGL2 Renderer – Renders the scene using the WebGL2 API (fallback for non-WebGPU browsers).
 //
 // Functionally equivalent to the WebGPU renderer but uses the older WebGL2 API. The render
-// pipeline is the same: frustum culling → sort → batch uniform upload → MSAA MRT draw →
-// bloom post-processing → final blit with gamma correction.
+// pipeline is the same: frustum culling → sort → batch uniform upload → shadow pass →
+// MSAA MRT draw → bloom post-processing → final blit with gamma correction.
+//
+// Shadow mapping uses 3-cascade CSM (Cascaded Shadow Maps) with PCF 3×3 filtering, matching
+// the WebGPU renderer. Shadow depth is rendered into a TEXTURE_2D_ARRAY with comparison mode.
 //
 // Key differences from WebGPU:
 //   - Uses GLSL shaders instead of WGSL
@@ -11,6 +14,7 @@
 //   - Uses framebuffer objects (FBOs) and renderbuffers for MSAA and MRT
 //   - MSAA resolve is done via blitFramebuffer instead of resolve targets
 //   - Clip space depth is [-1, 1] instead of WebGPU's [0, 1]
+//   - Shadow uses mat4Ortho ([-1,1] depth) instead of mat4OrthoZO ([0,1] depth)
 //
 // WebGL2Renderer.render()  – Draws one frame.
 // WebGL2Renderer.dispose() – Releases all GPU resources.
@@ -19,9 +23,15 @@ import {
   frustumFromViewProjection,
   mat4Create,
   mat4Invert,
+  mat4LookAt,
   mat4Multiply,
+  mat4Ortho,
   mat4Transpose,
   vec3Create,
+  vec3Set,
+  vec3TransformMat4,
+  VEC3_UP,
+  VEC3_RIGHT,
 } from '../math/index.ts'
 import { Mesh } from '../scene/mesh.ts'
 import { Node } from '../scene/node.ts'
@@ -32,17 +42,20 @@ import {
   BASIC_VERT,
   BASIC_FRAG,
   BASIC_SKINNED_VERT,
+  SHADOW_DEPTH_VERT,
+  SHADOW_DEPTH_SKINNED_VERT,
+  SHADOW_DEPTH_FRAG,
   FULLSCREEN_VERT,
   BLOOM_DOWNSAMPLE_FRAG,
   BLOOM_UPSAMPLE_FRAG,
   BLIT_FRAG,
 } from './shaders.ts'
-import { collectVisibleMeshes, computeLightDir } from './shared.ts'
+import { collectVisibleMeshes, collectShadowCasters, computeLightDir, defaultMaxDpr } from './shared.ts'
 import { createSortState, sortMeshes } from './sort.ts'
 
 import type { Geometry } from '../geometry/geometry.ts'
 import type { Material, PaletteEntry } from '../materials/material.ts'
-import type { AABB, Mat4 } from '../math/index.ts'
+import type { AABB, Mat4, Vec3 } from '../math/index.ts'
 import type { PerspectiveCamera } from '../scene/camera.ts'
 import type { DirectionalLight } from '../scene/light.ts'
 import type { Scene } from '../scene/scene.ts'
@@ -102,6 +115,8 @@ interface SceneUniformLocs {
   u_hasPalette: WebGLUniformLocation | null
   u_paletteColor: (WebGLUniformLocation | null)[]
   u_paletteEmissive: (WebGLUniformLocation | null)[]
+  u_shadowMap: WebGLUniformLocation | null
+  u_receiveShadow: WebGLUniformLocation | null
 }
 
 interface PostUniformLocs {
@@ -129,6 +144,8 @@ const cacheSceneLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): Scen
     u_hasPalette: gl.getUniformLocation(program, 'u_hasPalette'),
     u_paletteColor: paletteColor,
     u_paletteEmissive: paletteEmissive,
+    u_shadowMap: gl.getUniformLocation(program, 'u_shadowMap'),
+    u_receiveShadow: gl.getUniformLocation(program, 'u_receiveShadow'),
   }
 }
 
@@ -404,10 +421,20 @@ export class WebGL2Renderer implements Renderer {
   gl: WebGL2RenderingContext
   canvas: HTMLCanvasElement
 
+  get maxDpr(): number {
+    return this._maxDpr
+  }
+
+  set maxDpr(value: number) {
+    this._maxDpr = value
+  }
+
   private lambertProgram: WebGLProgram
   private basicProgram: WebGLProgram
   private lambertSkinnedProgram: WebGLProgram
   private basicSkinnedProgram: WebGLProgram
+  private shadowDepthProgram: WebGLProgram
+  private shadowDepthSkinnedProgram: WebGLProgram
   private bloomDownsampleProgram: WebGLProgram
   private bloomUpsampleProgram: WebGLProgram
   private blitProgram: WebGLProgram
@@ -431,14 +458,40 @@ export class WebGL2Renderer implements Renderer {
   private bloomIntensity: number
   private bloomEnabled: boolean
 
+  // Shadow config
+  private shadowEnabled: boolean
+  private shadowResolution: number
+  private shadowLambda: number
+  private shadowBackExtend: number
+  private shadowConstantBias: number
+  private shadowSlopeBias: number
+  private shadowBlendRange: number
+
+  // Shadow GPU resources
+  private _shadowTexture!: WebGLTexture
+  private _shadowFbos: WebGLFramebuffer[] = []
+  private _shadowUBO!: WebGLBuffer
+  private _shadowUBData = new Float32Array(16) // mat4 = 64 bytes
+  private _shadowVAOs = new WeakMap<Geometry, WebGLVertexArrayObject>()
+  private _shadowSkinnedVAOs = new WeakMap<Geometry, WebGLVertexArrayObject>()
+
+  // Shadow scratch
+  private _shadowMeshes: Mesh[] = []
+  private _cascadeVPs: Mat4[] = [mat4Create(), mat4Create(), mat4Create()]
+  private _cascadeSplits = new Float32Array(3)
+  private _shadowLightView: Mat4 = mat4Create()
+  private _shadowLightProj: Mat4 = mat4Create()
+  private _shadowCorner: Vec3 = vec3Create()
+  private _shadowCenter: Vec3 = vec3Create()
+  private _frameNum = 0
+
   // Traversal
   private _traversalStack: Node[] = []
 
   // UBOs
-  // FrameBlock (binding 0): mat4 VP + vec3 lightDir + pad + vec3 lightColor + float lightIntensity
-  //   + vec3 ambientColor + float ambientIntensity = 112 bytes = 28 floats
+  // FrameBlock (binding 0): 352 bytes = 88 floats (VP + light + shadow data)
   private _frameUBO!: WebGLBuffer
-  private _frameData = new Float32Array(28)
+  private _frameData = new Float32Array(88)
   // ObjectBlock (binding 1, dynamic): mat4 worldMatrix + mat4 normalMatrix = 128 bytes
   // SkinnedObjectBlock (binding 1, dynamic): above + mat4[32] boneMatrices = 2176 bytes
   private _uboAlignment = 256
@@ -461,6 +514,9 @@ export class WebGL2Renderer implements Renderer {
   private _tempVec3 = new Float32Array(3)
   private _meshes: Mesh[] = []
   private _sortState: SortState = createSortState(4096)
+
+  // DPR limiting
+  private _maxDpr: number
 
   // Cached canvas dimensions
   private _displayW = 0
@@ -495,6 +551,7 @@ export class WebGL2Renderer implements Renderer {
 
     this.gl = gl
     this.canvas = canvas
+    this._maxDpr = config.maxDpr === false ? Infinity : (config.maxDpr ?? defaultMaxDpr())
     this.samples = config.antialias !== false ? 4 : 1
 
     const bloomConfig = config.bloom
@@ -512,11 +569,41 @@ export class WebGL2Renderer implements Renderer {
       this.bloomLevels = 5
     }
 
+    // Shadow config
+    const shadowConfig = config.shadows
+    if (!shadowConfig) {
+      this.shadowEnabled = false
+      this.shadowResolution = 1024
+      this.shadowLambda = 0.7
+      this.shadowBackExtend = 75
+      this.shadowConstantBias = 0.001
+      this.shadowSlopeBias = 0.005
+      this.shadowBlendRange = 0.1
+    } else if (typeof shadowConfig === 'object') {
+      this.shadowEnabled = shadowConfig.enabled !== false
+      this.shadowResolution = shadowConfig.resolution ?? 1024
+      this.shadowLambda = shadowConfig.lambda ?? 0.7
+      this.shadowBackExtend = shadowConfig.backExtend ?? 75
+      this.shadowConstantBias = shadowConfig.constantBias ?? 0.001
+      this.shadowSlopeBias = shadowConfig.slopeBias ?? 0.005
+      this.shadowBlendRange = shadowConfig.blendRange ?? 0.1
+    } else {
+      this.shadowEnabled = true
+      this.shadowResolution = 1024
+      this.shadowLambda = 0.7
+      this.shadowBackExtend = 75
+      this.shadowConstantBias = 0.001
+      this.shadowSlopeBias = 0.005
+      this.shadowBlendRange = 0.1
+    }
+
     // Compile programs
     this.lambertProgram = createProgram(gl, LAMBERT_VERT, LAMBERT_FRAG)
     this.basicProgram = createProgram(gl, BASIC_VERT, BASIC_FRAG)
     this.lambertSkinnedProgram = createProgram(gl, LAMBERT_SKINNED_VERT, LAMBERT_FRAG)
     this.basicSkinnedProgram = createProgram(gl, BASIC_SKINNED_VERT, BASIC_FRAG)
+    this.shadowDepthProgram = createProgram(gl, SHADOW_DEPTH_VERT, SHADOW_DEPTH_FRAG)
+    this.shadowDepthSkinnedProgram = createProgram(gl, SHADOW_DEPTH_SKINNED_VERT, SHADOW_DEPTH_FRAG)
     this.bloomDownsampleProgram = createProgram(gl, FULLSCREEN_VERT, BLOOM_DOWNSAMPLE_FRAG)
     this.bloomUpsampleProgram = createProgram(gl, FULLSCREEN_VERT, BLOOM_UPSAMPLE_FRAG)
     this.blitProgram = createProgram(gl, FULLSCREEN_VERT, BLIT_FRAG)
@@ -541,10 +628,10 @@ export class WebGL2Renderer implements Renderer {
     this._alignedObjectSize = Math.ceil(128 / this._uboAlignment) * this._uboAlignment
     this._alignedSkinnedSize = Math.ceil(2176 / this._uboAlignment) * this._uboAlignment
 
-    // Frame UBO
+    // Frame UBO (352 bytes = 88 floats)
     this._frameUBO = gl.createBuffer()!
     gl.bindBuffer(gl.UNIFORM_BUFFER, this._frameUBO)
-    gl.bufferData(gl.UNIFORM_BUFFER, 112, gl.DYNAMIC_DRAW)
+    gl.bufferData(gl.UNIFORM_BUFFER, 352, gl.DYNAMIC_DRAW)
 
     // Dynamic object / skinned UBOs
     this._createDynamicBuffers()
@@ -554,6 +641,38 @@ export class WebGL2Renderer implements Renderer {
     this._bindUBOBlocks(this.basicProgram, false)
     this._bindUBOBlocks(this.lambertSkinnedProgram, true)
     this._bindUBOBlocks(this.basicSkinnedProgram, true)
+
+    // Shadow UBO (binding 2, 64 bytes = mat4)
+    this._shadowUBO = gl.createBuffer()!
+    gl.bindBuffer(gl.UNIFORM_BUFFER, this._shadowUBO)
+    gl.bufferData(gl.UNIFORM_BUFFER, 64, gl.DYNAMIC_DRAW)
+
+    // Bind ShadowBlock for shadow programs
+    this._bindShadowUBOBlocks(this.shadowDepthProgram, false)
+    this._bindShadowUBOBlocks(this.shadowDepthSkinnedProgram, true)
+
+    // Shadow texture (TEXTURE_2D_ARRAY with depth comparison)
+    const shadowRes = this.shadowEnabled ? this.shadowResolution : 1
+    this._shadowTexture = gl.createTexture()!
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, this._shadowTexture)
+    gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.DEPTH_COMPONENT24, shadowRes, shadowRes, 3)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL)
+
+    // Shadow FBOs (one per cascade layer)
+    for (let i = 0; i < 3; i++) {
+      const fbo = gl.createFramebuffer()!
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo)
+      gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, this._shadowTexture, 0, i)
+      gl.drawBuffers([])
+      gl.readBuffer(gl.NONE)
+      this._shadowFbos.push(fbo)
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
 
     // Cache canvas dimensions
     this._displayW = canvas.clientWidth
@@ -572,6 +691,181 @@ export class WebGL2Renderer implements Renderer {
     const objName = skinned ? 'SkinnedObjectBlock' : 'ObjectBlock'
     const objIdx = gl.getUniformBlockIndex(program, objName)
     if (objIdx !== gl.INVALID_INDEX) gl.uniformBlockBinding(program, objIdx, 1)
+  }
+
+  private _bindShadowUBOBlocks(program: WebGLProgram, skinned: boolean) {
+    const gl = this.gl
+    const shadowIdx = gl.getUniformBlockIndex(program, 'ShadowBlock')
+    if (shadowIdx !== gl.INVALID_INDEX) gl.uniformBlockBinding(program, shadowIdx, 2)
+    const objName = skinned ? 'SkinnedObjectBlock' : 'ObjectBlock'
+    const objIdx = gl.getUniformBlockIndex(program, objName)
+    if (objIdx !== gl.INVALID_INDEX) gl.uniformBlockBinding(program, objIdx, 1)
+  }
+
+  private ensureShadowVAO(geometry: Geometry, skinned: boolean): WebGLVertexArrayObject {
+    const cache = skinned ? this._shadowSkinnedVAOs : this._shadowVAOs
+    const cached = cache.get(geometry)
+    if (cached) return cached
+
+    const gl = this.gl
+    ensureGPUBuffers(gl, geometry)
+    const bufs = geometry._gpuBuffers as GPUBuffers
+
+    const vao = gl.createVertexArray()!
+    gl.bindVertexArray(vao)
+
+    // Position (location 0)
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufs.position)
+    gl.enableVertexAttribArray(0)
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0)
+
+    if (skinned) {
+      // Joints (location 4)
+      if (bufs.joints) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, bufs.joints)
+        gl.enableVertexAttribArray(4)
+        gl.vertexAttribPointer(4, 4, gl.FLOAT, false, 0, 0)
+      }
+      // Weights (location 5)
+      if (bufs.weights) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, bufs.weights)
+        gl.enableVertexAttribArray(5)
+        gl.vertexAttribPointer(5, 4, gl.FLOAT, false, 0, 0)
+      }
+    }
+
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bufs.index)
+    gl.bindVertexArray(null)
+
+    cache.set(geometry, vao)
+    return vao
+  }
+
+  // ─── Cascade shadow map computation ─────────────────────────────
+
+  private computeCascadeSplits(camera: PerspectiveCamera): void {
+    const near = camera.near
+    const far = camera.far
+    const lambda = this.shadowLambda
+    for (let i = 0; i < 3; i++) {
+      const p = (i + 1) / 3
+      const log = near * Math.pow(far / near, p)
+      const linear = near + (far - near) * p
+      this._cascadeSplits[i] = lambda * log + (1 - lambda) * linear
+    }
+  }
+
+  private computeCascadeMatrix(
+    cascadeIdx: number,
+    camera: PerspectiveCamera,
+    lightDir: Vec3,
+    nearDist: number,
+    farDist: number,
+  ): void {
+    const V = camera._viewMatrix
+    const rx = V[0]!,
+      ry = V[4]!,
+      rz = V[8]!
+    const ux = V[1]!,
+      uy = V[5]!,
+      uz = V[9]!
+    const fx = -V[2]!,
+      fy = -V[6]!,
+      fz = -V[10]!
+    const px = camera.position[0]!,
+      py = camera.position[1]!,
+      pz = camera.position[2]!
+
+    const fovY = camera.fov * (Math.PI / 180)
+    const aspect = camera.aspect
+
+    const nearH = Math.tan(fovY / 2) * nearDist
+    const nearW = nearH * aspect
+    const farH = Math.tan(fovY / 2) * farDist
+    const farW = farH * aspect
+
+    const corners = [
+      px + fx * nearDist - rx * nearW - ux * nearH,
+      py + fy * nearDist - ry * nearW - uy * nearH,
+      pz + fz * nearDist - rz * nearW - uz * nearH,
+      px + fx * nearDist + rx * nearW - ux * nearH,
+      py + fy * nearDist + ry * nearW - uy * nearH,
+      pz + fz * nearDist + rz * nearW - uz * nearH,
+      px + fx * nearDist + rx * nearW + ux * nearH,
+      py + fy * nearDist + ry * nearW + uy * nearH,
+      pz + fz * nearDist + rz * nearW + uz * nearH,
+      px + fx * nearDist - rx * nearW + ux * nearH,
+      py + fy * nearDist - ry * nearW + uy * nearH,
+      pz + fz * nearDist - rz * nearW + uz * nearH,
+      px + fx * farDist - rx * farW - ux * farH,
+      py + fy * farDist - ry * farW - uy * farH,
+      pz + fz * farDist - rz * farW - uz * farH,
+      px + fx * farDist + rx * farW - ux * farH,
+      py + fy * farDist + ry * farW - uy * farH,
+      pz + fz * farDist + rz * farW - uz * farH,
+      px + fx * farDist + rx * farW + ux * farH,
+      py + fy * farDist + ry * farW + uy * farH,
+      pz + fz * farDist + rz * farW + uz * farH,
+      px + fx * farDist - rx * farW + ux * farH,
+      py + fy * farDist - ry * farW + uy * farH,
+      pz + fz * farDist - rz * farW + uz * farH,
+    ]
+
+    let cx = 0,
+      cy = 0,
+      cz = 0
+    for (let i = 0; i < 24; i += 3) {
+      cx += corners[i]!
+      cy += corners[i + 1]!
+      cz += corners[i + 2]!
+    }
+    cx /= 8
+    cy /= 8
+    cz /= 8
+
+    const center = this._shadowCenter
+    vec3Set(center, cx, cy, cz)
+    const offset = this.shadowBackExtend + farDist
+    const eye = this._shadowCorner
+    vec3Set(eye, cx + lightDir[0]! * offset, cy + lightDir[1]! * offset, cz + lightDir[2]! * offset)
+
+    const upVec = Math.abs(lightDir[2]!) > 0.99 ? VEC3_RIGHT : VEC3_UP
+    mat4LookAt(this._shadowLightView, eye, center, upVec)
+
+    let minX = Infinity,
+      minY = Infinity,
+      minZ = Infinity
+    let maxX = -Infinity,
+      maxY = -Infinity,
+      maxZ = -Infinity
+
+    for (let i = 0; i < 24; i += 3) {
+      vec3Set(this._shadowCorner, corners[i]!, corners[i + 1]!, corners[i + 2]!)
+      vec3TransformMat4(this._shadowCorner, this._shadowCorner, this._shadowLightView)
+      const lx = this._shadowCorner[0]!
+      const ly = this._shadowCorner[1]!
+      const lz = this._shadowCorner[2]!
+      if (lx < minX) minX = lx
+      if (lx > maxX) maxX = lx
+      if (ly < minY) minY = ly
+      if (ly > maxY) maxY = ly
+      if (lz < minZ) minZ = lz
+      if (lz > maxZ) maxZ = lz
+    }
+
+    minZ -= this.shadowBackExtend
+
+    const texelSizeX = (maxX - minX) / this.shadowResolution
+    const texelSizeY = (maxY - minY) / this.shadowResolution
+    minX = Math.floor(minX / texelSizeX) * texelSizeX
+    maxX = Math.ceil(maxX / texelSizeX) * texelSizeX
+    minY = Math.floor(minY / texelSizeY) * texelSizeY
+    maxY = Math.ceil(maxY / texelSizeY) * texelSizeY
+
+    // Orthographic projection ([-1,1] depth range for WebGL2)
+    mat4Ortho(this._shadowLightProj, minX, maxX, minY, maxY, -maxZ, -minZ)
+
+    mat4Multiply(this._cascadeVPs[cascadeIdx]!, this._shadowLightProj, this._shadowLightView)
   }
 
   private _createDynamicBuffers() {
@@ -650,7 +944,7 @@ export class WebGL2Renderer implements Renderer {
     }
 
     // Resize canvas if needed
-    const dpr = Math.min(window.devicePixelRatio, 2)
+    const dpr = Math.min(window.devicePixelRatio, this._maxDpr)
     const displayW = Math.floor(this._displayW * dpr)
     const displayH = Math.floor(this._displayH * dpr)
     if (this.canvas.width !== displayW || this.canvas.height !== displayH) {
@@ -684,62 +978,93 @@ export class WebGL2Renderer implements Renderer {
     const lightDir = this._lightDir
     computeLightDir(lightDir, this._tempVec3, dirLight)
 
-    this.ensureRenderTargets()
-    const rt = this.renderTargets!
-
-    // ─── Opaque pass (MSAA MRT) ────────────────────────────────────
-    gl.bindFramebuffer(gl.FRAMEBUFFER, rt.msaaFbo)
-    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1])
-    gl.viewport(0, 0, rt.width, rt.height)
-    gl.clearColor(0, 0, 0, 1.0)
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
-    gl.enable(gl.DEPTH_TEST)
-    gl.depthMask(true)
-
-    let drawCalls = 0
-    let triangles = 0
-
     // Radix sort meshes by layer > pipeline > material > depth
     sortMeshes(this._sortState, meshes, meshes.length, camera)
     const sortedIndices = this._sortState.indices
 
-    // ─── Upload frame UBO (once per frame) ─────────────────────────
-    const fd = this._frameData
-    fd.set(this._vpMatrix, 0)
-    fd[16] = lightDir[0]!
-    fd[17] = lightDir[1]!
-    fd[18] = lightDir[2]!
-    fd[19] = 0 // _lightPad
-    fd[20] = dirLight ? (dirLight as DirectionalLight).color[0] : 0
-    fd[21] = dirLight ? (dirLight as DirectionalLight).color[1] : 0
-    fd[22] = dirLight ? (dirLight as DirectionalLight).color[2] : 0
-    fd[23] = dirLight ? (dirLight as DirectionalLight).intensity : 0
-    fd[24] = scene.ambientLight.color[0]
-    fd[25] = scene.ambientLight.color[1]
-    fd[26] = scene.ambientLight.color[2]
-    fd[27] = scene.ambientLight.intensity
-    gl.bindBuffer(gl.UNIFORM_BUFFER, this._frameUBO)
-    gl.bufferSubData(gl.UNIFORM_BUFFER, 0, fd)
-    gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, this._frameUBO)
+    let drawCalls = 0
+    let triangles = 0
 
-    // ─── Batch-fill object UBOs ─────────────────────────────────────
+    // ─── Frame counter for shadow batch dedup ─────────────────────
+    this._frameNum++
+    const frameNum = this._frameNum
+    const shadowActive = this.shadowEnabled && !!dirLight
+
+    // ─── Cascade computation ─────────────────────────────────────
+    if (shadowActive) {
+      this.computeCascadeSplits(camera)
+      for (let c = 0; c < 3; c++) {
+        const near = c === 0 ? camera.near : this._cascadeSplits[c - 1]!
+        const far = this._cascadeSplits[c]!
+        this.computeCascadeMatrix(c, camera, lightDir, near, far)
+      }
+    }
+
+    // ─── Collect shadow-only meshes ──────────────────────────────
+    const shadowMeshes = this._shadowMeshes
+    shadowMeshes.length = 0
+
+    // ─── Batch fill: camera-visible meshes ───────────────────────
+    const alignedObjFloats = this._alignedObjectSize / 4
+    const alignedSkinnedFloats = this._alignedSkinnedSize / 4
+
+    // Count and mark _batchFrame for shadow dedup
     let objCount = 0
     let skinnedCount = 0
     for (let si = 0; si < meshes.length; si++) {
-      if (meshes[sortedIndices[si]!]!._isSkinned) skinnedCount++
+      const mesh = meshes[sortedIndices[si]!]!
+      mesh._batchFrame = frameNum
+      if (mesh._isSkinned) skinnedCount++
       else objCount++
     }
+
+    // Collect shadow-only casters using broadest cascade
+    if (shadowActive) {
+      frustumFromViewProjection(this._frustumPlanes, this._cascadeVPs[2]!)
+      collectShadowCasters(scene, this._frustumPlanes, this._worldAABB, shadowMeshes, this._traversalStack, frameNum)
+      for (let i = 0; i < shadowMeshes.length; i++) {
+        const sm = shadowMeshes[i]!
+        sm._isSkinned = !!sm.skeleton
+        if (sm._isSkinned) skinnedCount++
+        else objCount++
+      }
+    }
+
     this._ensureDynamicCapacity(objCount, skinnedCount)
 
-    const alignedObjFloats = this._alignedObjectSize / 4
-    const alignedSkinnedFloats = this._alignedSkinnedSize / 4
     const objBatch = this._objectBatchData
     const skinnedBatch = this._skinnedBatchData
     let objIdx = 0
     let skinnedIdx = 0
 
+    // Fill camera-visible meshes
     for (let si = 0; si < meshes.length; si++) {
       const mesh = meshes[sortedIndices[si]!]!
+      if (mesh._isSkinned) {
+        mesh.skeleton!.update()
+        const off = skinnedIdx * alignedSkinnedFloats
+        skinnedBatch.set(mesh._worldMatrix, off)
+        if (mat4Invert(this._invWorldMatrix, mesh._worldMatrix)) {
+          mat4Transpose(this._normalMatrix, this._invWorldMatrix)
+        }
+        skinnedBatch.set(this._normalMatrix, off + 16)
+        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 32)
+        mesh._batchIndex = skinnedIdx++
+      } else {
+        const off = objIdx * alignedObjFloats
+        objBatch.set(mesh._worldMatrix, off)
+        if (mat4Invert(this._invWorldMatrix, mesh._worldMatrix)) {
+          mat4Transpose(this._normalMatrix, this._invWorldMatrix)
+        }
+        objBatch.set(this._normalMatrix, off + 16)
+        mesh._batchIndex = objIdx++
+      }
+    }
+
+    // Fill shadow-only meshes
+    for (let i = 0; i < shadowMeshes.length; i++) {
+      const mesh = shadowMeshes[i]!
+      mesh._batchFrame = frameNum
       if (mesh._isSkinned) {
         mesh.skeleton!.update()
         const off = skinnedIdx * alignedSkinnedFloats
@@ -771,6 +1096,172 @@ export class WebGL2Renderer implements Renderer {
       gl.bufferSubData(gl.UNIFORM_BUFFER, 0, skinnedBatch, 0, skinnedIdx * alignedSkinnedFloats)
     }
 
+    // ─── Upload frame UBO (88 floats / 352 bytes) ─────────────────
+    const fd = this._frameData
+    fd.fill(0)
+    fd.set(this._vpMatrix, 0)
+    fd[16] = lightDir[0]!
+    fd[17] = lightDir[1]!
+    fd[18] = lightDir[2]!
+    fd[19] = 0 // _lightPad
+    fd[20] = dirLight ? (dirLight as DirectionalLight).color[0] : 0
+    fd[21] = dirLight ? (dirLight as DirectionalLight).color[1] : 0
+    fd[22] = dirLight ? (dirLight as DirectionalLight).color[2] : 0
+    fd[23] = dirLight ? (dirLight as DirectionalLight).intensity : 0
+    fd[24] = scene.ambientLight.color[0]
+    fd[25] = scene.ambientLight.color[1]
+    fd[26] = scene.ambientLight.color[2]
+    fd[27] = scene.ambientLight.intensity
+    fd[28] = shadowActive ? 1.0 : 0.0
+    // fd[29-31] = 0 (padding, already zeroed)
+    if (shadowActive) {
+      fd.set(this._cascadeVPs[0]!, 32)
+      fd.set(this._cascadeVPs[1]!, 48)
+      fd.set(this._cascadeVPs[2]!, 64)
+      fd[80] = this._cascadeSplits[0]!
+      fd[81] = this._cascadeSplits[1]!
+      fd[82] = this._cascadeSplits[2]!
+      // fd[83] = 0 (padding)
+      fd[84] = this.shadowConstantBias
+      fd[85] = this.shadowSlopeBias
+      fd[86] = 1.0 / this.shadowResolution
+      fd[87] = this.shadowBlendRange
+    }
+    gl.bindBuffer(gl.UNIFORM_BUFFER, this._frameUBO)
+    gl.bufferSubData(gl.UNIFORM_BUFFER, 0, fd)
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, this._frameUBO)
+
+    // ─── Shadow render pass (3 cascades, depth-only) ─────────────
+    if (shadowActive) {
+      gl.cullFace(gl.FRONT)
+      gl.colorMask(false, false, false, false)
+
+      const shadowRes = this.shadowResolution
+      const PAD = 0.3
+
+      for (let c = 0; c < 3; c++) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this._shadowFbos[c]!)
+        gl.viewport(0, 0, shadowRes, shadowRes)
+        gl.clear(gl.DEPTH_BUFFER_BIT)
+
+        // Write shadow UBO for this cascade
+        this._shadowUBData.set(this._cascadeVPs[c]!)
+        gl.bindBuffer(gl.UNIFORM_BUFFER, this._shadowUBO)
+        gl.bufferSubData(gl.UNIFORM_BUFFER, 0, this._shadowUBData)
+        gl.bindBufferBase(gl.UNIFORM_BUFFER, 2, this._shadowUBO)
+
+        const cvp = this._cascadeVPs[c]!
+
+        // Draw camera-visible shadow casters
+        for (let si = 0; si < meshes.length; si++) {
+          const mesh = meshes[sortedIndices[si]!]!
+          if (!mesh.castShadow) continue
+
+          // Light-space frustum cull
+          const wm = mesh._worldMatrix
+          const wx = wm[12]!,
+            wy = wm[13]!,
+            wz = wm[14]!
+          const lx = cvp[0]! * wx + cvp[4]! * wy + cvp[8]! * wz + cvp[12]!
+          const ly = cvp[1]! * wx + cvp[5]! * wy + cvp[9]! * wz + cvp[13]!
+          const lz = cvp[2]! * wx + cvp[6]! * wy + cvp[10]! * wz + cvp[14]!
+          if (lx < -(1 + PAD) || lx > 1 + PAD || ly < -(1 + PAD) || ly > 1 + PAD || lz < -(1 + PAD) || lz > 1 + PAD)
+            continue
+
+          ensureGPUBuffers(gl, mesh.geometry)
+          const idxType = mesh.geometry.indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT
+
+          if (mesh._isSkinned) {
+            gl.useProgram(this.shadowDepthSkinnedProgram)
+            gl.bindVertexArray(this.ensureShadowVAO(mesh.geometry, true))
+            gl.bindBufferRange(
+              gl.UNIFORM_BUFFER,
+              1,
+              this._skinnedDynBuf,
+              mesh._batchIndex * this._alignedSkinnedSize,
+              2176,
+            )
+          } else {
+            gl.useProgram(this.shadowDepthProgram)
+            gl.bindVertexArray(this.ensureShadowVAO(mesh.geometry, false))
+            gl.bindBufferRange(
+              gl.UNIFORM_BUFFER,
+              1,
+              this._objectDynBuf,
+              mesh._batchIndex * this._alignedObjectSize,
+              128,
+            )
+          }
+
+          gl.drawElements(gl.TRIANGLES, mesh.geometry.indexCount, idxType, 0)
+          drawCalls++
+        }
+
+        // Draw shadow-only casters
+        for (let i = 0; i < shadowMeshes.length; i++) {
+          const mesh = shadowMeshes[i]!
+
+          const wm = mesh._worldMatrix
+          const wx = wm[12]!,
+            wy = wm[13]!,
+            wz = wm[14]!
+          const lx = cvp[0]! * wx + cvp[4]! * wy + cvp[8]! * wz + cvp[12]!
+          const ly = cvp[1]! * wx + cvp[5]! * wy + cvp[9]! * wz + cvp[13]!
+          const lz = cvp[2]! * wx + cvp[6]! * wy + cvp[10]! * wz + cvp[14]!
+          if (lx < -(1 + PAD) || lx > 1 + PAD || ly < -(1 + PAD) || ly > 1 + PAD || lz < -(1 + PAD) || lz > 1 + PAD)
+            continue
+
+          ensureGPUBuffers(gl, mesh.geometry)
+          const idxType = mesh.geometry.indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT
+
+          if (mesh._isSkinned) {
+            gl.useProgram(this.shadowDepthSkinnedProgram)
+            gl.bindVertexArray(this.ensureShadowVAO(mesh.geometry, true))
+            gl.bindBufferRange(
+              gl.UNIFORM_BUFFER,
+              1,
+              this._skinnedDynBuf,
+              mesh._batchIndex * this._alignedSkinnedSize,
+              2176,
+            )
+          } else {
+            gl.useProgram(this.shadowDepthProgram)
+            gl.bindVertexArray(this.ensureShadowVAO(mesh.geometry, false))
+            gl.bindBufferRange(
+              gl.UNIFORM_BUFFER,
+              1,
+              this._objectDynBuf,
+              mesh._batchIndex * this._alignedObjectSize,
+              128,
+            )
+          }
+
+          gl.drawElements(gl.TRIANGLES, mesh.geometry.indexCount, idxType, 0)
+          drawCalls++
+        }
+      }
+
+      gl.bindVertexArray(null)
+      gl.cullFace(gl.BACK)
+      gl.colorMask(true, true, true, true)
+    }
+
+    this.ensureRenderTargets()
+    const rt = this.renderTargets!
+
+    // ─── Opaque pass (MSAA MRT) ────────────────────────────────────
+    gl.bindFramebuffer(gl.FRAMEBUFFER, rt.msaaFbo)
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1])
+    gl.viewport(0, 0, rt.width, rt.height)
+    gl.clearColor(0, 0, 0, 1.0)
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+    gl.enable(gl.DEPTH_TEST)
+    gl.depthMask(true)
+
+    // Bind shadow texture to unit 2
+    gl.activeTexture(gl.TEXTURE2)
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, this._shadowTexture)
+
     // ─── Draw loop ──────────────────────────────────────────────────
     this._lastMaterial = null
     this._lastProgram = null
@@ -801,6 +1292,10 @@ export class WebGL2Renderer implements Renderer {
       if (programChanged) {
         gl.useProgram(program)
         this._lastProgram = program
+        // Bind shadow texture sampler to unit 2 for lambert programs
+        if (mesh.material.type === 'lambert') {
+          gl.uniform1i(locs.u_shadowMap, 2)
+        }
       }
 
       ensureGPUBuffers(gl, mesh.geometry)
@@ -824,6 +1319,7 @@ export class WebGL2Renderer implements Renderer {
         if (mesh.material.type === 'lambert') {
           const hasPalette = !!mesh.material.palette && mesh.geometry.hasAttribute('materialIndex')
           gl.uniform1i(locs.u_hasPalette, hasPalette ? 1 : 0)
+          gl.uniform1i(locs.u_receiveShadow, mesh.material.receiveShadow ? 1 : 0)
 
           if (hasPalette && mesh.material.palette) {
             for (let i = 0; i < 32; i++) {
@@ -960,10 +1456,15 @@ export class WebGL2Renderer implements Renderer {
     gl.deleteBuffer(this._frameUBO)
     gl.deleteBuffer(this._objectDynBuf)
     gl.deleteBuffer(this._skinnedDynBuf)
+    gl.deleteBuffer(this._shadowUBO)
+    gl.deleteTexture(this._shadowTexture)
+    for (const fbo of this._shadowFbos) gl.deleteFramebuffer(fbo)
     gl.deleteProgram(this.lambertProgram)
     gl.deleteProgram(this.basicProgram)
     gl.deleteProgram(this.lambertSkinnedProgram)
     gl.deleteProgram(this.basicSkinnedProgram)
+    gl.deleteProgram(this.shadowDepthProgram)
+    gl.deleteProgram(this.shadowDepthSkinnedProgram)
     gl.deleteProgram(this.bloomDownsampleProgram)
     gl.deleteProgram(this.bloomUpsampleProgram)
     gl.deleteProgram(this.blitProgram)

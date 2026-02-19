@@ -14,6 +14,7 @@ A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 sup
 - **Bloom post-processing** – Multi-level downsample/upsample with Karis average
 - **Frustum culling** – AABB-based visibility culling with Gribb-Hartmann plane extraction
 - **Raycasting** – BVH-accelerated ray-mesh intersection for mouse picking
+- **DPR limiting** – Configurable max device pixel ratio (1.25 mobile / 1.5 desktop default)
 - **Priority scheduler** – Single rAF loop with priority-ordered callbacks and FPS capping
 - **Orbit controls** – Mouse/touch camera controls with damping and inertia
 - **Zero-allocation math** – Float32Array-backed vectors, matrices, and quaternions
@@ -68,6 +69,7 @@ engine.register(
 )
 
 engine.maxFps = 60
+engine.maxDpr = 1.5 // Cap resolution scaling (default: 1.25 mobile, 1.5 desktop, false to disable)
 engine.start()
 ```
 

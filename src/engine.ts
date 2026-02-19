@@ -11,6 +11,7 @@
 // engine.start()      – Begins the scheduler loop.
 // engine.stop()       – Pauses the scheduler loop.
 // engine.maxFps       – Global FPS cap (0 = uncapped).
+// engine.maxDpr       – Max device pixel ratio (default 1.25 on mobile, 1.5 on desktop).
 // engine.render()     – Renders a single frame (call this inside a registered callback).
 // engine.dispose()    – Cleans up the scheduler and GPU resources.
 
@@ -47,6 +48,15 @@ export class Engine {
 
   set maxFps(fps: number) {
     this.scheduler.maxFps = fps
+  }
+
+  /** Maximum device pixel ratio. Caps resolution scaling to save GPU on high-density displays. */
+  get maxDpr(): number {
+    return this.renderer.maxDpr
+  }
+
+  set maxDpr(dpr: number) {
+    this.renderer.maxDpr = dpr
   }
 
   /**

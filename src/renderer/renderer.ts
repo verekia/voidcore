@@ -28,6 +28,7 @@ export interface RendererConfig {
   antialias?: boolean
   bloom?: boolean | { intensity?: number; levels?: number }
   shadows?: boolean | ShadowConfig
+  maxDpr?: number | false
 }
 
 export interface FrameStats {
@@ -41,6 +42,7 @@ export interface FrameStats {
 
 export interface Renderer {
   readonly backend: 'webgpu' | 'webgl2'
+  maxDpr: number
   render(scene: Scene, camera: PerspectiveCamera): void
   dispose(): void
   stats: FrameStats

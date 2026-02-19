@@ -5,10 +5,15 @@
 //   Fragment shader – Computes the final color of each pixel.
 //
 // This file contains four pairs of shaders:
-//   Lambert          – Diffuse lighting (ambient + directional light × surface normal).
-//   Lambert Skinned  – Same lighting, but vertices are deformed by bone matrices first.
+//   Lambert          – Diffuse lighting (ambient + directional light × surface normal)
+//                      with cascaded shadow map sampling (PCF 3×3).
+//   Lambert Skinned  – Same lighting + shadows, but vertices are deformed by bone matrices.
 //   Basic            – Flat unlit color (no lighting calculations).
 //   Basic Skinned    – Flat unlit color with skeletal deformation.
+//
+// Plus two shadow depth shaders (depth-only, used to render the shadow map):
+//   Shadow Depth         – Writes depth from light's perspective (static meshes).
+//   Shadow Depth Skinned – Same but with skeletal deformation.
 //
 // Plus three post-processing shaders (fullscreen triangle, no vertex buffer needed):
 //   Bloom Downsample – 13-tap filter that progressively shrinks the emissive image.
@@ -24,14 +29,25 @@
 
 // ─── Shared UBO block declarations ───────────────────────────────────
 //
-// FrameBlock (binding 0, 112 bytes std140):
-//   mat4  u_viewProjection       offset 0   (64 bytes)
-//   vec3  u_lightDirection       offset 64  (12 bytes + 4 pad)
-//   float _lightPad              offset 76
-//   vec3  u_lightColor           offset 80  (12 bytes)
-//   float u_lightIntensity       offset 92
-//   vec3  u_ambientColor         offset 96  (12 bytes)
-//   float u_ambientIntensity     offset 108
+// FrameBlock (binding 0, 352 bytes / 88 floats, std140):
+//   mat4  u_viewProjection       float 0-15   (64 bytes)
+//   vec3  u_lightDirection       float 16-18  (12 bytes + 4 pad)
+//   float _lightPad              float 19
+//   vec3  u_lightColor           float 20-22  (12 bytes)
+//   float u_lightIntensity       float 23
+//   vec3  u_ambientColor         float 24-26  (12 bytes)
+//   float u_ambientIntensity     float 27
+//   float u_shadowEnabled        float 28
+//   float _sp1, _sp2, _sp3       float 29-31  (pad for mat4 alignment)
+//   mat4  u_cascadeVP0           float 32-47
+//   mat4  u_cascadeVP1           float 48-63
+//   mat4  u_cascadeVP2           float 64-79
+//   vec3  u_cascadeSplits        float 80-82
+//   float _splitsPad             float 83
+//   float u_constantBias         float 84
+//   float u_slopeBias            float 85
+//   float u_invMapSize           float 86
+//   float u_blendRange           float 87
 //
 // ObjectBlock (binding 1, 128 bytes std140):
 //   mat4 u_worldMatrix    offset 0
@@ -41,6 +57,9 @@
 //   mat4 u_worldMatrix       offset 0
 //   mat4 u_normalMatrix      offset 64
 //   mat4 u_boneMatrices[32]  offset 128
+//
+// ShadowBlock (binding 2, 64 bytes std140):
+//   mat4 u_shadowVP          offset 0
 
 const FRAME_BLOCK = `
 layout(std140) uniform FrameBlock {
@@ -51,6 +70,17 @@ layout(std140) uniform FrameBlock {
   float u_lightIntensity;
   vec3 u_ambientColor;
   float u_ambientIntensity;
+  float u_shadowEnabled;
+  float _sp1; float _sp2; float _sp3;
+  mat4 u_cascadeVP0;
+  mat4 u_cascadeVP1;
+  mat4 u_cascadeVP2;
+  vec3 u_cascadeSplits;
+  float _splitsPad;
+  float u_constantBias;
+  float u_slopeBias;
+  float u_invMapSize;
+  float u_blendRange;
 };`
 
 const OBJECT_BLOCK = `
@@ -65,6 +95,54 @@ layout(std140) uniform SkinnedObjectBlock {
   mat4 u_normalMatrix;
   mat4 u_boneMatrices[32];
 };`
+
+const SHADOW_BLOCK = `
+layout(std140) uniform ShadowBlock {
+  mat4 u_shadowVP;
+};`
+
+// ─── Shadow depth shaders (depth-only pass) ─────────────────────────
+
+export const SHADOW_DEPTH_VERT = `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 a_position;
+
+${SHADOW_BLOCK}
+${OBJECT_BLOCK}
+
+void main() {
+  gl_Position = u_shadowVP * u_worldMatrix * vec4(a_position, 1.0);
+}
+`
+
+export const SHADOW_DEPTH_SKINNED_VERT = `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 a_position;
+layout(location = 4) in vec4 a_joints;
+layout(location = 5) in vec4 a_weights;
+
+${SHADOW_BLOCK}
+${SKINNED_OBJECT_BLOCK}
+
+void main() {
+  mat4 skinMatrix =
+    a_weights.x * u_boneMatrices[int(a_joints.x)] +
+    a_weights.y * u_boneMatrices[int(a_joints.y)] +
+    a_weights.z * u_boneMatrices[int(a_joints.z)] +
+    a_weights.w * u_boneMatrices[int(a_joints.w)];
+  vec4 skinnedPos = skinMatrix * vec4(a_position, 1.0);
+  gl_Position = u_shadowVP * skinnedPos;
+}
+`
+
+export const SHADOW_DEPTH_FRAG = `#version 300 es
+precision highp float;
+void main() {}
+`
+
+// ─── Scene shaders ──────────────────────────────────────────────────
 
 export const LAMBERT_VERT = `#version 300 es
 precision highp float;
@@ -111,9 +189,83 @@ uniform vec3 u_baseColor;
 uniform float u_opacity;
 uniform bool u_hasPalette;
 uniform PaletteEntry u_palette[32];
+uniform highp sampler2DArrayShadow u_shadowMap;
+uniform bool u_receiveShadow;
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
+
+float pcf9(vec2 uv, int cascade, float refDepth, float ts) {
+  float s = 0.0;
+  s += texture(u_shadowMap, vec4(uv + vec2(-ts, -ts), float(cascade), refDepth));
+  s += texture(u_shadowMap, vec4(uv + vec2(0.0, -ts), float(cascade), refDepth));
+  s += texture(u_shadowMap, vec4(uv + vec2( ts, -ts), float(cascade), refDepth));
+  s += texture(u_shadowMap, vec4(uv + vec2(-ts, 0.0), float(cascade), refDepth));
+  s += texture(u_shadowMap, vec4(uv,                   float(cascade), refDepth));
+  s += texture(u_shadowMap, vec4(uv + vec2( ts, 0.0), float(cascade), refDepth));
+  s += texture(u_shadowMap, vec4(uv + vec2(-ts,  ts), float(cascade), refDepth));
+  s += texture(u_shadowMap, vec4(uv + vec2(0.0,  ts), float(cascade), refDepth));
+  s += texture(u_shadowMap, vec4(uv + vec2( ts,  ts), float(cascade), refDepth));
+  return s / 9.0;
+}
+
+float sampleShadow(vec3 worldPos, float NdotL) {
+  if (u_shadowEnabled < 0.5) return 1.0;
+
+  float viewDepth = abs((u_viewProjection * vec4(worldPos, 1.0)).w);
+
+  int cascade = 2;
+  if (viewDepth < u_cascadeSplits.x) {
+    cascade = 0;
+  } else if (viewDepth < u_cascadeSplits.y) {
+    cascade = 1;
+  }
+
+  mat4 lightVP;
+  if (cascade == 0) {
+    lightVP = u_cascadeVP0;
+  } else if (cascade == 1) {
+    lightVP = u_cascadeVP1;
+  } else {
+    lightVP = u_cascadeVP2;
+  }
+
+  vec4 lightClip = lightVP * vec4(worldPos, 1.0);
+  vec2 uv = lightClip.xy * 0.5 + 0.5;
+  float depth = lightClip.z * 0.5 + 0.5;
+
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || depth < 0.0 || depth > 1.0) {
+    return 1.0;
+  }
+
+  float bias = u_constantBias + u_slopeBias * (1.0 - NdotL);
+  float ts = u_invMapSize;
+  float shadow = pcf9(uv, cascade, depth - bias, ts);
+
+  if (cascade < 2) {
+    float splitDist = cascade == 0 ? u_cascadeSplits.x : u_cascadeSplits.y;
+    float blendZone = splitDist * u_blendRange;
+    if (viewDepth > splitDist - blendZone) {
+      mat4 nextVP;
+      if (cascade == 0) {
+        nextVP = u_cascadeVP1;
+      } else {
+        nextVP = u_cascadeVP2;
+      }
+      vec4 nextClip = nextVP * vec4(worldPos, 1.0);
+      vec2 nextUV = nextClip.xy * 0.5 + 0.5;
+      float nextDepth = nextClip.z * 0.5 + 0.5;
+      float nextShadow = 1.0;
+      if (nextUV.x >= 0.0 && nextUV.x <= 1.0 && nextUV.y >= 0.0 && nextUV.y <= 1.0 && nextDepth >= 0.0 && nextDepth <= 1.0) {
+        nextShadow = pcf9(nextUV, cascade + 1, nextDepth - bias, ts);
+      }
+      float t = smoothstep(splitDist - blendZone, splitDist, viewDepth);
+      shadow = mix(shadow, nextShadow, t);
+    }
+  }
+
+  return shadow;
+}
 
 void main() {
   vec3 normal = normalize(v_normal);
@@ -130,7 +282,8 @@ void main() {
 
   vec3 ambient = u_ambientColor * u_ambientIntensity;
   float NdotL = max(dot(normal, u_lightDirection), 0.0);
-  vec3 diffuse = u_lightColor * u_lightIntensity * NdotL;
+  float shadow = u_receiveShadow ? sampleShadow(v_worldPos, NdotL) : 1.0;
+  vec3 diffuse = u_lightColor * u_lightIntensity * NdotL * shadow;
 
   vec3 litColor = baseColor * (ambient + diffuse);
   vec3 finalColor = litColor + emissive;
