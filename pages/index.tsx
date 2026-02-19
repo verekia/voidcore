@@ -16,10 +16,15 @@ import { Canvas, Html, useEngine, useFrame, useGLTF } from '../src/react/index.t
 import type { Engine } from '../src/index.ts'
 import type { AnimationClip, AnimationAction } from '../src/index.ts'
 
+// ─── Asset URLs ──────────────────────────────────────────────────────────────
+
+const staticBundleSrc = new URL('../public/static-bundle.glb', import.meta.url).href
+const playerBundleSrc = new URL('../public/player-bundle.glb', import.meta.url).href
+
 // ─── Preload GLBs in parallel (avoids Suspense waterfall) ────────────────────
 
-useGLTF.preload('/static-bundle.glb', { draco: { decoderPath: '/draco-1.5.7/' } })
-useGLTF.preload('/player-bundle.glb', { draco: { decoderPath: '/draco-1.5.7/' } })
+useGLTF.preload(staticBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
+useGLTF.preload(playerBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
@@ -175,8 +180,8 @@ const Characters = ({ count }: { count: number }) => {
   const { scene } = useEngine()
   const groupRef = useRef<any>(null)
 
-  const megaxeGltf = useGLTF('/static-bundle.glb', { draco: { decoderPath: '/draco-1.5.7/' } })
-  const playerGltf = useGLTF('/player-bundle.glb', { draco: { decoderPath: '/draco-1.5.7/' } })
+  const megaxeGltf = useGLTF(staticBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
+  const playerGltf = useGLTF(playerBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
 
   // Imperative state stored in ref to avoid re-renders
   const stateRef = useRef<{
@@ -504,14 +509,14 @@ const IndexPage = () => {
         onCreated={({ engine }) => setEngine(engine)}
         style={{ width: '100vw', height: '100vh', position: 'fixed', top: 0, left: 0 }}
       >
-        <Sun />
-        <CameraControls />
-        <SphereTerrain />
         <Suspense fallback={null}>
+          <Sun />
+          <CameraControls />
+          <SphereTerrain />
           <Characters count={CHARACTER_COUNT} />
+          <RotatingCube />
+          <TransparentCubes count={10} />
         </Suspense>
-        <RotatingCube />
-        <TransparentCubes count={10} />
       </Canvas>
       <StatsOverlay engine={engine} />
       <BackendSwitch engine={engine} />
