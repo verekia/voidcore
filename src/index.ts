@@ -34,13 +34,7 @@ export { BasicMaterial, LambertMaterial, Material } from './materials/material.t
 export { OrbitControls } from './controls/orbit.ts'
 
 // Animation
-export {
-  Skeleton,
-  type AnimationClip,
-  type KeyframeTrack,
-  AnimationMixer,
-  AnimationAction,
-} from './animation/index.ts'
+export { Skeleton, type AnimationClip, type KeyframeTrack, AnimationMixer, AnimationAction } from './animation/index.ts'
 
 // Raycasting
 export { Raycaster, buildMeshBVH, type RaycastHit } from './raycasting/index.ts'
