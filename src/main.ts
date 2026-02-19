@@ -290,44 +290,55 @@ export const main = async (canvas: HTMLCanvasElement) => {
     'position:fixed;top:10px;right:10px;color:#fff;font:14px monospace;background:rgba(0,0,0,0.6);padding:8px 12px;border-radius:4px;z-index:1000;text-decoration:underline;cursor:pointer'
   document.body.appendChild(switchLink)
 
-  // ─── Render Loop ──────────────────────────────────────────────
+  // ─── Scheduler ──────────────────────────────────────────────
+  engine.maxFps = 60
   const cubeAxis = new Float32Array([0, 0, 1])
-  let elapsed = 0
-  engine.onFrame(dt => {
-    controls.update(dt)
-    elapsed += dt
 
-    for (let i = 0; i < roots.length; i++) {
-      // Circular orbit around each character's origin point
-      charOrbitAngle[i]! += ORBIT_SPEED * dt
-      const a = charOrbitAngle[i]!
-      roots[i]!.position[0] = charOriginX[i]! + Math.cos(a) * ORBIT_RADIUS
-      roots[i]!.position[1] = charOriginY[i]! + Math.sin(a) * ORBIT_RADIUS
-      roots[i]!._dirtyLocal = true
-    }
+  // Update callback (runs before render)
+  engine.register(
+    ({ dt, elapsed }) => {
+      controls.update(dt)
 
-    for (let i = 0; i < mixers.length; i++) {
-      // Crossfade to next clip when it's time
-      if (elapsed >= charNextSwitch[i]!) {
-        const actions = charActions[i]!
-        const cur = charCurrentClip[i]!
-        const next = (cur + 1) % actions.length
-        actions[cur]!.crossFadeTo(actions[next]!, CROSSFADE_DURATION)
-        charCurrentClip[i] = next
-        charNextSwitch[i] = elapsed + CLIP_DURATION
+      for (let i = 0; i < roots.length; i++) {
+        // Circular orbit around each character's origin point
+        charOrbitAngle[i]! += ORBIT_SPEED * dt
+        const a = charOrbitAngle[i]!
+        roots[i]!.position[0] = charOriginX[i]! + Math.cos(a) * ORBIT_RADIUS
+        roots[i]!.position[1] = charOriginY[i]! + Math.sin(a) * ORBIT_RADIUS
+        roots[i]!._dirtyLocal = true
       }
-      mixers[i]!.update(dt)
-    }
 
-    // Rotate cube around Z axis (Z-up)
-    quatFromAxisAngle(cube.rotation, cubeAxis, elapsed)
-    cube._dirtyLocal = true
+      for (let i = 0; i < mixers.length; i++) {
+        // Crossfade to next clip when it's time
+        if (elapsed >= charNextSwitch[i]!) {
+          const actions = charActions[i]!
+          const cur = charCurrentClip[i]!
+          const next = (cur + 1) % actions.length
+          actions[cur]!.crossFadeTo(actions[next]!, CROSSFADE_DURATION)
+          charCurrentClip[i] = next
+          charNextSwitch[i] = elapsed + CLIP_DURATION
+        }
+        mixers[i]!.update(dt)
+      }
 
-    const stats = engine.getStats()
-    statsDiv.textContent = `${engine.backend.toUpperCase()} | ${Math.round(stats.fps)} FPS | Draw calls: ${stats.drawCalls}`
-  })
+      // Rotate cube around Z axis (Z-up)
+      quatFromAxisAngle(cube.rotation, cubeAxis, elapsed)
+      cube._dirtyLocal = true
+    },
+    { priority: -1 },
+  )
 
-  engine.start(scene, camera)
+  // Render callback
+  engine.register(
+    () => {
+      engine.render(scene, camera)
+      const stats = engine.getStats()
+      statsDiv.textContent = `${engine.backend.toUpperCase()} | ${Math.round(stats.fps)} FPS | Draw calls: ${stats.drawCalls}`
+    },
+    { priority: 0 },
+  )
+
+  engine.start()
 
   return engine
 }

@@ -4,6 +4,9 @@
 export { createEngine, Engine, type EngineConfig } from './engine.ts'
 export { type Renderer, type RendererConfig, type FrameStats, type ShadowConfig } from './renderer/renderer.ts'
 
+// Scheduler
+export { Scheduler, type SchedulerState, type SchedulerCallback, type SchedulerCallbackOptions } from './scheduler.ts'
+
 // Scene
 export { createScene, Scene } from './scene/scene.ts'
 export { Node } from './scene/node.ts'

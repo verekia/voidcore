@@ -13,6 +13,7 @@ A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 sup
 - **Bloom post-processing** – Multi-level downsample/upsample with Karis average
 - **Frustum culling** – AABB-based visibility culling with Gribb-Hartmann plane extraction
 - **Raycasting** – BVH-accelerated ray-mesh intersection for mouse picking
+- **Priority scheduler** – Single rAF loop with priority-ordered callbacks and FPS capping
 - **Orbit controls** – Mouse/touch camera controls with damping and inertia
 - **Zero-allocation math** – Float32Array-backed vectors, matrices, and quaternions
 - **Z-up coordinate system** – Right-handed, Z-up convention throughout
@@ -51,11 +52,22 @@ scene.add(light)
 
 const controls = createOrbitControls(camera, canvas)
 
-engine.onFrame(dt => {
-  controls.update(dt)
-})
+engine.register(
+  ({ dt }) => {
+    controls.update(dt)
+  },
+  { priority: -1 },
+)
 
-engine.start(scene, camera)
+engine.register(
+  () => {
+    engine.render(scene, camera)
+  },
+  { priority: 0 },
+)
+
+engine.maxFps = 60
+engine.start()
 ```
 
 ## Development
@@ -70,17 +82,18 @@ bun run all        # Lint + format check + test + typecheck
 
 The engine is organized into focused modules:
 
-| Module        | Description                                          |
-| ------------- | ---------------------------------------------------- |
-| `engine.ts`   | Render loop and frame management                     |
-| `scene/`      | Scene graph nodes (Node, Mesh, Group, Camera, Light) |
-| `geometry/`   | Vertex data and procedural shape generators          |
-| `materials/`  | Surface appearance definitions                       |
-| `renderer/`   | WebGPU and WebGL2 backends with shaders              |
-| `math/`       | Linear algebra primitives (vec3, mat4, quat, AABB)   |
-| `animation/`  | Skeletal animation system                            |
-| `raycasting/` | BVH-accelerated ray intersection                     |
-| `controls/`   | Camera interaction (orbit controls)                  |
-| `loaders/`    | Asset importers (glTF/GLB)                           |
+| Module         | Description                                          |
+| -------------- | ---------------------------------------------------- |
+| `engine.ts`    | Entry point, owns the scheduler and renderer         |
+| `scheduler.ts` | Priority-based rAF loop with FPS throttling          |
+| `scene/`       | Scene graph nodes (Node, Mesh, Group, Camera, Light) |
+| `geometry/`    | Vertex data and procedural shape generators          |
+| `materials/`   | Surface appearance definitions                       |
+| `renderer/`    | WebGPU and WebGL2 backends with shaders              |
+| `math/`        | Linear algebra primitives (vec3, mat4, quat, AABB)   |
+| `animation/`   | Skeletal animation system                            |
+| `raycasting/`  | BVH-accelerated ray intersection                     |
+| `controls/`    | Camera interaction (orbit controls)                  |
+| `loaders/`     | Asset importers (glTF/GLB)                           |
 
 Every engine source file includes educational comments at the top explaining the high-level concepts for developers who may not be familiar with graphics programming.

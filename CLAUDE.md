@@ -9,13 +9,15 @@ VoidCore is a performant 3D graphics engine written in TypeScript. It supports b
 - **Coordinate system**: Z-up, right-handed. Forward is +Y, right is +X, up is +Z.
 - **Math**: All types are Float32Array-backed with a "write into output" pattern (zero allocation).
 - **Rendering**: Dual-backend (WebGPU/WebGL2), MSAA, MRT (color + emissive), bloom post-processing.
+- **Scheduler**: Single rAF loop with priority-ordered callbacks, global/per-callback FPS caps.
 - **Scene graph**: Tree of Nodes with dirty-flag world matrix propagation.
 
 ## Project Structure
 
 ```
 src/
-  engine.ts              – Main entry point, render loop
+  engine.ts              – Main entry point, owns the scheduler and renderer
+  scheduler.ts           – Priority-based rAF loop with FPS throttling
   index.ts               – Public API barrel export
   animation/             – Skeletal animation (clips, mixer, skeleton)
   controls/              – Camera controls (orbit)

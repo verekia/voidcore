@@ -1,18 +1,21 @@
 // Engine – The main entry point that ties everything together.
 //
-// The Engine owns the render loop: it calls `requestAnimationFrame` in a loop, computes
-// delta time (time since last frame) and elapsed time, fires user callbacks, then asks the
-// renderer to draw the scene. Think of it as the "heartbeat" of your application.
+// The Engine owns the scheduler: a single requestAnimationFrame loop that drives the
+// entire application. Callbacks are registered with priorities (lower runs first) and
+// optional per-callback FPS throttling. A global FPS cap can limit the overall tick rate.
 //
-// createEngine()  – Async factory that picks the best available renderer (WebGPU or WebGL2)
-//                   and returns an Engine instance.
-// engine.start()  – Begins the render loop (calls your `onFrame` callbacks every frame).
-// engine.stop()   – Pauses the render loop.
-// engine.onFrame() – Registers a callback that runs every frame with (deltaTime, elapsed).
-// engine.render() – Renders a single frame manually (useful outside the loop).
-// engine.dispose() – Cleans up GPU resources.
+// createEngine()      – Async factory that picks the best available renderer (WebGPU or
+//                       WebGL2) and returns an Engine instance.
+// engine.register()   – Adds a callback to the scheduler with priority and FPS options.
+//                       Returns an unsubscribe function.
+// engine.start()      – Begins the scheduler loop.
+// engine.stop()       – Pauses the scheduler loop.
+// engine.maxFps       – Global FPS cap (0 = uncapped).
+// engine.render()     – Renders a single frame (call this inside a registered callback).
+// engine.dispose()    – Cleans up the scheduler and GPU resources.
 
 import { createRenderer, type Renderer, type RendererConfig, type FrameStats } from './renderer/renderer.ts'
+import { Scheduler, type SchedulerCallback, type SchedulerCallbackOptions } from './scheduler.ts'
 
 import type { ShadowConfig } from './renderer/renderer.ts'
 import type { PerspectiveCamera } from './scene/camera.ts'
@@ -28,56 +31,44 @@ export class Engine {
   renderer: Renderer
   backend: 'webgpu' | 'webgl2'
   canvas: HTMLCanvasElement
-
-  private _frameCallbacks: ((dt: number, elapsed: number) => void)[] = []
-  private _running = false
-  private _rafId = 0
-  private _startTime = 0
-  private _lastTime = 0
+  scheduler: Scheduler
 
   constructor(canvas: HTMLCanvasElement, renderer: Renderer) {
     this.canvas = canvas
     this.renderer = renderer
     this.backend = renderer.backend
+    this.scheduler = new Scheduler()
   }
 
-  onFrame(callback: (deltaTime: number, elapsed: number) => void) {
-    this._frameCallbacks.push(callback)
+  /** Global FPS cap applied to the entire loop. 0 = uncapped (run every rAF). */
+  get maxFps(): number {
+    return this.scheduler.maxFps
   }
 
-  offFrame(callback: (deltaTime: number, elapsed: number) => void) {
-    const idx = this._frameCallbacks.indexOf(callback)
-    if (idx !== -1) this._frameCallbacks.splice(idx, 1)
+  set maxFps(fps: number) {
+    this.scheduler.maxFps = fps
   }
 
-  start(scene: Scene, camera: PerspectiveCamera) {
-    if (this._running) return
-    this._running = true
-    this._startTime = performance.now() / 1000
-    this._lastTime = this._startTime
-
-    const loop = () => {
-      if (!this._running) return
-
-      const now = performance.now() / 1000
-      const dt = Math.min(now - this._lastTime, 0.1) // Cap dt at 100ms
-      const elapsed = now - this._startTime
-      this._lastTime = now
-
-      for (const cb of this._frameCallbacks) cb(dt, elapsed)
-
-      this.renderer.render(scene, camera)
-
-      this._rafId = requestAnimationFrame(loop)
-    }
-    this._rafId = requestAnimationFrame(loop)
+  /**
+   * Register a callback to run each frame (or throttled via `fps`).
+   * Callbacks execute in priority order (lower first, can be negative).
+   * Returns an unsubscribe function.
+   */
+  register(callback: SchedulerCallback, options?: SchedulerCallbackOptions): () => void {
+    return this.scheduler.register(callback, options)
   }
 
+  /** Start the scheduler loop. No-op if already running. */
+  start() {
+    this.scheduler.start()
+  }
+
+  /** Stop the scheduler loop. Can be resumed with start(). */
   stop() {
-    this._running = false
-    cancelAnimationFrame(this._rafId)
+    this.scheduler.stop()
   }
 
+  /** Render a single frame. Call this inside a registered callback. */
   render(scene: Scene, camera: PerspectiveCamera) {
     this.renderer.render(scene, camera)
   }
@@ -87,7 +78,7 @@ export class Engine {
   }
 
   dispose() {
-    this.stop()
+    this.scheduler.destroy()
     this.renderer.dispose()
   }
 }
