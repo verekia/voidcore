@@ -7,9 +7,9 @@
 // Each frame, the renderer calls scene.updateGraph() which triggers a top-down traversal
 // to recompute world matrices for any nodes whose transforms have changed.
 //
-// createScene()       – Factory that creates an empty scene.
-// scene.getByName()   – Finds any node in the scene by its name string (O(1) lookup).
-// scene.updateGraph() – Recomputes all dirty world matrices in the scene graph.
+// new Scene()          – Creates an empty scene.
+// scene.getByName()    – Finds any node in the scene by its name string (O(1) lookup).
+// scene.updateGraph()  – Recomputes all dirty world matrices in the scene graph.
 
 import { Node, updateWorldMatrices } from './node.ts'
 
@@ -49,5 +49,3 @@ export class Scene extends Node {
     for (const child of node.children) this._unregisterNames(child)
   }
 }
-
-export const createScene = (): Scene => new Scene()

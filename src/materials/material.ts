@@ -9,8 +9,8 @@
 // geometry can reference a palette index, allowing a single mesh to display multiple colors
 // without needing textures. Palette entries can also specify emissive colors (self-glowing).
 //
-// createBasicMaterial()   – Factory for unlit materials.
-// createLambertMaterial() – Factory for diffuse-lit materials.
+// new BasicMaterial()   – Unlit material (ignores lights).
+// new LambertMaterial() – Diffuse-lit material (reacts to lights).
 
 export interface PaletteEntry {
   color: [number, number, number]
@@ -74,6 +74,14 @@ export interface MaterialOptions {
   palette?: PaletteEntry[]
 }
 
-export const createBasicMaterial = (opts: MaterialOptions = {}): Material => new Material('basic', opts)
+export class BasicMaterial extends Material {
+  constructor(opts: MaterialOptions = {}) {
+    super('basic', opts)
+  }
+}
 
-export const createLambertMaterial = (opts: MaterialOptions = {}): Material => new Material('lambert', opts)
+export class LambertMaterial extends Material {
+  constructor(opts: MaterialOptions = {}) {
+    super('lambert', opts)
+  }
+}

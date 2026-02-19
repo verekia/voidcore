@@ -51,7 +51,7 @@ pages/                   – Next.js example app (not part of the engine)
 
 ## Conventions
 
-- Factory functions: `createXxx()` pattern for all public constructors.
+- Constructors: `new Xxx()` pattern for all public API objects (Three.js-style). Engine uses `Engine.create()` since initialization is async.
 - No runtime allocations in hot paths (render loop, animation updates). Pre-allocate buffers.
 - All primitives are Z-up, centered at origin.
 - Column-major matrices (Mat4), quaternions as [x,y,z,w].

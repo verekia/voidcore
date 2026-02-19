@@ -1,50 +1,43 @@
 // Voidcore — Public API
 
 // Engine
-export { createEngine, Engine, type EngineConfig } from './engine.ts'
+export { Engine, type EngineConfig } from './engine.ts'
 export { type Renderer, type RendererConfig, type FrameStats, type ShadowConfig } from './renderer/renderer.ts'
 
 // Scheduler
 export { Scheduler, type SchedulerState, type SchedulerCallback, type SchedulerCallbackOptions } from './scheduler.ts'
 
 // Scene
-export { createScene, Scene } from './scene/scene.ts'
+export { Scene } from './scene/scene.ts'
 export { Node } from './scene/node.ts'
-export { createMesh, Mesh } from './scene/mesh.ts'
-export { createGroup, Group } from './scene/group.ts'
-export { createPerspectiveCamera, PerspectiveCamera } from './scene/camera.ts'
-export { createDirectionalLight, DirectionalLight } from './scene/light.ts'
+export { Mesh } from './scene/mesh.ts'
+export { Group } from './scene/group.ts'
+export { PerspectiveCamera, type CameraOptions } from './scene/camera.ts'
+export { DirectionalLight, type DirectionalLightOptions } from './scene/light.ts'
 
 // Geometry
-export { createGeometry, Geometry } from './geometry/geometry.ts'
+export { Geometry } from './geometry/geometry.ts'
 export {
-  createPlaneGeometry,
-  createBoxGeometry,
-  createSphereGeometry,
-  createConeGeometry,
-  createCylinderGeometry,
-  createCapsuleGeometry,
-  createCircleGeometry,
+  PlaneGeometry,
+  BoxGeometry,
+  SphereGeometry,
+  ConeGeometry,
+  CylinderGeometry,
+  CapsuleGeometry,
+  CircleGeometry,
 } from './geometry/primitives.ts'
 
 // Materials
-export { createBasicMaterial, createLambertMaterial, Material } from './materials/material.ts'
+export { BasicMaterial, LambertMaterial, Material } from './materials/material.ts'
 
 // Controls
-export { createOrbitControls, OrbitControls } from './controls/orbit.ts'
+export { OrbitControls } from './controls/orbit.ts'
 
 // Animation
-export {
-  Skeleton,
-  type AnimationClip,
-  type KeyframeTrack,
-  AnimationMixer,
-  AnimationAction,
-  createAnimationMixer,
-} from './animation/index.ts'
+export { Skeleton, type AnimationClip, type KeyframeTrack, AnimationMixer, AnimationAction } from './animation/index.ts'
 
 // Raycasting
-export { createRaycaster, Raycaster, buildMeshBVH, type RaycastHit } from './raycasting/index.ts'
+export { Raycaster, buildMeshBVH, type RaycastHit } from './raycasting/index.ts'
 
 // Loaders
 export { loadGLTF } from './loaders/gltf.ts'

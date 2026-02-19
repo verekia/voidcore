@@ -11,7 +11,7 @@
 //
 // OrbitControls.update(dt)  – Applies damping and recomputes the camera's position/view matrix.
 // OrbitControls.dispose()   – Removes all event listeners.
-// createOrbitControls()     – Factory that creates controls for a camera + canvas pair.
+// new OrbitControls()       – Creates controls for a camera + canvas pair.
 
 import { mat4LookAt, VEC3_UP, vec3Create, vec3Set } from '../math/index.ts'
 
@@ -263,9 +263,3 @@ export class OrbitControls {
     this._touchCount = 0
   }
 }
-
-export const createOrbitControls = (
-  camera: PerspectiveCamera,
-  canvas: HTMLCanvasElement,
-  opts?: OrbitControlsOptions,
-): OrbitControls => new OrbitControls(camera, canvas, opts)

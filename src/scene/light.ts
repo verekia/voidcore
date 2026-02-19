@@ -5,24 +5,9 @@
 // is treated as a direction). The light has a color and intensity that are multiplied with
 // the surface's diffuse color in the shader.
 //
-// createDirectionalLight() – Factory with default white light at full intensity.
+// new DirectionalLight() – Constructor with default white light at full intensity.
 
 import { Node } from './node.ts'
-
-export class DirectionalLight extends Node {
-  color: [number, number, number]
-  intensity: number
-
-  constructor(color: [number, number, number] = [1, 1, 1], intensity = 1.0, castShadow = true) {
-    super()
-    this.type = 'directionalLight'
-    this.color = color
-    this.intensity = intensity
-    this.castShadow = castShadow
-    this.frustumCulled = false
-    this.receiveShadow = false
-  }
-}
 
 export interface DirectionalLightOptions {
   color?: [number, number, number]
@@ -30,5 +15,17 @@ export interface DirectionalLightOptions {
   castShadow?: boolean
 }
 
-export const createDirectionalLight = (opts: DirectionalLightOptions = {}): DirectionalLight =>
-  new DirectionalLight(opts.color ?? [1, 1, 1], opts.intensity ?? 1.0, opts.castShadow ?? true)
+export class DirectionalLight extends Node {
+  color: [number, number, number]
+  intensity: number
+
+  constructor(opts: DirectionalLightOptions = {}) {
+    super()
+    this.type = 'directionalLight'
+    this.color = opts.color ?? [1, 1, 1]
+    this.intensity = opts.intensity ?? 1.0
+    this.castShadow = opts.castShadow ?? true
+    this.frustumCulled = false
+    this.receiveShadow = false
+  }
+}

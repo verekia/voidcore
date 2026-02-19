@@ -4,7 +4,7 @@
 // by binding its geometry buffers and material uniforms, then issuing a draw call. A mesh
 // can optionally have a Skeleton for skeletal animation (skinned meshes).
 //
-// createMesh() – Factory that creates a mesh from a geometry and material.
+// new Mesh(geometry, material) – Creates a mesh from a geometry and material.
 
 import { Node } from './node.ts'
 
@@ -27,5 +27,3 @@ export class Mesh extends Node {
     this.material = material
   }
 }
-
-export const createMesh = (geometry: Geometry, material: Material): Mesh => new Mesh(geometry, material)
