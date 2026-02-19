@@ -4,10 +4,14 @@
 // relative to a target point. User input (drag, scroll, pinch) adds velocity to these
 // coordinates, and damping smoothly decays the velocity each frame for inertia.
 //
-// Left drag   → orbit (rotate azimuth and elevation)
-// Right drag  → pan (shift the target point)
-// Scroll      → zoom (change distance)
-// Pinch       → zoom + pan on touch devices
+// All input is handled through Pointer Events, which unify mouse and touch into a single
+// code path. Multi-touch (pinch zoom + two-finger pan) is supported by tracking active
+// pointers in a Map. The canvas sets `touch-action: none` to prevent the browser from
+// intercepting touch gestures.
+//
+// Left drag / 1-finger  → orbit (rotate azimuth and elevation)
+// Right drag / 2-finger → pan (shift the target point)
+// Scroll / pinch        → zoom (change distance)
 //
 // OrbitControls.update(dt)  – Applies damping and recomputes the camera's position/view matrix.
 // OrbitControls.dispose()   – Removes all event listeners.
@@ -50,11 +54,10 @@ export class OrbitControls {
   private _velocityPanX = 0
   private _velocityPanY = 0
 
-  private _pointerDown = false
+  private _pointers = new Map<number, { x: number; y: number }>()
   private _pointerButton = 0
   private _lastX = 0
   private _lastY = 0
-  private _touchCount = 0
   private _lastPinchDist = 0
 
   private _onChange: (() => void)[] = []
@@ -70,6 +73,9 @@ export class OrbitControls {
     this.minElevation = opts.minElevation ?? -Math.PI / 2 + 0.01
     this.maxElevation = opts.maxElevation ?? Math.PI / 2 - 0.01
     this.enabled = opts.enabled ?? true
+
+    // Prevent browser touch gestures (scroll, pinch-zoom, pull-to-refresh)
+    canvas.style.touchAction = 'none'
 
     // Compute initial spherical from camera position
     const dx = camera.position[0]! - this.target[0]!
@@ -147,11 +153,9 @@ export class OrbitControls {
     this.canvas.removeEventListener('pointermove', this._onPointerMove)
     this.canvas.removeEventListener('pointerup', this._onPointerUp)
     this.canvas.removeEventListener('pointerleave', this._onPointerUp)
+    this.canvas.removeEventListener('pointercancel', this._onPointerUp)
     this.canvas.removeEventListener('wheel', this._onWheel)
     this.canvas.removeEventListener('contextmenu', this._onContextMenu)
-    this.canvas.removeEventListener('touchstart', this._onTouchStart)
-    this.canvas.removeEventListener('touchmove', this._onTouchMove)
-    this.canvas.removeEventListener('touchend', this._onTouchEnd)
   }
 
   private _bindEvents() {
@@ -159,107 +163,102 @@ export class OrbitControls {
     this.canvas.addEventListener('pointermove', this._onPointerMove)
     this.canvas.addEventListener('pointerup', this._onPointerUp)
     this.canvas.addEventListener('pointerleave', this._onPointerUp)
+    this.canvas.addEventListener('pointercancel', this._onPointerUp)
     this.canvas.addEventListener('wheel', this._onWheel, { passive: false })
     this.canvas.addEventListener('contextmenu', this._onContextMenu)
-    this.canvas.addEventListener('touchstart', this._onTouchStart, { passive: false })
-    this.canvas.addEventListener('touchmove', this._onTouchMove, { passive: false })
-    this.canvas.addEventListener('touchend', this._onTouchEnd)
   }
 
   private _onPointerDown = (e: PointerEvent) => {
     if (!this.enabled) return
-    this._pointerDown = true
-    this._pointerButton = e.button
-    this._lastX = e.clientX
-    this._lastY = e.clientY
+    this._pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
     this.canvas.setPointerCapture(e.pointerId)
+
+    if (this._pointers.size === 1) {
+      this._pointerButton = e.button
+      this._lastX = e.clientX
+      this._lastY = e.clientY
+    } else if (this._pointers.size === 2) {
+      const pts = [...this._pointers.values()]
+      const dx = pts[1]!.x - pts[0]!.x
+      const dy = pts[1]!.y - pts[0]!.y
+      this._lastPinchDist = Math.sqrt(dx * dx + dy * dy)
+      this._lastX = (pts[0]!.x + pts[1]!.x) / 2
+      this._lastY = (pts[0]!.y + pts[1]!.y) / 2
+    }
   }
 
   private _onPointerMove = (e: PointerEvent) => {
-    if (!this.enabled || !this._pointerDown) return
-    const dx = e.clientX - this._lastX
-    const dy = e.clientY - this._lastY
-    this._lastX = e.clientX
-    this._lastY = e.clientY
+    if (!this.enabled || !this._pointers.has(e.pointerId)) return
+    this._pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
 
-    if (this._pointerButton === 0) {
-      // Left button: orbit
-      this._velocityAz -= dx * 0.005
-      this._velocityEl += dy * 0.005
-    } else if (this._pointerButton === 2 || this._pointerButton === 1) {
-      // Right/middle button: pan
-      this._velocityPanX += dx * 2
-      this._velocityPanY += dy * 2
+    if (this._pointers.size === 1) {
+      const dx = e.clientX - this._lastX
+      const dy = e.clientY - this._lastY
+      this._lastX = e.clientX
+      this._lastY = e.clientY
+
+      if (this._pointerButton === 0) {
+        // Left button / single touch: orbit
+        this._velocityAz -= dx * 0.002
+        this._velocityEl += dy * 0.002
+      } else if (this._pointerButton === 2 || this._pointerButton === 1) {
+        // Right/middle button: pan
+        this._velocityPanX -= dx * 0.2
+        this._velocityPanY += dy * 0.2
+      }
+    } else if (this._pointers.size === 2) {
+      const pts = [...this._pointers.values()]
+
+      // Pinch zoom
+      const pdx = pts[1]!.x - pts[0]!.x
+      const pdy = pts[1]!.y - pts[0]!.y
+      const dist = Math.sqrt(pdx * pdx + pdy * pdy)
+      const delta = this._lastPinchDist - dist
+      this._lastPinchDist = dist
+      this._velocityDist += delta * 0.002 * this.distance
+
+      // Two-finger pan
+      const mx = (pts[0]!.x + pts[1]!.x) / 2
+      const my = (pts[0]!.y + pts[1]!.y) / 2
+      const panDx = mx - this._lastX
+      const panDy = my - this._lastY
+      this._lastX = mx
+      this._lastY = my
+      this._velocityPanX -= panDx * 0.5
+      this._velocityPanY += panDy * 0.5
     }
   }
 
   private _onPointerUp = (e: PointerEvent) => {
-    this._pointerDown = false
+    this._pointers.delete(e.pointerId)
     try {
       this.canvas.releasePointerCapture(e.pointerId)
     } catch {}
+
+    // When going from 2 pointers to 1, reset tracking to avoid a jump
+    if (this._pointers.size === 1) {
+      const remaining = [...this._pointers.values()][0]!
+      this._lastX = remaining.x
+      this._lastY = remaining.y
+      this._pointerButton = 0
+    }
   }
 
   private _onWheel = (e: WheelEvent) => {
     if (!this.enabled) return
     e.preventDefault()
-    this._velocityDist += e.deltaY * 0.01 * (this.distance * 0.1)
+
+    // Normalize delta across deltaMode (pixel / line / page)
+    let delta = e.deltaY
+    if (e.deltaMode === 1) delta *= 16
+    else if (e.deltaMode === 2) delta *= 100
+
+    // Clamp per-event magnitude so mouse wheel (~100) and trackpad (~1-10) feel consistent
+    const clamped = Math.sign(delta) * Math.min(Math.abs(delta), 50)
+    this._velocityDist += clamped * 0.0002 * this.distance
   }
 
   private _onContextMenu = (e: Event) => {
     e.preventDefault()
-  }
-
-  private _onTouchStart = (e: TouchEvent) => {
-    if (!this.enabled) return
-    e.preventDefault()
-    this._touchCount = e.touches.length
-    if (e.touches.length === 1) {
-      this._lastX = e.touches[0]!.clientX
-      this._lastY = e.touches[0]!.clientY
-    } else if (e.touches.length === 2) {
-      const dx = e.touches[1]!.clientX - e.touches[0]!.clientX
-      const dy = e.touches[1]!.clientY - e.touches[0]!.clientY
-      this._lastPinchDist = Math.sqrt(dx * dx + dy * dy)
-      this._lastX = (e.touches[0]!.clientX + e.touches[1]!.clientX) / 2
-      this._lastY = (e.touches[0]!.clientY + e.touches[1]!.clientY) / 2
-    }
-  }
-
-  private _onTouchMove = (e: TouchEvent) => {
-    if (!this.enabled) return
-    e.preventDefault()
-
-    if (e.touches.length === 1 && this._touchCount === 1) {
-      // Orbit
-      const dx = e.touches[0]!.clientX - this._lastX
-      const dy = e.touches[0]!.clientY - this._lastY
-      this._lastX = e.touches[0]!.clientX
-      this._lastY = e.touches[0]!.clientY
-      this._velocityAz -= dx * 0.005
-      this._velocityEl += dy * 0.005
-    } else if (e.touches.length === 2) {
-      // Pinch zoom
-      const dx = e.touches[1]!.clientX - e.touches[0]!.clientX
-      const dy = e.touches[1]!.clientY - e.touches[0]!.clientY
-      const dist = Math.sqrt(dx * dx + dy * dy)
-      const delta = this._lastPinchDist - dist
-      this._lastPinchDist = dist
-      this._velocityDist += delta * 0.02 * (this.distance * 0.1)
-
-      // Pan
-      const mx = (e.touches[0]!.clientX + e.touches[1]!.clientX) / 2
-      const my = (e.touches[0]!.clientY + e.touches[1]!.clientY) / 2
-      const panDx = mx - this._lastX
-      const panDy = my - this._lastY
-      this._lastX = mx
-      this._lastY = my
-      this._velocityPanX += panDx * 2
-      this._velocityPanY += panDy * 2
-    }
-  }
-
-  private _onTouchEnd = () => {
-    this._touchCount = 0
   }
 }
