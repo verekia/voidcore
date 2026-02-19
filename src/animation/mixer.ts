@@ -158,6 +158,7 @@ export class AnimationMixer {
 
   clipAction(clip: AnimationClip): AnimationAction {
     const action = new AnimationAction(clip)
+    action._cachedIndices = new Int32Array(clip.tracks.length)
     this._actions.push(action)
     return action
   }
@@ -304,12 +305,7 @@ export class AnimationMixer {
   private _sampleClipInto(clip: AnimationClip, time: number, action: AnimationAction) {
     const t = clip.duration > 0 ? time % clip.duration : 0
 
-    // Lazily allocate cached indices array
-    let cached = action._cachedIndices
-    if (!cached) {
-      cached = new Int32Array(clip.tracks.length)
-      action._cachedIndices = cached
-    }
+    const cached = action._cachedIndices!
 
     for (let ti = 0; ti < clip.tracks.length; ti++) {
       const track = clip.tracks[ti]!
