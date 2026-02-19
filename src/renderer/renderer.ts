@@ -71,7 +71,7 @@ export const createRenderer = async (
     }
   }
 
-  const { WebGL2Renderer } = await import('./webgl2.ts')
+  const { WebGLRenderer } = await import('./webgl.ts')
   console.log('[voidcore] Using WebGL2 renderer')
-  return new WebGL2Renderer(canvas, config)
+  return new WebGLRenderer(canvas, config)
 }

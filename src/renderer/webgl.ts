@@ -20,8 +20,8 @@
 // joints → uint8, bone weights → unorm8. This reduces vertex buffer size by ~50%
 // compared to using float32 for everything.
 //
-// WebGL2Renderer.render()  – Draws one frame.
-// WebGL2Renderer.dispose() – Releases all GPU resources.
+// WebGLRenderer.render()  – Draws one frame.
+// WebGLRenderer.dispose() – Releases all GPU resources.
 
 import {
   frustumFromViewProjection,
@@ -36,6 +36,16 @@ import { Mesh } from '../scene/mesh.ts'
 import { Node } from '../scene/node.ts'
 import { packNormalsSnorm8, packUVsFloat16, packWeightsUnorm8 } from './pack.ts'
 import {
+  collectMeshes,
+  computeLightDir,
+  computeCascadeSplits,
+  computeCascadeMatrix,
+  defaultMaxDpr,
+  findDirectionalLight,
+  NUM_CASCADES,
+} from './shared.ts'
+import { createSortState, sortMeshes } from './sort.ts'
+import {
   LAMBERT_VERT,
   LAMBERT_FRAG,
   LAMBERT_SKINNED_VERT,
@@ -49,17 +59,7 @@ import {
   BLOOM_DOWNSAMPLE_FRAG,
   BLOOM_UPSAMPLE_FRAG,
   BLIT_FRAG,
-} from './shaders.ts'
-import {
-  collectMeshes,
-  computeLightDir,
-  computeCascadeSplits,
-  computeCascadeMatrix,
-  defaultMaxDpr,
-  findDirectionalLight,
-  NUM_CASCADES,
-} from './shared.ts'
-import { createSortState, sortMeshes } from './sort.ts'
+} from './webgl-shaders.ts'
 
 import type { Geometry } from '../geometry/geometry.ts'
 import type { Material, PaletteEntry } from '../materials/material.ts'
@@ -420,7 +420,7 @@ const createRenderTargets = (
 
 export { type RendererConfig, type FrameStats } from './renderer.ts'
 
-export class WebGL2Renderer implements Renderer {
+export class WebGLRenderer implements Renderer {
   readonly backend = 'webgl2' as const
   gl: WebGL2RenderingContext
   canvas: HTMLCanvasElement

@@ -29,9 +29,9 @@ src/
   renderer/              – Rendering backends and shaders
     renderer.ts          – Interface + factory
     webgpu.ts            – WebGPU backend
-    webgl2.ts            – WebGL2 backend
-    shaders.ts           – GLSL shaders
-    shaders-wgsl.ts      – WGSL shaders
+    webgl.ts             – WebGL2 backend
+    webgl-shaders.ts     – GLSL shaders
+    webgpu-shaders.ts    – WGSL shaders
     shared.ts            – Shared traversal/culling utilities
     pack.ts              – Vertex attribute packing (snorm8, float16, unorm8)
     sort.ts              – Radix sort for draw order

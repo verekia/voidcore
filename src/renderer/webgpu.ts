@@ -37,17 +37,6 @@ import { Mesh } from '../scene/mesh.ts'
 import { Node } from '../scene/node.ts'
 import { packNormalsSnorm8, packUVsFloat16, packWeightsUnorm8 } from './pack.ts'
 import {
-  LAMBERT_WGSL,
-  BASIC_WGSL,
-  LAMBERT_SKINNED_WGSL,
-  BASIC_SKINNED_WGSL,
-  SHADOW_DEPTH_WGSL,
-  SHADOW_DEPTH_SKINNED_WGSL,
-  BLOOM_DOWN_WGSL,
-  BLOOM_UP_WGSL,
-  BLIT_WGSL,
-} from './shaders-wgsl.ts'
-import {
   collectMeshes,
   computeLightDir,
   computeCascadeSplits,
@@ -57,6 +46,17 @@ import {
   NUM_CASCADES,
 } from './shared.ts'
 import { createSortState, sortMeshes } from './sort.ts'
+import {
+  LAMBERT_WGSL,
+  BASIC_WGSL,
+  LAMBERT_SKINNED_WGSL,
+  BASIC_SKINNED_WGSL,
+  SHADOW_DEPTH_WGSL,
+  SHADOW_DEPTH_SKINNED_WGSL,
+  BLOOM_DOWN_WGSL,
+  BLOOM_UP_WGSL,
+  BLIT_WGSL,
+} from './webgpu-shaders.ts'
 
 import type { Geometry } from '../geometry/geometry.ts'
 import type { PaletteEntry } from '../materials/material.ts'
