@@ -1403,9 +1403,15 @@ export class WebGLRenderer implements Renderer {
 
       // WBOIT blending: accum = ONE/ONE additive, reveal = ZERO/ONE_MINUS_SRC_ALPHA
       gl.enable(gl.BLEND)
-      const dbi = this._drawBuffersIndexed!
-      dbi.blendFunciOES(0, gl.ONE, gl.ONE)
-      dbi.blendFunciOES(1, gl.ZERO, gl.ONE_MINUS_SRC_ALPHA)
+      const dbi = this._drawBuffersIndexed
+      if (dbi) {
+        dbi.blendFunciOES(0, gl.ONE, gl.ONE)
+        dbi.blendFunciOES(1, gl.ZERO, gl.ONE_MINUS_SRC_ALPHA)
+      } else {
+        // Fallback when OES_draw_buffers_indexed is unavailable (some Android devices).
+        // Uses a single blend func for both attachments — transparency will be approximate.
+        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+      }
 
       // Disable back-face culling for transparent objects
       gl.disable(gl.CULL_FACE)
