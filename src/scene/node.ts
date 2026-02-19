@@ -88,9 +88,9 @@ export class Node {
     const len = Math.sqrt(fx * fx + fy * fy + fz * fz)
     if (len < 1e-6) return
     const invLen = 1 / len
-    _lookAtFwd[0]! *= invLen
-    _lookAtFwd[1]! *= invLen
-    _lookAtFwd[2]! *= invLen
+    _lookAtFwd[0] = _lookAtFwd[0]! * invLen
+    _lookAtFwd[1] = _lookAtFwd[1]! * invLen
+    _lookAtFwd[2] = _lookAtFwd[2]! * invLen
 
     // Z-up: compute rotation from default forward (0,1,0) to target direction
     const yaw = Math.atan2(_lookAtFwd[0]!, _lookAtFwd[1]!)
