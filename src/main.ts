@@ -329,13 +329,18 @@ export const main = async (canvas: HTMLCanvasElement) => {
   )
 
   // Render callback
+  let lastStatsUpdate = -1
+  const backendLabel = engine.backend.toUpperCase()
   engine.register(
-    () => {
+    ({ elapsed }) => {
       engine.render(scene, camera)
-      const stats = engine.getStats()
-      const shadowSuffix = stats.shadowDrawCalls > 0 ? ` (+${stats.shadowDrawCalls} CSM)` : ''
-      const dpr = Math.min(window.devicePixelRatio, engine.maxDpr)
-      statsDiv.textContent = `${engine.backend.toUpperCase()} | ${Math.round(stats.fps)} FPS | DPR: ${dpr.toFixed(2)} | Draw calls: ${stats.drawCalls}${shadowSuffix}`
+      if (elapsed - lastStatsUpdate >= 0.5) {
+        lastStatsUpdate = elapsed
+        const stats = engine.getStats()
+        const shadowSuffix = stats.shadowDrawCalls > 0 ? ` (+${stats.shadowDrawCalls} CSM)` : ''
+        const dpr = Math.min(window.devicePixelRatio, engine.maxDpr)
+        statsDiv.textContent = `${backendLabel} | ${Math.round(stats.fps)} FPS | DPR: ${dpr.toFixed(2)} | Draw calls: ${stats.drawCalls}${shadowSuffix}`
+      }
     },
     { priority: 0 },
   )

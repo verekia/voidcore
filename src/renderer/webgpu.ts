@@ -286,6 +286,20 @@ export class WebGPURenderer implements Renderer {
   private _cascadeCorners = new Float32Array(24) // Pre-allocated frustum corners for cascade computation
   private _frameNum = 0
 
+  // Pre-allocated render pass descriptors (avoid per-frame heap allocations)
+  private _shadowPassDescs: GPURenderPassDescriptor[] = []
+  private _opaquePassCA0: GPURenderPassColorAttachment = null!
+  private _opaquePassCA1: GPURenderPassColorAttachment = null!
+  private _opaquePassDA: GPURenderPassDepthStencilAttachment = null!
+  private _opaquePassDesc: GPURenderPassDescriptor = null!
+  private _bloomDownPassCAs: GPURenderPassColorAttachment[] = []
+  private _bloomDownPassDescs: GPURenderPassDescriptor[] = []
+  private _bloomUpPassCAs: GPURenderPassColorAttachment[] = []
+  private _bloomUpPassDescs: GPURenderPassDescriptor[] = []
+  private _blitPassCA: GPURenderPassColorAttachment = null!
+  private _blitPassDesc: GPURenderPassDescriptor = null!
+  private _submitArr: GPUCommandBuffer[] = [null as unknown as GPUCommandBuffer]
+
   // Cached canvas dimensions
   private _displayW = 0
   private _displayH = 0
@@ -402,6 +416,17 @@ export class WebGPURenderer implements Renderer {
           shadowTexture!.createView({ dimension: '2d', baseArrayLayer: i, arrayLayerCount: 1 }),
         )
       }
+      for (let i = 0; i < NUM_CASCADES; i++) {
+        this._shadowPassDescs.push({
+          colorAttachments: [],
+          depthStencilAttachment: {
+            view: this.shadowCascadeViews[i]!,
+            depthLoadOp: 'clear',
+            depthClearValue: 1.0,
+            depthStoreOp: 'store',
+          },
+        })
+      }
     }
 
     // Dynamic uniform buffer setup
@@ -425,6 +450,45 @@ export class WebGPURenderer implements Renderer {
         device.createBuffer({ size: BLOOM_UP_UB_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }),
       )
     }
+
+    // Pre-allocate render pass descriptors (views updated in rebuildPostProcessBindGroups)
+    this._opaquePassCA0 = {
+      view: null!,
+      resolveTarget: null!,
+      loadOp: 'clear',
+      storeOp: 'discard',
+      clearValue: { r: 0, g: 0, b: 0, a: 1.0 },
+    }
+    this._opaquePassCA1 = {
+      view: null!,
+      resolveTarget: null!,
+      loadOp: 'clear',
+      storeOp: 'discard',
+      clearValue: { r: 0, g: 0, b: 0, a: 1.0 },
+    }
+    this._opaquePassDA = { view: null!, depthLoadOp: 'clear', depthClearValue: 1.0, depthStoreOp: 'discard' }
+    this._opaquePassDesc = {
+      colorAttachments: [this._opaquePassCA0, this._opaquePassCA1],
+      depthStencilAttachment: this._opaquePassDA,
+    }
+
+    for (let i = 0; i < this.bloomLevels; i++) {
+      const ca: GPURenderPassColorAttachment = {
+        view: null!,
+        loadOp: 'clear',
+        storeOp: 'store',
+        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+      }
+      this._bloomDownPassCAs.push(ca)
+      this._bloomDownPassDescs.push({ colorAttachments: [ca] })
+    }
+    for (let i = 0; i < Math.max(0, this.bloomLevels - 1); i++) {
+      const ca: GPURenderPassColorAttachment = { view: null!, loadOp: 'load', storeOp: 'store' }
+      this._bloomUpPassCAs.push(ca)
+      this._bloomUpPassDescs.push({ colorAttachments: [ca] })
+    }
+    this._blitPassCA = { view: null!, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }
+    this._blitPassDesc = { colorAttachments: [this._blitPassCA] }
 
     // Create frame bind group with shadow texture + sampler
     const shadowTexView = this.shadowTextureView ?? this.dummyShadowTextureView
@@ -1000,6 +1064,21 @@ export class WebGPURenderer implements Renderer {
         { binding: 3, resource: { buffer: this.blitUB } },
       ],
     })
+
+    // Update pre-allocated render pass descriptor views
+    this._opaquePassCA0.view = rt.msaaColorView
+    this._opaquePassCA0.resolveTarget = rt.resolvedColorView
+    this._opaquePassCA1.view = rt.msaaEmissiveView
+    this._opaquePassCA1.resolveTarget = rt.resolvedEmissiveView
+    this._opaquePassDA.view = rt.msaaDepthView
+
+    for (let i = 0; i < this.bloomLevels; i++) {
+      this._bloomDownPassCAs[i]!.view = rt.bloomViews[i]!
+    }
+    for (let i = 0; i < this.bloomUpBGs.length; i++) {
+      const targetIdx = this.bloomLevels - 2 - i
+      this._bloomUpPassCAs[i]!.view = rt.bloomViews[targetIdx]!
+    }
   }
 
   // ─── GPU buffer management ──────────────────────────────────────
@@ -1581,22 +1660,13 @@ export class WebGPURenderer implements Renderer {
 
     // ─── Ensure render targets ──────────────────────────────────
     this.ensureRenderTargets()
-    const rt = this.renderTargets!
 
     const encoder = this.device.createCommandEncoder()
 
     // ─── Shadow render pass (3 cascades, depth-only) ─────────────
     if (shadowActive) {
       for (let c = 0; c < NUM_CASCADES; c++) {
-        const shadowPass = encoder.beginRenderPass({
-          colorAttachments: [],
-          depthStencilAttachment: {
-            view: this.shadowCascadeViews[c]!,
-            depthLoadOp: 'clear',
-            depthClearValue: 1.0,
-            depthStoreOp: 'store',
-          },
-        })
+        const shadowPass = encoder.beginRenderPass(this._shadowPassDescs[c]!)
 
         // Per-cascade light frustum culling: project mesh center, skip if outside
         const cvp = this._cascadeVPs[c]!
@@ -1676,30 +1746,7 @@ export class WebGPURenderer implements Renderer {
     }
 
     // ─── Opaque pass (MSAA MRT) ─────────────────────────────────
-    const opaquePass = encoder.beginRenderPass({
-      colorAttachments: [
-        {
-          view: rt.msaaColorView,
-          resolveTarget: rt.resolvedColorView,
-          loadOp: 'clear',
-          storeOp: 'discard',
-          clearValue: { r: 0, g: 0, b: 0, a: 1.0 },
-        },
-        {
-          view: rt.msaaEmissiveView,
-          resolveTarget: rt.resolvedEmissiveView,
-          loadOp: 'clear',
-          storeOp: 'discard',
-          clearValue: { r: 0, g: 0, b: 0, a: 1.0 },
-        },
-      ],
-      depthStencilAttachment: {
-        view: rt.msaaDepthView,
-        depthLoadOp: 'clear',
-        depthClearValue: 1.0,
-        depthStoreOp: 'discard',
-      },
-    })
+    const opaquePass = encoder.beginRenderPass(this._opaquePassDesc)
 
     // ─── Draw loop ──────────────────────────────────────────────────
     this._lastMaterial = null
@@ -1750,16 +1797,7 @@ export class WebGPURenderer implements Renderer {
     if (this.bloomEnabled && this.bloomLevels > 0) {
       // Downsample chain
       for (let i = 0; i < this.bloomLevels; i++) {
-        const pass = encoder.beginRenderPass({
-          colorAttachments: [
-            {
-              view: rt.bloomViews[i]!,
-              loadOp: 'clear',
-              storeOp: 'store',
-              clearValue: { r: 0, g: 0, b: 0, a: 1 },
-            },
-          ],
-        })
+        const pass = encoder.beginRenderPass(this._bloomDownPassDescs[i]!)
         pass.setPipeline(this.bloomDownPipeline)
         pass.setBindGroup(0, this.bloomDownBGs[i]!)
         pass.draw(3)
@@ -1768,16 +1806,7 @@ export class WebGPURenderer implements Renderer {
 
       // Upsample chain (additive)
       for (let i = 0; i < this.bloomUpBGs.length; i++) {
-        const targetIdx = this.bloomLevels - 2 - i
-        const pass = encoder.beginRenderPass({
-          colorAttachments: [
-            {
-              view: rt.bloomViews[targetIdx]!,
-              loadOp: 'load',
-              storeOp: 'store',
-            },
-          ],
-        })
+        const pass = encoder.beginRenderPass(this._bloomUpPassDescs[i]!)
         pass.setPipeline(this.bloomUpPipeline)
         pass.setBindGroup(0, this.bloomUpBGs[i]!)
         pass.draw(3)
@@ -1787,22 +1816,15 @@ export class WebGPURenderer implements Renderer {
 
     // ─── Final blit ─────────────────────────────────────────────
     const surfaceTexture = this.context.getCurrentTexture()
-    const blitPass = encoder.beginRenderPass({
-      colorAttachments: [
-        {
-          view: surfaceTexture.createView(),
-          loadOp: 'clear',
-          storeOp: 'store',
-          clearValue: { r: 0, g: 0, b: 0, a: 1 },
-        },
-      ],
-    })
+    this._blitPassCA.view = surfaceTexture.createView()
+    const blitPass = encoder.beginRenderPass(this._blitPassDesc)
     blitPass.setPipeline(this.blitPipeline)
     blitPass.setBindGroup(0, this.blitBG!)
     blitPass.draw(3)
     blitPass.end()
 
-    this.device.queue.submit([encoder.finish()])
+    this._submitArr[0] = encoder.finish()
+    this.device.queue.submit(this._submitArr)
 
     // Update stats
     this.stats.fps = this._currentFps
