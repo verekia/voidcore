@@ -253,7 +253,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
     'color:#fff;font:bold 16px monospace;background:rgba(0,0,0,0.6);padding:4px 10px;border-radius:4px;white-space:nowrap'
   overlay.add({ element: labelDiv, node: cube, center: true })
 
-  // ─── Transparent Cubes (WBOIT test) ───────────────────────────────
+  // ─── Transparent Cubes ───────────────────────────────────────────
   const TRANSPARENT_COUNT = 10
   const TRANSPARENT_RING_RADIUS = 30
   const TRANSPARENT_Z = 25
