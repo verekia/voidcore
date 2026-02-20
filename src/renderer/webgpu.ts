@@ -18,6 +18,10 @@
 //   Bind group    – A set of GPU resources (buffers, textures) bound to shader slots.
 //   Uniform buffer – CPU-to-GPU data (matrices, colors) uploaded once and read by shaders.
 //   MSAA          – Multi-sample anti-aliasing (4x) to smooth jagged edges.
+//   Premul alpha  – Transparent pipelines use premultiplied alpha blend (src=one, dst=
+//                    one-minus-src-alpha). This avoids the 'src-alpha' blend factor which
+//                    triggers VK_ERROR_UNKNOWN on some Android Vulkan drivers when combined
+//                    with comparison texture sampling (textureSampleCompareLevel).
 //   MRT           – Multiple render targets: color and emissive are written simultaneously.
 //   Vertex packing – Normals use snorm8x4, UVs use float16x2, bone weights use unorm8x4
 //                    to reduce vertex buffer size (~40% smaller than all-float32).
@@ -538,6 +542,12 @@ export class WebGPURenderer implements Renderer {
     if (!adapter) throw new Error('No WebGPU adapter found')
 
     const device = await adapter.requestDevice()
+
+    // Surface hidden GPU errors (critical for Android debugging)
+    device.onuncapturederror = event => {
+      console.error('WebGPU uncaptured error:', event.error.message || event.error)
+    }
+
     const context = canvas.getContext('webgpu')
     if (!context) throw new Error('WebGPU canvas context not available')
 
@@ -545,6 +555,7 @@ export class WebGPURenderer implements Renderer {
     context.configure({ device, format, alphaMode: 'opaque' })
 
     const samples = config.antialias !== false ? 4 : 1
+
     let bloomEnabled: boolean
     let bloomIntensity: number
     let bloomLevels: number
@@ -699,30 +710,23 @@ export class WebGPURenderer implements Renderer {
 
     // ─── MRT fragment targets (color + emissive) ───────────────────
     const opaqueTargets: GPUColorTargetState[] = [{ format: 'rgba8unorm' }, { format: 'rgba16float' }]
+    // Premultiplied alpha blend – avoids the 'src-alpha' blend factor which triggers
+    // VK_ERROR_UNKNOWN on some Android Vulkan drivers when combined with comparison sampling.
+    // Shaders output premultiplied color (rgb * alpha) so 'one' is correct for src factor.
+    const premulBlend: GPUBlendState = {
+      color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+      alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+    }
+    const transparentTargets: GPUColorTargetState[] = [
+      { format: 'rgba8unorm', blend: premulBlend },
+      { format: 'rgba16float', blend: premulBlend },
+    ]
 
-    // ─── Render pipelines ──────────────────────────────────────────
-    const lambertPipeline = device.createRenderPipeline({
-      layout: opaquePipelineLayout,
-      vertex: { module: lambertModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
-      fragment: { module: lambertModule, entryPoint: 'fs_main', targets: opaqueTargets },
-      primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
-      multisample: { count: samples },
-    })
-
+    // ─── Basic pipelines (unlit, always succeed) ────────────────────
     const basicPipeline = device.createRenderPipeline({
       layout: opaquePipelineLayout,
       vertex: { module: basicModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
       fragment: { module: basicModule, entryPoint: 'fs_main', targets: opaqueTargets },
-      primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
-      multisample: { count: samples },
-    })
-
-    const lambertSkinnedPipeline = device.createRenderPipeline({
-      layout: skinnedOpaquePipelineLayout,
-      vertex: { module: lambertSkinnedModule, entryPoint: 'vs_main', buffers: SKINNED_VERTEX_BUFFER_LAYOUT },
-      fragment: { module: lambertSkinnedModule, entryPoint: 'fs_main', targets: opaqueTargets },
       primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
       depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
       multisample: { count: samples },
@@ -737,6 +741,62 @@ export class WebGPURenderer implements Renderer {
       multisample: { count: samples },
     })
 
+    const basicTransparentPipeline = device.createRenderPipeline({
+      layout: opaquePipelineLayout,
+      vertex: { module: basicModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
+      fragment: { module: basicModule, entryPoint: 'fs_main', targets: transparentTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+      multisample: { count: samples },
+    })
+
+    const basicSkinnedTransparentPipeline = device.createRenderPipeline({
+      layout: skinnedOpaquePipelineLayout,
+      vertex: { module: basicSkinnedModule, entryPoint: 'vs_main', buffers: SKINNED_VERTEX_BUFFER_LAYOUT },
+      fragment: { module: basicSkinnedModule, entryPoint: 'fs_main', targets: transparentTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+      multisample: { count: samples },
+    })
+
+    // ─── Lambert pipelines (lit with shadow sampling) ─────────────────
+    const lambertPipeline = device.createRenderPipeline({
+      layout: opaquePipelineLayout,
+      vertex: { module: lambertModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
+      fragment: { module: lambertModule, entryPoint: 'fs_main', targets: opaqueTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
+      multisample: { count: samples },
+    })
+
+    const lambertSkinnedPipeline = device.createRenderPipeline({
+      layout: skinnedOpaquePipelineLayout,
+      vertex: { module: lambertSkinnedModule, entryPoint: 'vs_main', buffers: SKINNED_VERTEX_BUFFER_LAYOUT },
+      fragment: { module: lambertSkinnedModule, entryPoint: 'fs_main', targets: opaqueTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
+      multisample: { count: samples },
+    })
+
+    const lambertTransparentPipeline = device.createRenderPipeline({
+      layout: opaquePipelineLayout,
+      vertex: { module: lambertModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
+      fragment: { module: lambertModule, entryPoint: 'fs_main', targets: transparentTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+      multisample: { count: samples },
+    })
+
+    const lambertSkinnedTransparentPipeline = device.createRenderPipeline({
+      layout: skinnedOpaquePipelineLayout,
+      vertex: { module: lambertSkinnedModule, entryPoint: 'vs_main', buffers: SKINNED_VERTEX_BUFFER_LAYOUT },
+      fragment: { module: lambertSkinnedModule, entryPoint: 'fs_main', targets: transparentTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+      multisample: { count: samples },
+    })
+
+    // ─── Bloom + blit pipelines ─────────────────────────────────────
     const bloomDownPipeline = device.createRenderPipeline({
       layout: postProcessPipelineLayout,
       vertex: { module: bloomDownModule, entryPoint: 'vs_main' },
@@ -768,52 +828,6 @@ export class WebGPURenderer implements Renderer {
       vertex: { module: blitModule, entryPoint: 'vs_main' },
       fragment: { module: blitModule, entryPoint: 'fs_main', targets: [{ format }] },
       primitive: { topology: 'triangle-list' },
-    })
-
-    // ─── Transparent pipelines (sorted alpha blend, same shaders as opaque) ──
-    const alphaBlendState: GPUBlendState = {
-      color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha' },
-      alpha: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha' },
-    }
-    const transparentTargets: GPUColorTargetState[] = [
-      { format: 'rgba8unorm', blend: alphaBlendState },
-      { format: 'rgba16float', blend: alphaBlendState },
-    ]
-
-    const lambertTransparentPipeline = device.createRenderPipeline({
-      layout: opaquePipelineLayout,
-      vertex: { module: lambertModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
-      fragment: { module: lambertModule, entryPoint: 'fs_main', targets: transparentTargets },
-      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
-      multisample: { count: samples },
-    })
-
-    const basicTransparentPipeline = device.createRenderPipeline({
-      layout: opaquePipelineLayout,
-      vertex: { module: basicModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
-      fragment: { module: basicModule, entryPoint: 'fs_main', targets: transparentTargets },
-      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
-      multisample: { count: samples },
-    })
-
-    const lambertSkinnedTransparentPipeline = device.createRenderPipeline({
-      layout: skinnedOpaquePipelineLayout,
-      vertex: { module: lambertSkinnedModule, entryPoint: 'vs_main', buffers: SKINNED_VERTEX_BUFFER_LAYOUT },
-      fragment: { module: lambertSkinnedModule, entryPoint: 'fs_main', targets: transparentTargets },
-      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
-      multisample: { count: samples },
-    })
-
-    const basicSkinnedTransparentPipeline = device.createRenderPipeline({
-      layout: skinnedOpaquePipelineLayout,
-      vertex: { module: basicSkinnedModule, entryPoint: 'vs_main', buffers: SKINNED_VERTEX_BUFFER_LAYOUT },
-      fragment: { module: basicSkinnedModule, entryPoint: 'fs_main', targets: transparentTargets },
-      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
-      multisample: { count: samples },
     })
 
     // ─── Shadow pipelines (depth-only, front-face culling) ─────────
@@ -861,7 +875,7 @@ export class WebGPURenderer implements Renderer {
     })
     device.queue.writeTexture(
       { texture: dummyTexture },
-      new ArrayBuffer(8), // 4 * f16 zeros = black
+      new ArrayBuffer(8), // 4 × f16 zeros = black
       { bytesPerRow: 8 },
       [1, 1],
     )
@@ -981,6 +995,7 @@ export class WebGPURenderer implements Renderer {
       sampleCount: this.samples,
       usage: GPUTextureUsage.RENDER_ATTACHMENT,
     })
+
     const msaaDepth = d.createTexture({
       size: [w, h],
       format: 'depth24plus',
@@ -1131,10 +1146,11 @@ export class WebGPURenderer implements Renderer {
 
     // Update pre-allocated render pass descriptor views
     this._opaquePassCA0.view = rt.msaaColorView
-    this._opaquePassCA0.resolveTarget = rt.resolvedColorView
     this._opaquePassCA1.view = rt.msaaEmissiveView
-    this._opaquePassCA1.resolveTarget = rt.resolvedEmissiveView
     this._opaquePassDA.view = rt.msaaDepthView
+
+    this._opaquePassCA0.resolveTarget = rt.resolvedColorView
+    this._opaquePassCA1.resolveTarget = rt.resolvedEmissiveView
 
     for (let i = 0; i < this.bloomLevels; i++) {
       this._bloomDownPassCAs[i]!.view = rt.bloomViews[i]!

@@ -3,9 +3,10 @@
 // Functionally identical to the GLSL shaders but written in WGSL (WebGPU Shading Language).
 // See webgl-shaders.ts for detailed explanations of each shader's purpose.
 //
-// Transparency uses sorted back-to-front alpha blending. Transparent meshes reuse the same
-// shaders as opaque meshes — the pipeline state (blend mode, depth write, cull mode) is what
-// differs, not the shader code.
+// Transparency uses sorted back-to-front alpha blending with premultiplied alpha. Transparent
+// meshes reuse the same shaders as opaque — all fragment outputs are premultiplied (rgb * alpha).
+// The pipeline uses blend factors one / one-minus-src-alpha (avoiding src-alpha, which triggers
+// VK_ERROR_UNKNOWN on some Android Vulkan drivers when combined with comparison sampling).
 //
 // Key WGSL differences from GLSL:
 //   - Uses `@group(N) @binding(M)` instead of UBO layout bindings
@@ -240,8 +241,8 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
   let litColor = baseColor * (ambient + diffuse);
   let finalColor = litColor + emissive;
 
-  out.color = vec4<f32>(finalColor, alpha);
-  out.emissive = vec4<f32>(emissive, 1.0);
+  out.color = vec4<f32>(finalColor * alpha, alpha);
+  out.emissive = vec4<f32>(emissive * alpha, alpha);
   return out;
 }
 `
@@ -432,8 +433,8 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
   let litColor = baseColor * (ambient + diffuse);
   let finalColor = litColor + emissive;
 
-  out.color = vec4<f32>(finalColor, alpha);
-  out.emissive = vec4<f32>(emissive, 1.0);
+  out.color = vec4<f32>(finalColor * alpha, alpha);
+  out.emissive = vec4<f32>(emissive * alpha, alpha);
   return out;
 }
 `
@@ -521,8 +522,8 @@ struct FragmentOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> FragmentOutput {
   var out: FragmentOutput;
-  out.color = vec4<f32>(material.baseColor, material.opacity);
-  out.emissive = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+  out.color = vec4<f32>(material.baseColor * material.opacity, material.opacity);
+  out.emissive = vec4<f32>(0.0, 0.0, 0.0, material.opacity);
   return out;
 }
 `
@@ -597,8 +598,8 @@ struct FragmentOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> FragmentOutput {
   var out: FragmentOutput;
-  out.color = vec4<f32>(material.baseColor, material.opacity);
-  out.emissive = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+  out.color = vec4<f32>(material.baseColor * material.opacity, material.opacity);
+  out.emissive = vec4<f32>(0.0, 0.0, 0.0, material.opacity);
   return out;
 }
 `
