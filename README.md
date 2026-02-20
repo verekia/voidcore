@@ -9,9 +9,9 @@ A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 sup
 - **Skeletal animation** – Clip-based animation with blending, crossfading, and loop modes
 - **Procedural geometry** – Box, sphere, plane, cone, cylinder, capsule, circle
 - **glTF/GLB loading** – Import 3D models with Draco compression support
-- **Material system** – Basic (unlit) and Lambert (diffuse) shading with palette support
+- **Material system** – Basic (unlit) and Lambert (diffuse) shading with palette support, opacity and transparency
+- **Sorted alpha blending** – Back-to-front transparent mesh rendering with premultiplied alpha (WebGPU)
 - **Cascaded shadow maps** – 3-cascade CSM with PCF filtering and cascade blending
-- **Transparency** – WBOIT (Weighted Blended Order-Independent Transparency) with sorted alpha-blend fallback on devices lacking `OES_draw_buffers_indexed`
 - **Bloom post-processing** – Multi-level downsample/upsample with Karis average
 - **Frustum culling** – AABB-based visibility culling with Gribb-Hartmann plane extraction
 - **Raycasting** – BVH-accelerated ray-mesh intersection for mouse picking

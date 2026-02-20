@@ -8,24 +8,21 @@
 //   5. Uploads per-frame uniforms (view-projection matrix, light data) to the GPU
 //   6. Batches all object transforms into dynamic uniform buffers (1-2 uploads vs N)
 //   7. Renders shadow maps (3-cascade CSM with comparison sampling)
-//   8. Draws opaque meshes in an MSAA render pass with two render targets (color + emissive)
-//   9. MSAA resolve → WBOIT transparent pass → OIT composite over opaque
+//   8. Draws meshes in an MSAA render pass with two render targets (color + emissive)
+//   9. MSAA resolve
 //  10. Runs a bloom post-processing chain (downsample → upsample with tent filter)
 //  11. Blits the final image to screen with bloom compositing and gamma correction
-//
-// Transparency uses Weighted Blended Order-Independent Transparency (WBOIT):
-//   - Transparent meshes are drawn after MSAA resolve into MSAA accumulation (RGBA16F) and
-//     revealage (R8) textures, sharing the opaque pass's MSAA depth (read-only).
-//   - The OIT composite pass blends the resolved transparent result over the opaque color.
-//   - Weight function: w = alpha * clamp(0.03 / (1e-5 + pow(z/200, 4)), 1e-2, 3e3)
 //
 // Key concepts:
 //   Pipeline      – A compiled GPU program (vertex + fragment shader + render state).
 //   Bind group    – A set of GPU resources (buffers, textures) bound to shader slots.
 //   Uniform buffer – CPU-to-GPU data (matrices, colors) uploaded once and read by shaders.
 //   MSAA          – Multi-sample anti-aliasing (4x) to smooth jagged edges.
+//   Premul alpha  – Transparent pipelines use premultiplied alpha blend (src=one, dst=
+//                    one-minus-src-alpha). This avoids the 'src-alpha' blend factor which
+//                    triggers VK_ERROR_UNKNOWN on some Android Vulkan drivers when combined
+//                    with comparison texture sampling (textureSampleCompareLevel).
 //   MRT           – Multiple render targets: color and emissive are written simultaneously.
-//   WBOIT         – Order-independent transparency via accumulation + revealage buffers.
 //   Vertex packing – Normals use snorm8x4, UVs use float16x2, bone weights use unorm8x4
 //                    to reduce vertex buffer size (~40% smaller than all-float32).
 //
@@ -61,11 +58,6 @@ import {
   BASIC_WGSL,
   LAMBERT_SKINNED_WGSL,
   BASIC_SKINNED_WGSL,
-  LAMBERT_TRANSPARENT_WGSL,
-  LAMBERT_SKINNED_TRANSPARENT_WGSL,
-  BASIC_TRANSPARENT_WGSL,
-  BASIC_SKINNED_TRANSPARENT_WGSL,
-  OIT_COMPOSITE_WGSL,
   SHADOW_DEPTH_WGSL,
   SHADOW_DEPTH_SKINNED_WGSL,
   BLOOM_DOWN_WGSL,
@@ -113,18 +105,6 @@ interface RenderTargets {
   resolvedColorView: GPUTextureView
   resolvedEmissive: GPUTexture
   resolvedEmissiveView: GPUTextureView
-  resolvedDepth: GPUTexture
-  resolvedDepthView: GPUTextureView
-  oitAccum: GPUTexture
-  oitAccumView: GPUTextureView
-  oitReveal: GPUTexture
-  oitRevealView: GPUTextureView
-  opaqueColorCopy: GPUTexture
-  opaqueColorCopyView: GPUTextureView
-  _oitAccumMsaa: GPUTexture
-  _oitAccumMsaaView: GPUTextureView
-  _oitRevealMsaa: GPUTexture
-  _oitRevealMsaaView: GPUTextureView
   bloomTextures: GPUTexture[]
   bloomViews: GPUTextureView[]
   bloomWidths: number[]
@@ -206,14 +186,14 @@ export class WebGPURenderer implements Renderer {
   private basicPipeline: GPURenderPipeline
   private lambertSkinnedPipeline: GPURenderPipeline
   private basicSkinnedPipeline: GPURenderPipeline
-  private bloomDownPipeline: GPURenderPipeline
-  private bloomUpPipeline: GPURenderPipeline
-  private blitPipeline: GPURenderPipeline
+  // Transparent variants (blend + no depth write + no cull)
   private lambertTransparentPipeline: GPURenderPipeline
   private basicTransparentPipeline: GPURenderPipeline
   private lambertSkinnedTransparentPipeline: GPURenderPipeline
   private basicSkinnedTransparentPipeline: GPURenderPipeline
-  private oitCompositePipeline: GPURenderPipeline
+  private bloomDownPipeline: GPURenderPipeline
+  private bloomUpPipeline: GPURenderPipeline
+  private blitPipeline: GPURenderPipeline
 
   // Bind group layouts
   private frameBGL: GPUBindGroupLayout
@@ -222,7 +202,6 @@ export class WebGPURenderer implements Renderer {
   private skinnedObjectBGL: GPUBindGroupLayout
   private postProcessBGL: GPUBindGroupLayout
   private blitBGL: GPUBindGroupLayout
-  private oitCompositeBGL: GPUBindGroupLayout
 
   // Per-frame resources
   private frameUB: GPUBuffer
@@ -265,7 +244,6 @@ export class WebGPURenderer implements Renderer {
   private bloomDownBGs: GPUBindGroup[] = []
   private bloomUpBGs: GPUBindGroup[] = []
   private blitBG: GPUBindGroup | null = null
-  private oitCompositeBG: GPUBindGroup | null = null
   // Bloom uniform buffers
   private bloomDownUBs: GPUBuffer[] = []
   private bloomUpUBs: GPUBuffer[] = []
@@ -329,12 +307,6 @@ export class WebGPURenderer implements Renderer {
   private _bloomDownPassDescs: GPURenderPassDescriptor[] = []
   private _bloomUpPassCAs: GPURenderPassColorAttachment[] = []
   private _bloomUpPassDescs: GPURenderPassDescriptor[] = []
-  private _transparentPassCA0: GPURenderPassColorAttachment = null!
-  private _transparentPassCA1: GPURenderPassColorAttachment = null!
-  private _transparentPassDA: GPURenderPassDepthStencilAttachment = null!
-  private _transparentPassDesc: GPURenderPassDescriptor = null!
-  private _oitCompositePassCA: GPURenderPassColorAttachment = null!
-  private _oitCompositePassDesc: GPURenderPassDescriptor = null!
   private _blitPassCA: GPURenderPassColorAttachment = null!
   private _blitPassDesc: GPURenderPassDescriptor = null!
   private _submitArr: GPUCommandBuffer[] = [null as unknown as GPUCommandBuffer]
@@ -368,6 +340,10 @@ export class WebGPURenderer implements Renderer {
     basicPipeline: GPURenderPipeline,
     lambertSkinnedPipeline: GPURenderPipeline,
     basicSkinnedPipeline: GPURenderPipeline,
+    lambertTransparentPipeline: GPURenderPipeline,
+    basicTransparentPipeline: GPURenderPipeline,
+    lambertSkinnedTransparentPipeline: GPURenderPipeline,
+    basicSkinnedTransparentPipeline: GPURenderPipeline,
     bloomDownPipeline: GPURenderPipeline,
     bloomUpPipeline: GPURenderPipeline,
     blitPipeline: GPURenderPipeline,
@@ -400,12 +376,6 @@ export class WebGPURenderer implements Renderer {
     shadowSampler: GPUSampler,
     dummyShadowTexture: GPUTexture,
     shadowTexture: GPUTexture | null,
-    lambertTransparentPipeline: GPURenderPipeline,
-    basicTransparentPipeline: GPURenderPipeline,
-    lambertSkinnedTransparentPipeline: GPURenderPipeline,
-    basicSkinnedTransparentPipeline: GPURenderPipeline,
-    oitCompositePipeline: GPURenderPipeline,
-    oitCompositeBGL: GPUBindGroupLayout,
   ) {
     this.device = device
     this.context = context
@@ -415,6 +385,10 @@ export class WebGPURenderer implements Renderer {
     this.basicPipeline = basicPipeline
     this.lambertSkinnedPipeline = lambertSkinnedPipeline
     this.basicSkinnedPipeline = basicSkinnedPipeline
+    this.lambertTransparentPipeline = lambertTransparentPipeline
+    this.basicTransparentPipeline = basicTransparentPipeline
+    this.lambertSkinnedTransparentPipeline = lambertSkinnedTransparentPipeline
+    this.basicSkinnedTransparentPipeline = basicSkinnedTransparentPipeline
     this.bloomDownPipeline = bloomDownPipeline
     this.bloomUpPipeline = bloomUpPipeline
     this.blitPipeline = blitPipeline
@@ -450,12 +424,6 @@ export class WebGPURenderer implements Renderer {
     this.shadowSampler = shadowSampler
     this.dummyShadowTexture = dummyShadowTexture
     this.dummyShadowTextureView = dummyShadowTexture.createView()
-    this.lambertTransparentPipeline = lambertTransparentPipeline
-    this.basicTransparentPipeline = basicTransparentPipeline
-    this.lambertSkinnedTransparentPipeline = lambertSkinnedTransparentPipeline
-    this.basicSkinnedTransparentPipeline = basicSkinnedTransparentPipeline
-    this.oitCompositePipeline = oitCompositePipeline
-    this.oitCompositeBGL = oitCompositeBGL
 
     // Shadow textures
     if (shadowEnabled) {
@@ -523,34 +491,6 @@ export class WebGPURenderer implements Renderer {
       depthStencilAttachment: this._opaquePassDA,
     }
 
-    // Transparent pass descriptors (WBOIT)
-    this._transparentPassCA0 = {
-      view: null!,
-      loadOp: 'clear',
-      storeOp: 'store',
-      clearValue: { r: 0, g: 0, b: 0, a: 0 },
-    }
-    this._transparentPassCA1 = {
-      view: null!,
-      loadOp: 'clear',
-      storeOp: 'store',
-      clearValue: { r: 1, g: 0, b: 0, a: 1 },
-    }
-    this._transparentPassDA = { view: null!, depthReadOnly: true }
-    this._transparentPassDesc = {
-      colorAttachments: [this._transparentPassCA0, this._transparentPassCA1],
-      depthStencilAttachment: this._transparentPassDA,
-    }
-
-    // OIT composite pass descriptor
-    this._oitCompositePassCA = {
-      view: null!,
-      loadOp: 'clear',
-      storeOp: 'store',
-      clearValue: { r: 0, g: 0, b: 0, a: 1 },
-    }
-    this._oitCompositePassDesc = { colorAttachments: [this._oitCompositePassCA] }
-
     for (let i = 0; i < this.bloomLevels; i++) {
       const ca: GPURenderPassColorAttachment = {
         view: null!,
@@ -603,6 +543,12 @@ export class WebGPURenderer implements Renderer {
     if (!adapter) throw new Error('No WebGPU adapter found')
 
     const device = await adapter.requestDevice()
+
+    // Surface hidden GPU errors (critical for Android debugging)
+    device.onuncapturederror = event => {
+      console.error('WebGPU uncaptured error:', event.error.message || event.error)
+    }
+
     const context = canvas.getContext('webgpu')
     if (!context) throw new Error('WebGPU canvas context not available')
 
@@ -802,6 +748,55 @@ export class WebGPURenderer implements Renderer {
       multisample: { count: samples },
     })
 
+    // ─── Transparent pipeline variants (premultiplied alpha blend + no depth write + no cull) ──
+    // Premultiplied alpha blend – avoids the 'src-alpha' blend factor which triggers
+    // VK_ERROR_UNKNOWN on some Android Vulkan drivers when combined with comparison sampling.
+    // Shaders output premultiplied color (rgb * alpha) so 'one' is correct for src factor.
+    const transparentBlend: GPUBlendState = {
+      color: { operation: 'add', srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+      alpha: { operation: 'add', srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+    }
+    const transparentTargets: GPUColorTargetState[] = [
+      { format: 'rgba8unorm', blend: transparentBlend },
+      { format: 'rgba16float', blend: transparentBlend },
+    ]
+
+    const lambertTransparentPipeline = device.createRenderPipeline({
+      layout: opaquePipelineLayout,
+      vertex: { module: lambertModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
+      fragment: { module: lambertModule, entryPoint: 'fs_main', targets: transparentTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+      multisample: { count: samples },
+    })
+
+    const basicTransparentPipeline = device.createRenderPipeline({
+      layout: opaquePipelineLayout,
+      vertex: { module: basicModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
+      fragment: { module: basicModule, entryPoint: 'fs_main', targets: transparentTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+      multisample: { count: samples },
+    })
+
+    const lambertSkinnedTransparentPipeline = device.createRenderPipeline({
+      layout: skinnedOpaquePipelineLayout,
+      vertex: { module: lambertSkinnedModule, entryPoint: 'vs_main', buffers: SKINNED_VERTEX_BUFFER_LAYOUT },
+      fragment: { module: lambertSkinnedModule, entryPoint: 'fs_main', targets: transparentTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+      multisample: { count: samples },
+    })
+
+    const basicSkinnedTransparentPipeline = device.createRenderPipeline({
+      layout: skinnedOpaquePipelineLayout,
+      vertex: { module: basicSkinnedModule, entryPoint: 'vs_main', buffers: SKINNED_VERTEX_BUFFER_LAYOUT },
+      fragment: { module: basicSkinnedModule, entryPoint: 'fs_main', targets: transparentTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+      multisample: { count: samples },
+    })
+
     const bloomDownPipeline = device.createRenderPipeline({
       layout: postProcessPipelineLayout,
       vertex: { module: bloomDownModule, entryPoint: 'vs_main' },
@@ -832,88 +827,6 @@ export class WebGPURenderer implements Renderer {
       layout: blitPipelineLayout,
       vertex: { module: blitModule, entryPoint: 'vs_main' },
       fragment: { module: blitModule, entryPoint: 'fs_main', targets: [{ format }] },
-      primitive: { topology: 'triangle-list' },
-    })
-
-    // ─── Transparent pipelines (WBOIT) ─────────────────────────────
-    const lambertTransparentModule = device.createShaderModule({ code: LAMBERT_TRANSPARENT_WGSL })
-    const basicTransparentModule = device.createShaderModule({ code: BASIC_TRANSPARENT_WGSL })
-    const lambertSkinnedTransparentModule = device.createShaderModule({ code: LAMBERT_SKINNED_TRANSPARENT_WGSL })
-    const basicSkinnedTransparentModule = device.createShaderModule({ code: BASIC_SKINNED_TRANSPARENT_WGSL })
-    const oitCompositeModule = device.createShaderModule({ code: OIT_COMPOSITE_WGSL })
-
-    // WBOIT blend targets: accum = ONE/ONE additive, reveal = ZERO/ONE_MINUS_SRC_ALPHA
-    const oitTargets: GPUColorTargetState[] = [
-      {
-        format: 'rgba16float',
-        blend: {
-          color: { operation: 'add', srcFactor: 'one', dstFactor: 'one' },
-          alpha: { operation: 'add', srcFactor: 'one', dstFactor: 'one' },
-        },
-      },
-      {
-        format: 'rgba8unorm',
-        blend: {
-          color: { operation: 'add', srcFactor: 'zero', dstFactor: 'one-minus-src-alpha' },
-          alpha: { operation: 'add', srcFactor: 'zero', dstFactor: 'one-minus-src-alpha' },
-        },
-      },
-    ]
-
-    const lambertTransparentPipeline = device.createRenderPipeline({
-      layout: opaquePipelineLayout,
-      vertex: { module: lambertTransparentModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
-      fragment: { module: lambertTransparentModule, entryPoint: 'fs_main', targets: oitTargets },
-      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
-      multisample: { count: samples },
-    })
-
-    const basicTransparentPipeline = device.createRenderPipeline({
-      layout: opaquePipelineLayout,
-      vertex: { module: basicTransparentModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
-      fragment: { module: basicTransparentModule, entryPoint: 'fs_main', targets: oitTargets },
-      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
-      multisample: { count: samples },
-    })
-
-    const lambertSkinnedTransparentPipeline = device.createRenderPipeline({
-      layout: skinnedOpaquePipelineLayout,
-      vertex: { module: lambertSkinnedTransparentModule, entryPoint: 'vs_main', buffers: SKINNED_VERTEX_BUFFER_LAYOUT },
-      fragment: { module: lambertSkinnedTransparentModule, entryPoint: 'fs_main', targets: oitTargets },
-      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
-      multisample: { count: samples },
-    })
-
-    const basicSkinnedTransparentPipeline = device.createRenderPipeline({
-      layout: skinnedOpaquePipelineLayout,
-      vertex: { module: basicSkinnedTransparentModule, entryPoint: 'vs_main', buffers: SKINNED_VERTEX_BUFFER_LAYOUT },
-      fragment: { module: basicSkinnedTransparentModule, entryPoint: 'fs_main', targets: oitTargets },
-      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
-      multisample: { count: samples },
-    })
-
-    // OIT composite BGL + pipeline
-    const oitCompositeBGL = device.createBindGroupLayout({
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
-        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
-        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
-        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
-      ],
-    })
-
-    const oitCompositePipelineLayout = device.createPipelineLayout({
-      bindGroupLayouts: [oitCompositeBGL],
-    })
-
-    const oitCompositePipeline = device.createRenderPipeline({
-      layout: oitCompositePipelineLayout,
-      vertex: { module: oitCompositeModule, entryPoint: 'vs_main' },
-      fragment: { module: oitCompositeModule, entryPoint: 'fs_main', targets: [{ format: 'rgba8unorm' }] },
       primitive: { topology: 'triangle-list' },
     })
 
@@ -1024,6 +937,10 @@ export class WebGPURenderer implements Renderer {
       basicPipeline,
       lambertSkinnedPipeline,
       basicSkinnedPipeline,
+      lambertTransparentPipeline,
+      basicTransparentPipeline,
+      lambertSkinnedTransparentPipeline,
+      basicSkinnedTransparentPipeline,
       bloomDownPipeline,
       bloomUpPipeline,
       blitPipeline,
@@ -1056,12 +973,6 @@ export class WebGPURenderer implements Renderer {
       shadowSampler,
       dummyShadowTexture,
       shadowTexture,
-      lambertTransparentPipeline,
-      basicTransparentPipeline,
-      lambertSkinnedTransparentPipeline,
-      basicSkinnedTransparentPipeline,
-      oitCompositePipeline,
-      oitCompositeBGL,
     )
     renderer.maxDpr = config.maxDpr === false ? Infinity : (config.maxDpr ?? defaultMaxDpr())
     return renderer
@@ -1094,48 +1005,12 @@ export class WebGPURenderer implements Renderer {
     const resolvedColor = d.createTexture({
       size: [w, h],
       format: 'rgba8unorm',
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
     })
     const resolvedEmissive = d.createTexture({
       size: [w, h],
       format: 'rgba16float',
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-    })
-
-    // OIT textures (MSAA to match depth attachment)
-    const oitAccumMsaa = d.createTexture({
-      size: [w, h],
-      format: 'rgba16float',
-      sampleCount: this.samples,
-      usage: GPUTextureUsage.RENDER_ATTACHMENT,
-    })
-    const oitRevealMsaa = d.createTexture({
-      size: [w, h],
-      format: 'rgba8unorm',
-      sampleCount: this.samples,
-      usage: GPUTextureUsage.RENDER_ATTACHMENT,
-    })
-    const oitAccum = d.createTexture({
-      size: [w, h],
-      format: 'rgba16float',
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-    })
-    const oitReveal = d.createTexture({
-      size: [w, h],
-      format: 'rgba8unorm',
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-    })
-    // Resolved depth (1x) — not needed for MSAA OIT approach
-    const resolvedDepth = d.createTexture({
-      size: [w, h],
-      format: 'depth24plus',
-      usage: GPUTextureUsage.RENDER_ATTACHMENT,
-    })
-    // Copy of opaque color for OIT composite (avoids feedback loop)
-    const opaqueColorCopy = d.createTexture({
-      size: [w, h],
-      format: 'rgba8unorm',
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     })
 
     // Bloom chain
@@ -1172,18 +1047,6 @@ export class WebGPURenderer implements Renderer {
       resolvedColorView: resolvedColor.createView(),
       resolvedEmissive,
       resolvedEmissiveView: resolvedEmissive.createView(),
-      resolvedDepth,
-      resolvedDepthView: resolvedDepth.createView(),
-      oitAccum,
-      oitAccumView: oitAccum.createView(),
-      oitReveal,
-      oitRevealView: oitReveal.createView(),
-      opaqueColorCopy,
-      opaqueColorCopyView: opaqueColorCopy.createView(),
-      _oitAccumMsaa: oitAccumMsaa,
-      _oitAccumMsaaView: oitAccumMsaa.createView(),
-      _oitRevealMsaa: oitRevealMsaa,
-      _oitRevealMsaaView: oitRevealMsaa.createView(),
       bloomTextures,
       bloomViews,
       bloomWidths,
@@ -1201,12 +1064,6 @@ export class WebGPURenderer implements Renderer {
     rt.msaaDepth.destroy()
     rt.resolvedColor.destroy()
     rt.resolvedEmissive.destroy()
-    rt.resolvedDepth.destroy()
-    rt.oitAccum.destroy()
-    rt.oitReveal.destroy()
-    rt.opaqueColorCopy.destroy()
-    rt._oitAccumMsaa.destroy()
-    rt._oitRevealMsaa.destroy()
     for (const tex of rt.bloomTextures) tex.destroy()
     this.renderTargets = null
   }
@@ -1286,33 +1143,12 @@ export class WebGPURenderer implements Renderer {
       ],
     })
 
-    // OIT composite bind group
-    this.oitCompositeBG = d.createBindGroup({
-      layout: this.oitCompositeBGL,
-      entries: [
-        { binding: 0, resource: this.linearSampler },
-        { binding: 1, resource: rt.oitAccumView },
-        { binding: 2, resource: rt.oitRevealView },
-        { binding: 3, resource: rt.opaqueColorCopyView },
-      ],
-    })
-
     // Update pre-allocated render pass descriptor views
     this._opaquePassCA0.view = rt.msaaColorView
     this._opaquePassCA0.resolveTarget = rt.resolvedColorView
     this._opaquePassCA1.view = rt.msaaEmissiveView
     this._opaquePassCA1.resolveTarget = rt.resolvedEmissiveView
     this._opaquePassDA.view = rt.msaaDepthView
-
-    // Transparent pass views (MSAA OIT → resolve to 1x)
-    this._transparentPassCA0.view = rt._oitAccumMsaaView
-    this._transparentPassCA0.resolveTarget = rt.oitAccumView
-    this._transparentPassCA1.view = rt._oitRevealMsaaView
-    this._transparentPassCA1.resolveTarget = rt.oitRevealView
-    this._transparentPassDA.view = rt.msaaDepthView
-
-    // OIT composite pass view (writes to resolvedColor)
-    this._oitCompositePassCA.view = rt.resolvedColorView
 
     for (let i = 0; i < this.bloomLevels; i++) {
       this._bloomDownPassCAs[i]!.view = rt.bloomViews[i]!
@@ -1473,7 +1309,7 @@ export class WebGPURenderer implements Renderer {
         data[offset] = entry.color[0]
         data[offset + 1] = entry.color[1]
         data[offset + 2] = entry.color[2]
-        data[offset + 3] = entry.opacity ?? 1.0
+        data[offset + 3] = 1.0
         data[offset + 4] = entry.emissive?.[0] ?? 0
         data[offset + 5] = entry.emissive?.[1] ?? 0
         data[offset + 6] = entry.emissive?.[2] ?? 0
@@ -1872,14 +1708,48 @@ export class WebGPURenderer implements Renderer {
       }
     }
 
-    // Find where transparent meshes begin in the sorted array
+    // ─── Scene pass (MSAA MRT): opaque then transparent ─────────
+    const scenePass = encoder.beginRenderPass(this._opaquePassDesc)
+
+    // Find the split between opaque and transparent meshes
     const transparentStart = findTransparentStart(this._sortState, meshes.length)
-    const rt = this.renderTargets!
 
-    // ─── Opaque pass (MSAA MRT) ─────────────────────────────────
-    const opaquePass = encoder.beginRenderPass(this._opaquePassDesc)
+    // ─── Draw helper (shared by opaque + transparent loops) ─────
+    const drawMeshGPU = (pass: GPURenderPassEncoder, mesh: Mesh, pipeline: GPURenderPipeline) => {
+      pass.setPipeline(pipeline)
 
-    // ─── Opaque draw loop ───────────────────────────────────────
+      const geoBufs = this.ensureGeometryBuffers(mesh.geometry)
+      pass.setVertexBuffer(0, geoBufs.position)
+      pass.setVertexBuffer(1, geoBufs.normal)
+      pass.setVertexBuffer(2, geoBufs.uv)
+      pass.setVertexBuffer(3, geoBufs.materialIndex)
+      if (mesh._isSkinned && geoBufs.joints && geoBufs.weights) {
+        pass.setVertexBuffer(4, geoBufs.joints)
+        pass.setVertexBuffer(5, geoBufs.weights)
+      }
+      pass.setIndexBuffer(geoBufs.index, geoBufs.indexFormat)
+
+      const matCache = this.ensureMaterialCache(mesh.material)
+      if (mesh.material !== this._lastMaterial) {
+        this._lastMaterial = mesh.material
+        this.writeMaterialBuffer(mesh.material, matCache)
+      }
+
+      if (mesh._isSkinned) {
+        pass.setBindGroup(2, this._skinnedDynBG, [mesh._batchIndex * this._alignedSkinnedSize])
+      } else {
+        pass.setBindGroup(2, this._objectDynBG, [mesh._batchIndex * this._alignedObjectSize])
+      }
+
+      pass.setBindGroup(0, this.frameBG)
+      pass.setBindGroup(1, matCache.bindGroup)
+
+      pass.drawIndexed(geoBufs.indexCount)
+      drawCalls++
+      triangles += geoBufs.indexCount / 3
+    }
+
+    // ─── Opaque draw loop ────────────────────────────────────────
     this._lastMaterial = null
     for (let si = 0; si < transparentStart; si++) {
       const mesh = meshes[sortedIndices[si]!]!
@@ -1889,105 +1759,25 @@ export class WebGPURenderer implements Renderer {
       } else {
         pipeline = mesh.material.type === 'lambert' ? this.lambertPipeline : this.basicPipeline
       }
-      opaquePass.setPipeline(pipeline)
+      drawMeshGPU(scenePass, mesh, pipeline)
+    }
 
-      const geoBufs = this.ensureGeometryBuffers(mesh.geometry)
-      opaquePass.setVertexBuffer(0, geoBufs.position)
-      opaquePass.setVertexBuffer(1, geoBufs.normal)
-      opaquePass.setVertexBuffer(2, geoBufs.uv)
-      opaquePass.setVertexBuffer(3, geoBufs.materialIndex)
-      if (mesh._isSkinned && geoBufs.joints && geoBufs.weights) {
-        opaquePass.setVertexBuffer(4, geoBufs.joints)
-        opaquePass.setVertexBuffer(5, geoBufs.weights)
-      }
-      opaquePass.setIndexBuffer(geoBufs.index, geoBufs.indexFormat)
-
-      const matCache = this.ensureMaterialCache(mesh.material)
-      if (mesh.material !== this._lastMaterial) {
-        this._lastMaterial = mesh.material
-        this.writeMaterialBuffer(mesh.material, matCache)
-      }
-
+    // ─── Transparent draw loop (back-to-front, blend + no depth write + no cull) ──
+    for (let si = transparentStart; si < meshes.length; si++) {
+      const mesh = meshes[sortedIndices[si]!]!
+      let pipeline: GPURenderPipeline
       if (mesh._isSkinned) {
-        opaquePass.setBindGroup(2, this._skinnedDynBG, [mesh._batchIndex * this._alignedSkinnedSize])
+        pipeline =
+          mesh.material.type === 'lambert'
+            ? this.lambertSkinnedTransparentPipeline
+            : this.basicSkinnedTransparentPipeline
       } else {
-        opaquePass.setBindGroup(2, this._objectDynBG, [mesh._batchIndex * this._alignedObjectSize])
+        pipeline = mesh.material.type === 'lambert' ? this.lambertTransparentPipeline : this.basicTransparentPipeline
       }
-
-      opaquePass.setBindGroup(0, this.frameBG)
-      opaquePass.setBindGroup(1, matCache.bindGroup)
-
-      opaquePass.drawIndexed(geoBufs.indexCount)
-      drawCalls++
-      triangles += geoBufs.indexCount / 3
+      drawMeshGPU(scenePass, mesh, pipeline)
     }
 
-    opaquePass.end()
-
-    // ─── Transparent pass (WBOIT) ────────────────────────────────
-    if (transparentStart < meshes.length) {
-      const transparentPass = encoder.beginRenderPass(this._transparentPassDesc)
-
-      this._lastMaterial = null
-      for (let si = transparentStart; si < meshes.length; si++) {
-        const mesh = meshes[sortedIndices[si]!]!
-        let pipeline: GPURenderPipeline
-        if (mesh._isSkinned) {
-          pipeline =
-            mesh.material.type === 'lambert'
-              ? this.lambertSkinnedTransparentPipeline
-              : this.basicSkinnedTransparentPipeline
-        } else {
-          pipeline = mesh.material.type === 'lambert' ? this.lambertTransparentPipeline : this.basicTransparentPipeline
-        }
-        transparentPass.setPipeline(pipeline)
-
-        const geoBufs = this.ensureGeometryBuffers(mesh.geometry)
-        transparentPass.setVertexBuffer(0, geoBufs.position)
-        transparentPass.setVertexBuffer(1, geoBufs.normal)
-        transparentPass.setVertexBuffer(2, geoBufs.uv)
-        transparentPass.setVertexBuffer(3, geoBufs.materialIndex)
-        if (mesh._isSkinned && geoBufs.joints && geoBufs.weights) {
-          transparentPass.setVertexBuffer(4, geoBufs.joints)
-          transparentPass.setVertexBuffer(5, geoBufs.weights)
-        }
-        transparentPass.setIndexBuffer(geoBufs.index, geoBufs.indexFormat)
-
-        const matCache = this.ensureMaterialCache(mesh.material)
-        if (mesh.material !== this._lastMaterial) {
-          this._lastMaterial = mesh.material
-          this.writeMaterialBuffer(mesh.material, matCache)
-        }
-
-        if (mesh._isSkinned) {
-          transparentPass.setBindGroup(2, this._skinnedDynBG, [mesh._batchIndex * this._alignedSkinnedSize])
-        } else {
-          transparentPass.setBindGroup(2, this._objectDynBG, [mesh._batchIndex * this._alignedObjectSize])
-        }
-
-        transparentPass.setBindGroup(0, this.frameBG)
-        transparentPass.setBindGroup(1, matCache.bindGroup)
-
-        transparentPass.drawIndexed(geoBufs.indexCount)
-        drawCalls++
-        triangles += geoBufs.indexCount / 3
-      }
-
-      transparentPass.end()
-
-      // Copy opaque color for composite (avoids feedback loop)
-      encoder.copyTextureToTexture({ texture: rt.resolvedColor }, { texture: rt.opaqueColorCopy }, [
-        rt.width,
-        rt.height,
-      ])
-
-      // OIT composite: blend transparent result over opaque color
-      const compositePass = encoder.beginRenderPass(this._oitCompositePassDesc)
-      compositePass.setPipeline(this.oitCompositePipeline)
-      compositePass.setBindGroup(0, this.oitCompositeBG!)
-      compositePass.draw(3)
-      compositePass.end()
-    }
+    scenePass.end()
 
     // ─── Bloom ──────────────────────────────────────────────────
     if (this.bloomEnabled && this.bloomLevels > 0) {

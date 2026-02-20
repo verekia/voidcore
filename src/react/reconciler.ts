@@ -95,13 +95,10 @@ export const applyProps = (
       continue
     }
 
-    // Direct assignments: visible, castShadow, receiveShadow, name, intensity, opacity, fov, near, far, etc.
+    // Direct assignments: visible, castShadow, receiveShadow, name, intensity, fov, near, far, etc.
     if (key in obj) {
       obj[key] = newVal
-      if (key === 'opacity' && obj.transparent !== undefined) {
-        if (newVal < 1) obj.transparent = true
-      }
-      if (obj.needsUpdate !== undefined && (key === 'opacity' || key === 'transparent' || key === 'vertexColors')) {
+      if (obj.needsUpdate !== undefined && (key === 'vertexColors' || key === 'opacity' || key === 'transparent')) {
         obj.needsUpdate = true
       }
       if (key === 'fov' || key === 'near' || key === 'far') {
