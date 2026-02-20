@@ -233,6 +233,9 @@ export const main = async (canvas: HTMLCanvasElement) => {
   // Merge all Eden primitives from the static bundle into a single mesh with palette colors
   const edenMeshes = megaxeGltf.meshes.filter(m => m.name.toLowerCase().includes('eden'))
 
+  // Capture the node scale from the parent Group (multi-primitive wrapper)
+  const edenParent = edenMeshes[0]?.parent
+
   let totalVertices = 0
   let totalIndices = 0
   let hasUVs = false
@@ -274,6 +277,11 @@ export const main = async (canvas: HTMLCanvasElement) => {
   const eden = new Mesh(edenGeometry, edenMaterial)
   eden.name = 'eden'
   eden.castShadow = false
+  // Apply the original GLTF node transform (scale) from the parent group
+  if (edenParent) {
+    eden.setScale(edenParent.scale[0]!, edenParent.scale[1]!, edenParent.scale[2]!)
+  }
+  eden.setPosition(-50, -70, 0)
   scene.add(eden)
 
   // Update world matrices so Eden's _worldMatrix is ready for raycasting

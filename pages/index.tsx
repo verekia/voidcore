@@ -103,15 +103,19 @@ const CameraControls = () => {
 
 const EdenMesh = () => {
   const groupRef = useRef<any>(null)
+  const meshRef = useRef<Mesh | null>(null)
   const gltf = useGLTF(staticBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
 
   useEffect(() => {
     const group = groupRef.current
-    if (!group) return
+    if (!group || meshRef.current) return
 
     // Filter Eden primitives from the GLB (single mesh with 27 primitives)
     const edenMeshes = gltf.meshes.filter(m => m.name.toLowerCase().includes('eden'))
     if (edenMeshes.length === 0) return
+
+    // Capture the node scale from the parent Group (multi-primitive wrapper)
+    const edenParent = edenMeshes[0]!.parent
 
     // Merge all primitives into a single geometry with per-primitive material indices
     let totalVertices = 0
@@ -149,7 +153,20 @@ const EdenMesh = () => {
     const mesh = new Mesh(mergedGeometry, material)
     mesh.name = 'eden'
     mesh.castShadow = false
+
+    // Apply the original GLTF node transform (scale) from the parent group
+    if (edenParent) {
+      mesh.setScale(edenParent.scale[0]!, edenParent.scale[1]!, edenParent.scale[2]!)
+    }
+    mesh.setPosition(-50, -70, 0)
+
     group.add(mesh)
+    meshRef.current = mesh
+
+    return () => {
+      group.remove(mesh)
+      meshRef.current = null
+    }
   }, [gltf])
 
   return <group ref={groupRef} />
