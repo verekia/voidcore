@@ -2,7 +2,7 @@
 //
 // Functionally equivalent to the WebGPU renderer but uses the older WebGL2 API. The render
 // pipeline is: frustum culling → sort → batch uniform upload → shadow pass →
-// MSAA MRT draw → MSAA resolve → bloom post-processing → final blit with gamma correction.
+// MSAA MRT draw → occlusion queries → MSAA resolve → bloom post-processing → final blit.
 //
 // Shadow mapping uses a single shadow map with PCF 3×3 filtering, matching the WebGPU renderer.
 // Shadow depth is rendered into a TEXTURE_2D with comparison mode.
@@ -31,6 +31,7 @@
 // WebGLRenderer.dispose() – Releases all GPU resources.
 
 import {
+  aabbTransform,
   frustumFromViewProjection,
   mat4Create,
   mat4Invert,
@@ -63,6 +64,8 @@ import {
   SHADOW_DEPTH_VERT,
   SHADOW_DEPTH_SKINNED_VERT,
   SHADOW_DEPTH_FRAG,
+  OCCLUSION_BOX_VERT,
+  OCCLUSION_BOX_FRAG,
   FULLSCREEN_VERT,
   BLOOM_DOWNSAMPLE_FRAG,
   BLOOM_UPSAMPLE_FRAG,
@@ -92,6 +95,8 @@ interface GPUBuffers {
   weights?: WebGLBuffer
   vao?: WebGLVertexArrayObject
 }
+
+const MAX_OCCLUSION_QUERIES = 64
 
 // ─── Shader compilation ───────────────────────────────────────────────
 
@@ -523,6 +528,18 @@ export class WebGLRenderer implements Renderer {
   private _shadowVAOs = new WeakMap<Geometry, WebGLVertexArrayObject>()
   private _shadowSkinnedVAOs = new WeakMap<Geometry, WebGLVertexArrayObject>()
 
+  // Occlusion query resources
+  private _occlusionProgram!: WebGLProgram
+  private _occlusionQueries: WebGLQuery[] = []
+  private _occlusionUBO!: WebGLBuffer
+  private _occlusionMVPData = new Float32Array(16) // single mat4
+  private _occludees: Mesh[] = []
+  private _occlusionPrevOccludees: Mesh[] = []
+  private _occlusionPrevCount = 0
+  private _occlusionWorldAABB: AABB = new Float32Array(6)
+  private _occlusionMVP: Mat4 = mat4Create()
+  private _occlusionBoxTransform: Mat4 = mat4Create()
+
   // Shadow scratch
   private _shadowMeshes: Mesh[] = []
   private _shadowVP: Mat4 = mat4Create()
@@ -703,6 +720,17 @@ export class WebGLRenderer implements Renderer {
     gl.drawBuffers([])
     gl.readBuffer(gl.NONE)
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+
+    // Occlusion query program + resources
+    this._occlusionProgram = createProgram(gl, OCCLUSION_BOX_VERT, OCCLUSION_BOX_FRAG)
+    const occBlockIdx = gl.getUniformBlockIndex(this._occlusionProgram, 'OcclusionBlock')
+    if (occBlockIdx !== gl.INVALID_INDEX) gl.uniformBlockBinding(this._occlusionProgram, occBlockIdx, 3)
+    this._occlusionUBO = gl.createBuffer()!
+    gl.bindBuffer(gl.UNIFORM_BUFFER, this._occlusionUBO)
+    gl.bufferData(gl.UNIFORM_BUFFER, 64, gl.DYNAMIC_DRAW) // 1 mat4 = 64 bytes
+    for (let i = 0; i < MAX_OCCLUSION_QUERIES; i++) {
+      this._occlusionQueries.push(gl.createQuery()!)
+    }
 
     // 1x1 white dummy texture for missing texture maps (sampling white = identity)
     this._dummyWhiteTex = gl.createTexture()!
@@ -1033,9 +1061,20 @@ export class WebGLRenderer implements Renderer {
       shadowFrustum = this._shadowFrustumPlanes
     }
 
+    // ─── Apply previous frame's occlusion query results ─────────
+    const gl2 = gl
+    for (let i = 0; i < this._occlusionPrevCount; i++) {
+      const query = this._occlusionQueries[i]!
+      if (gl2.getQueryParameter(query, gl2.QUERY_RESULT_AVAILABLE)) {
+        const visible = gl2.getQueryParameter(query, gl2.QUERY_RESULT) as number
+        this._occlusionPrevOccludees[i]!._occluded = visible === 0
+      }
+    }
+
     // ─── Single merged traversal: camera meshes + shadow-only casters ───
     const meshes = this._meshes
     const shadowMeshes = this._shadowMeshes
+    const occludees = this._occludees
     const culledCount = collectMeshes(
       scene,
       this._frustumPlanes,
@@ -1043,6 +1082,7 @@ export class WebGLRenderer implements Renderer {
       this._worldAABB,
       meshes,
       shadowMeshes,
+      occludees,
       this._traversalStack,
     )
 
@@ -1434,6 +1474,68 @@ export class WebGLRenderer implements Renderer {
       this._setCullFace(true)
     }
 
+    // ─── Occlusion query pass (test AABB boxes against scene depth) ──
+    const occludeeCount = Math.min(occludees.length, MAX_OCCLUSION_QUERIES)
+    if (occludeeCount > 0) {
+      this._setColorMask(false)
+      this._setDepthMask(false)
+      this._setCullFace(false)
+      this._setProgram(this._occlusionProgram)
+      this._setVAO(null) // No VAO needed — vertices generated from gl_VertexID
+
+      for (let i = 0; i < occludeeCount; i++) {
+        const mesh = occludees[i]!
+        // Transform geometry AABB to world space
+        aabbTransform(this._occlusionWorldAABB, mesh.geometry.aabb, mesh._worldMatrix)
+        const aabb = this._occlusionWorldAABB
+        const cx = (aabb[0]! + aabb[3]!) * 0.5
+        const cy = (aabb[1]! + aabb[4]!) * 0.5
+        const cz = (aabb[2]! + aabb[5]!) * 0.5
+        const hx = (aabb[3]! - aabb[0]!) * 0.5
+        const hy = (aabb[4]! - aabb[1]!) * 0.5
+        const hz = (aabb[5]! - aabb[2]!) * 0.5
+        // Box transform: T(center) * S(halfExtent)
+        const bt = this._occlusionBoxTransform
+        bt[0] = hx
+        bt[1] = 0
+        bt[2] = 0
+        bt[3] = 0
+        bt[4] = 0
+        bt[5] = hy
+        bt[6] = 0
+        bt[7] = 0
+        bt[8] = 0
+        bt[9] = 0
+        bt[10] = hz
+        bt[11] = 0
+        bt[12] = cx
+        bt[13] = cy
+        bt[14] = cz
+        bt[15] = 1
+        mat4Multiply(this._occlusionMVP, this._vpMatrix, bt)
+        this._occlusionMVPData.set(this._occlusionMVP)
+
+        gl.bindBuffer(gl.UNIFORM_BUFFER, this._occlusionUBO)
+        gl.bufferSubData(gl.UNIFORM_BUFFER, 0, this._occlusionMVPData)
+        gl.bindBufferBase(gl.UNIFORM_BUFFER, 3, this._occlusionUBO)
+
+        gl.beginQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE, this._occlusionQueries[i]!)
+        gl.drawArrays(gl.TRIANGLES, 0, 36)
+        gl.endQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE)
+      }
+
+      // Store occludees for next frame's result application
+      for (let i = 0; i < occludeeCount; i++) {
+        this._occlusionPrevOccludees[i] = occludees[i]!
+      }
+      this._occlusionPrevCount = occludeeCount
+
+      // Restore state
+      this._setColorMask(true)
+      this._setDepthMask(true)
+      this._setCullFace(true)
+    }
+
     this._setVAO(null)
 
     // ─── MSAA Resolve ──────────────────────────────────────────────
@@ -1553,6 +1655,9 @@ export class WebGLRenderer implements Renderer {
     gl.deleteProgram(this.basicSkinnedProgram)
     gl.deleteProgram(this.shadowDepthProgram)
     gl.deleteProgram(this.shadowDepthSkinnedProgram)
+    gl.deleteProgram(this._occlusionProgram)
+    gl.deleteBuffer(this._occlusionUBO)
+    for (const q of this._occlusionQueries) gl.deleteQuery(q)
     gl.deleteProgram(this.bloomDownsampleProgram)
     gl.deleteProgram(this.bloomUpsampleProgram)
     gl.deleteProgram(this.blitProgram)

@@ -3,6 +3,8 @@
 // Shaders are small programs that run on the GPU for every vertex and every pixel.
 //   Vertex shader   – Transforms 3D positions into screen coordinates.
 //   Fragment shader – Computes the final color of each pixel.
+//   Occlusion box   – Procedurally generates a unit cube from gl_VertexID for
+//                      GPU occlusion query testing (depth test only, no color output).
 //
 // This file contains five shader variants plus shadow depth shaders:
 //   Lambert          – Diffuse lighting (ambient + directional light × surface normal)
@@ -408,6 +410,43 @@ void main() {
   fragColor = vec4(u_baseColor, u_opacity);
   fragEmissive = vec4(0.0, 0.0, 0.0, u_opacity);
 }
+`
+
+// ─── Occlusion query box shaders (depth test only) ──────────────────
+
+const OCCLUSION_BLOCK = `
+layout(std140) uniform OcclusionBlock {
+  mat4 u_mvp;
+};`
+
+export const OCCLUSION_BOX_VERT = `#version 300 es
+precision highp float;
+
+${OCCLUSION_BLOCK}
+
+const int TRI[36] = int[](
+  0,2,1, 0,3,2,
+  4,5,6, 4,6,7,
+  0,1,5, 0,5,4,
+  2,3,7, 2,7,6,
+  0,4,7, 0,7,3,
+  1,2,6, 1,6,5
+);
+
+void main() {
+  int idx = TRI[gl_VertexID];
+  vec3 corner = vec3(
+    ((idx & 1) != 0) ? 1.0 : -1.0,
+    ((idx & 2) != 0) ? 1.0 : -1.0,
+    ((idx & 4) != 0) ? 1.0 : -1.0
+  );
+  gl_Position = u_mvp * vec4(corner, 1.0);
+}
+`
+
+export const OCCLUSION_BOX_FRAG = `#version 300 es
+precision lowp float;
+void main() {}
 `
 
 // Fullscreen triangle vertex shader (no vertex buffer needed)

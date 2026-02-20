@@ -2,6 +2,8 @@
 //
 // Functionally identical to the GLSL shaders but written in WGSL (WebGPU Shading Language).
 // See webgl-shaders.ts for detailed explanations of each shader's purpose.
+// Also contains an occlusion query box shader (vertex-only) that procedurally generates a
+// unit cube from vertex_index and transforms it by a per-query MVP matrix.
 //
 // Shadows use a single depth texture covering the full camera frustum with PCF filtering.
 //
@@ -662,6 +664,37 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
   out.color = vec4<f32>(material.baseColor * material.opacity, material.opacity);
   out.emissive = vec4<f32>(0.0, 0.0, 0.0, material.opacity);
   return out;
+}
+`
+
+// ─── Occlusion query box shader (vertex-only, depth test only) ────────
+
+export const OCCLUSION_BOX_WGSL = /* wgsl */ `
+struct OcclusionUniforms {
+  mvp: mat4x4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> occlusion: OcclusionUniforms;
+
+// Unit cube: 8 corners indexed by 3 low bits, 12 triangles = 36 indices
+const TRI = array<u32, 36>(
+  0u,2u,1u, 0u,3u,2u,
+  4u,5u,6u, 4u,6u,7u,
+  0u,1u,5u, 0u,5u,4u,
+  2u,3u,7u, 2u,7u,6u,
+  0u,4u,7u, 0u,7u,3u,
+  1u,2u,6u, 1u,6u,5u,
+);
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+  let idx = TRI[vi];
+  let corner = vec3<f32>(
+    select(-1.0, 1.0, (idx & 1u) != 0u),
+    select(-1.0, 1.0, (idx & 2u) != 0u),
+    select(-1.0, 1.0, (idx & 4u) != 0u),
+  );
+  return occlusion.mvp * vec4<f32>(corner, 1.0);
 }
 `
 

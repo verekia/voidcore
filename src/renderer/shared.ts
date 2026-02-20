@@ -12,6 +12,8 @@
 //   2. Collect shadow-only casters (meshes outside camera frustum but inside the shadow
 //      frustum). This merges what used to be two separate traversals into one.
 //   3. Skip invisible nodes and meshes outside both frustums
+//   4. Track meshes with occlusionCulled for GPU occlusion query testing, and skip
+//      meshes that were occluded in the previous frame's query results.
 //   All arrays use index-based writes instead of push/pop to minimize GC pressure.
 //
 // computeLightDir() – Extracts the light direction from a directional light's world matrix.
@@ -104,8 +106,10 @@ export const findAmbientLight = (root: Node, stack: Node[]): AmbientLight | null
 
 /**
  * Collect camera-visible meshes and shadow-only casters in a single traversal.
+ * Also tracks meshes with occlusionCulled for GPU occlusion query testing.
  * Uses index-based array writes to avoid push/pop GC overhead.
- * Returns the number of fully culled meshes (outside both camera and shadow frustums).
+ * Returns the number of fully culled meshes (outside both camera and shadow frustums,
+ * or occluded by previous frame's occlusion query results).
  */
 export const collectMeshes = (
   root: Node,
@@ -114,10 +118,12 @@ export const collectMeshes = (
   worldAABB: AABB,
   meshes: Mesh[],
   shadowMeshes: Mesh[],
+  occludees: Mesh[],
   stack: Node[],
 ): number => {
   let meshCount = 0
   let shadowCount = 0
+  let occludeeCount = 0
   let culledCount = 0
   let stackTop = 0
   stack[stackTop++] = root
@@ -129,6 +135,13 @@ export const collectMeshes = (
       if (mesh.frustumCulled) {
         aabbTransform(worldAABB, mesh.geometry.aabb, mesh._worldMatrix)
         if (frustumContainsAABB(cameraFrustum, worldAABB)) {
+          if (mesh.occlusionCulled) {
+            occludees[occludeeCount++] = mesh
+            if (mesh._occluded) {
+              culledCount++
+              continue
+            }
+          }
           meshes[meshCount++] = mesh
         } else if (shadowFrustum && mesh.castShadow && frustumContainsAABB(shadowFrustum, worldAABB)) {
           shadowMeshes[shadowCount++] = mesh
@@ -146,6 +159,7 @@ export const collectMeshes = (
   }
   meshes.length = meshCount
   shadowMeshes.length = shadowCount
+  occludees.length = occludeeCount
   return culledCount
 }
 

@@ -88,6 +88,7 @@ export interface NodeProps extends BaseProps {
   receiveShadow?: boolean
   name?: string
   frustumCulled?: boolean
+  occlusionCulled?: boolean
   onClick?: (event: any) => void
   onPointerOver?: (event: any) => void
   onPointerOut?: (event: any) => void

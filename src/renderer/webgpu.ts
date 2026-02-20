@@ -10,8 +10,11 @@
 //   7. Renders a single shadow depth pass (with comparison sampling)
 //   8. Draws meshes in an MSAA render pass with two render targets (color + emissive)
 //   9. MSAA resolve
-//  10. Runs a bloom post-processing chain (downsample → upsample with tent filter)
-//  11. Blits the final image to screen with bloom compositing and gamma correction
+//  10. Runs GPU occlusion queries for meshes with occlusionCulled (test AABB boxes
+//      against the scene depth buffer; results are read back asynchronously and
+//      applied the next frame to skip fully occluded meshes)
+//  11. Runs a bloom post-processing chain (downsample → upsample with tent filter)
+//  12. Blits the final image to screen with bloom compositing and gamma correction
 //
 // Key concepts:
 //   Pipeline      – A compiled GPU program (vertex + fragment shader + render state).
@@ -31,6 +34,7 @@
 // WebGPURenderer.dispose() – Releases all GPU resources.
 
 import {
+  aabbTransform,
   frustumFromViewProjection,
   mat4Create,
   mat4Invert,
@@ -60,6 +64,7 @@ import {
   BASIC_SKINNED_WGSL,
   SHADOW_DEPTH_WGSL,
   SHADOW_DEPTH_SKINNED_WGSL,
+  OCCLUSION_BOX_WGSL,
   BLOOM_DOWN_WGSL,
   BLOOM_UP_WGSL,
   BLIT_WGSL,
@@ -134,6 +139,10 @@ const BLIT_UB_SIZE = 16
 
 // SkinnedObjectUniforms: mat4(64) + mat4(64) + 32*mat4(2048) = 2176 bytes
 const SKINNED_OBJECT_UB_SIZE = 2176
+// OcclusionUniforms: mat4(64) per occludee
+const OCCLUSION_UB_SIZE = 64
+// Maximum number of occlusion queries per frame
+const MAX_OCCLUSION_QUERIES = 64
 
 // ─── Vertex buffer layout (shared by lambert + basic) ────────────────
 
@@ -302,6 +311,26 @@ export class WebGPURenderer implements Renderer {
   private _shadowLightView: Mat4 = mat4Create()
   private _shadowLightProj: Mat4 = mat4Create()
   private _frameNum = 0
+
+  // Occlusion query resources
+  private _occludees: Mesh[] = []
+  private _occlusionQuerySet!: GPUQuerySet
+  private _occlusionResolveBuffer!: GPUBuffer
+  private _occlusionReadback!: [GPUBuffer, GPUBuffer]
+  private _occlusionPong = 0
+  private _occlusionResultsReady: [boolean, boolean] = [false, false]
+  private _occlusionPrevOccludees: Mesh[] = []
+  private _occlusionPrevCount = 0
+  private _occlusionPipeline!: GPURenderPipeline
+  private _occlusionBGL!: GPUBindGroupLayout
+  private _occlusionDynBuf!: GPUBuffer
+  private _occlusionBG!: GPUBindGroup
+  private _occlusionBatchData = new Float32Array(0)
+  private _occlusionAlignedSize = 256
+  private _occlusionPassDesc: GPURenderPassDescriptor = null!
+  private _occlusionWorldAABB: AABB = new Float32Array(6)
+  private _occlusionMVP: Mat4 = mat4Create()
+  private _occlusionBoxTransform: Mat4 = mat4Create()
 
   // Pre-allocated render pass descriptors (avoid per-frame heap allocations)
   private _shadowPassDesc: GPURenderPassDescriptor = null!
@@ -525,6 +554,9 @@ export class WebGPURenderer implements Renderer {
 
     // Initialize textured pipeline resources
     this._initTexturedPipelines()
+
+    // Initialize occlusion query resources
+    this._initOcclusionQuery()
   }
 
   private _initTexturedPipelines() {
@@ -599,6 +631,83 @@ export class WebGPURenderer implements Renderer {
       addressModeU: 'clamp-to-edge',
       addressModeV: 'clamp-to-edge',
     })
+  }
+
+  private _initOcclusionQuery() {
+    const device = this.device
+
+    // Query set for occlusion results (one u64 per query)
+    this._occlusionQuerySet = device.createQuerySet({
+      type: 'occlusion',
+      count: MAX_OCCLUSION_QUERIES,
+    })
+
+    // Resolve buffer: GPU writes query results here
+    this._occlusionResolveBuffer = device.createBuffer({
+      size: MAX_OCCLUSION_QUERIES * 8,
+      usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+    })
+
+    // Double-buffered readback buffers for async CPU reads
+    this._occlusionReadback = [
+      device.createBuffer({
+        size: MAX_OCCLUSION_QUERIES * 8,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      }),
+      device.createBuffer({
+        size: MAX_OCCLUSION_QUERIES * 8,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      }),
+    ]
+
+    // Bind group layout: one dynamic-offset uniform (mat4 MVP per occludee)
+    this._occlusionBGL = device.createBindGroupLayout({
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.VERTEX,
+          buffer: { type: 'uniform', hasDynamicOffset: true },
+        },
+      ],
+    })
+
+    // Pipeline: vertex-only, depth test (read-only), no color targets, MSAA
+    const occlusionModule = device.createShaderModule({ code: OCCLUSION_BOX_WGSL })
+    const occlusionPipelineLayout = device.createPipelineLayout({
+      bindGroupLayouts: [this._occlusionBGL],
+    })
+    this._occlusionPipeline = device.createRenderPipeline({
+      layout: occlusionPipelineLayout,
+      vertex: { module: occlusionModule, entryPoint: 'vs_main' },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+      multisample: { count: this.samples },
+    })
+
+    // Dynamic UBO for MVP matrices
+    this._occlusionAlignedSize = Math.ceil(OCCLUSION_UB_SIZE / this._alignment) * this._alignment
+    const bufSize = MAX_OCCLUSION_QUERIES * this._occlusionAlignedSize
+    this._occlusionDynBuf = device.createBuffer({
+      size: bufSize,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
+    this._occlusionBatchData = new Float32Array(bufSize / 4)
+    this._occlusionBG = device.createBindGroup({
+      layout: this._occlusionBGL,
+      entries: [{ binding: 0, resource: { buffer: this._occlusionDynBuf, size: OCCLUSION_UB_SIZE } }],
+    })
+
+    // Pre-allocate render pass descriptor (depth-only, loads scene depth)
+    this._occlusionPassDesc = {
+      colorAttachments: [],
+      depthStencilAttachment: {
+        view: null!, // updated per-frame
+        depthLoadOp: 'load',
+        depthStoreOp: 'discard',
+        depthReadOnly: true,
+      },
+      occlusionQuerySet: this._occlusionQuerySet,
+    }
   }
 
   private _ensureGPUTexture(tex: Texture): { texture: GPUTexture; view: GPUTextureView } {
@@ -1540,9 +1649,22 @@ export class WebGPURenderer implements Renderer {
       shadowFrustum = this._shadowFrustumPlanes
     }
 
+    // ─── Apply previous frame's occlusion query results ─────────
+    const readIdx = 1 - this._occlusionPong
+    if (this._occlusionResultsReady[readIdx]) {
+      const buf = this._occlusionReadback[readIdx]!
+      const data = new BigUint64Array(buf.getMappedRange())
+      for (let i = 0; i < this._occlusionPrevCount; i++) {
+        this._occlusionPrevOccludees[i]!._occluded = data[i]! === 0n
+      }
+      buf.unmap()
+      this._occlusionResultsReady[readIdx] = false
+    }
+
     // ─── Single merged traversal: camera meshes + shadow-only casters ───
     const meshes = this._meshes
     const shadowMeshes = this._shadowMeshes
+    const occludees = this._occludees
     const culledCount = collectMeshes(
       scene,
       this._frustumPlanes,
@@ -1550,6 +1672,7 @@ export class WebGPURenderer implements Renderer {
       this._worldAABB,
       meshes,
       shadowMeshes,
+      occludees,
       this._traversalStack,
     )
 
@@ -1868,6 +1991,84 @@ export class WebGPURenderer implements Renderer {
 
     scenePass.end()
 
+    // ─── Occlusion query pass (test AABB boxes against scene depth) ──
+    const occludeeCount = Math.min(occludees.length, MAX_OCCLUSION_QUERIES)
+    if (occludeeCount > 0) {
+      // Compute MVP matrices for each occludee's AABB box
+      const alignedFloats = this._occlusionAlignedSize / 4
+      const batch = this._occlusionBatchData
+      for (let i = 0; i < occludeeCount; i++) {
+        const mesh = occludees[i]!
+        // Transform geometry AABB to world space, then compute box MVP
+        aabbTransform(this._occlusionWorldAABB, mesh.geometry.aabb, mesh._worldMatrix)
+        const aabb = this._occlusionWorldAABB
+        const cx = (aabb[0]! + aabb[3]!) * 0.5
+        const cy = (aabb[1]! + aabb[4]!) * 0.5
+        const cz = (aabb[2]! + aabb[5]!) * 0.5
+        const hx = (aabb[3]! - aabb[0]!) * 0.5
+        const hy = (aabb[4]! - aabb[1]!) * 0.5
+        const hz = (aabb[5]! - aabb[2]!) * 0.5
+        // Box transform: T(center) * S(halfExtent)
+        const bt = this._occlusionBoxTransform
+        bt[0] = hx
+        bt[1] = 0
+        bt[2] = 0
+        bt[3] = 0
+        bt[4] = 0
+        bt[5] = hy
+        bt[6] = 0
+        bt[7] = 0
+        bt[8] = 0
+        bt[9] = 0
+        bt[10] = hz
+        bt[11] = 0
+        bt[12] = cx
+        bt[13] = cy
+        bt[14] = cz
+        bt[15] = 1
+        mat4Multiply(this._occlusionMVP, this._vpMatrix, bt)
+        batch.set(this._occlusionMVP, i * alignedFloats)
+      }
+      this.device.queue.writeBuffer(
+        this._occlusionDynBuf,
+        0,
+        batch.buffer,
+        batch.byteOffset,
+        occludeeCount * this._occlusionAlignedSize,
+      )
+
+      // Set depth view from scene pass's MSAA depth
+      ;(this._occlusionPassDesc.depthStencilAttachment as GPURenderPassDepthStencilAttachment).view =
+        this._opaquePassDA.view
+
+      const occPass = encoder.beginRenderPass(this._occlusionPassDesc)
+      occPass.setPipeline(this._occlusionPipeline)
+      for (let i = 0; i < occludeeCount; i++) {
+        occPass.setBindGroup(0, this._occlusionBG, [i * this._occlusionAlignedSize])
+        occPass.beginOcclusionQuery(i)
+        occPass.draw(36) // 12 triangles × 3 vertices
+        occPass.endOcclusionQuery()
+      }
+      occPass.end()
+
+      // Resolve queries and copy to readback buffer
+      const writeIdx = this._occlusionPong
+      encoder.resolveQuerySet(this._occlusionQuerySet, 0, occludeeCount, this._occlusionResolveBuffer, 0)
+      encoder.copyBufferToBuffer(
+        this._occlusionResolveBuffer,
+        0,
+        this._occlusionReadback[writeIdx]!,
+        0,
+        occludeeCount * 8,
+      )
+
+      // Store occludees for next frame's result application
+      for (let i = 0; i < occludeeCount; i++) {
+        this._occlusionPrevOccludees[i] = occludees[i]!
+      }
+      this._occlusionPrevCount = occludeeCount
+    }
+
     // ─── Bloom ──────────────────────────────────────────────────
     if (this.bloomEnabled && this.bloomLevels > 0) {
       // Downsample chain
@@ -1901,6 +2102,16 @@ export class WebGPURenderer implements Renderer {
     this._submitArr[0] = encoder.finish()
     this.device.queue.submit(this._submitArr)
 
+    // Start async readback of occlusion query results
+    if (occludeeCount > 0) {
+      const writeIdx = this._occlusionPong
+      const readbackBuf = this._occlusionReadback[writeIdx]!
+      readbackBuf.mapAsync(GPUMapMode.READ).then(() => {
+        this._occlusionResultsReady[writeIdx] = true
+      })
+      this._occlusionPong = 1 - this._occlusionPong
+    }
+
     // Update stats
     this.stats.fps = this._currentFps
     this.stats.frameTime = dt
@@ -1925,6 +2136,11 @@ export class WebGPURenderer implements Renderer {
     this.shadowUB.destroy()
     this.shadowTexture?.destroy()
     this.dummyShadowTexture.destroy()
+    this._occlusionQuerySet.destroy()
+    this._occlusionResolveBuffer.destroy()
+    this._occlusionReadback[0].destroy()
+    this._occlusionReadback[1].destroy()
+    this._occlusionDynBuf.destroy()
     this._resizeObserver?.disconnect()
     this._resizeObserver = null
     this.device.destroy()

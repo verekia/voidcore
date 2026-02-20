@@ -20,6 +20,9 @@
 // node.remove()  – Detaches a child node.
 // node.traverse() – Walks the subtree, calling a callback on each node.
 // node.lookAt()  – Orients the node to face a target point (Z-up convention).
+// node.occlusionCulled – Opt-in GPU occlusion query testing. When enabled, the renderer
+//   tests the mesh's bounding box against the depth buffer and skips drawing if fully
+//   occluded (using previous frame's query results to avoid pipeline stalls).
 // updateWorldMatrices() – Recursively recomputes world matrices for dirty nodes.
 
 import { mat4Compose, mat4Copy, mat4Create, mat4Multiply, quatCreate, vec3Create } from '../math/index'
@@ -47,6 +50,8 @@ export class Node {
   frustumCulled = true
   castShadow = false
   receiveShadow = false
+  occlusionCulled = false
+  _occluded = false
 
   _localMatrix: Mat4 = mat4Create()
   _worldMatrix: Mat4 = mat4Create()
