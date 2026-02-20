@@ -5,11 +5,18 @@
 // these costly switches.
 //
 // Sort key layout (32-bit unsigned integer):
-//   Bits 31-30: Layer       – Opaque (0) before transparent (1)
-//   Bits 29-22: Pipeline ID – Groups by shader program (lambert/basic × skinned/static)
-//   Bits 21-10: Material ID – Groups by material to reduce uniform uploads
-//   Bits 9-0:   Depth       – Opaque: nearest first (early-Z optimization).
-//                              Transparent: farthest first (correct alpha blending).
+//
+//   Opaque (depth is least significant — state-change minimization wins):
+//     Bits 31-30: Layer (0)
+//     Bits 29-22: Pipeline ID – Groups by shader program
+//     Bits 21-10: Material ID – Groups by material to reduce uniform uploads
+//     Bits 9-0:   Depth       – Nearest first (early-Z optimization)
+//
+//   Transparent (depth is most significant — correct back-to-front order wins):
+//     Bits 31-30: Layer (1)
+//     Bits 29-20: Depth       – Farthest first (correct alpha blending)
+//     Bits 19-12: Pipeline ID – Groups by shader program (tiebreaker)
+//     Bits 11-0:  Material ID – Groups by material (tiebreaker)
 //
 // Uses a 4-pass LSD (Least Significant Digit) radix sort with an 8-bit radix.
 // Radix sort is O(n) and stable, making it ideal for the thousands of meshes a scene
@@ -54,10 +61,10 @@ export const sortMeshes = (state: SortState, meshes: Mesh[], meshCount: number, 
 
   const { keys, indices, tempIndices, counts } = state
 
-  // Camera position from view matrix inverse (world position is in _worldMatrix elements 12,13,14)
-  const camX = camera._worldMatrix[12]!
-  const camY = camera._worldMatrix[13]!
-  const camZ = camera._worldMatrix[14]!
+  // Camera world position (camera.position is always up-to-date via setPosition())
+  const camX = camera.position[0]!
+  const camY = camera.position[1]!
+  const camZ = camera.position[2]!
   const invFar = 1 / camera.far
 
   // Build sort keys and initial indices
@@ -85,7 +92,12 @@ export const sortMeshes = (state: SortState, meshes: Mesh[], meshCount: number, 
     const rawDepth = Math.min(dist * invFar * 1023, 1023) | 0
     const depth = layer === 1 ? 1023 - rawDepth : rawDepth
 
-    keys[i] = (layer << 30) | (pipelineId << 22) | (materialId << 10) | depth
+    // Opaque: pipeline > material > depth (minimize state changes)
+    // Transparent: depth > pipeline > material (correct alpha blending order)
+    keys[i] =
+      layer === 0
+        ? (pipelineId << 22) | (materialId << 10) | depth
+        : (1 << 30) | (depth << 20) | (pipelineId << 12) | materialId
     indices[i] = i
   }
 

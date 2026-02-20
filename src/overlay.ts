@@ -166,10 +166,10 @@ export const createOverlayManager = (canvas: HTMLCanvasElement) => {
     mat4Multiply(_vpMatrix, camera._projectionMatrix, camera._viewMatrix)
     const camFar = camera.far
 
-    // Extract camera world position from its world matrix
-    _tempCamPos[0] = camera._worldMatrix[12]!
-    _tempCamPos[1] = camera._worldMatrix[13]!
-    _tempCamPos[2] = camera._worldMatrix[14]!
+    // Camera world position (camera.position is always up-to-date via setPosition())
+    _tempCamPos[0] = camera.position[0]!
+    _tempCamPos[1] = camera.position[1]!
+    _tempCamPos[2] = camera.position[2]!
 
     const frame = frameCount ?? 0
 

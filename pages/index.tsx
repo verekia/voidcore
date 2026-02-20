@@ -156,7 +156,7 @@ const TransparentCube = ({ index }: { index: number }) => {
       <boxGeometry
         args={[{ width: TRANSPARENT_CUBE_SIZE, height: TRANSPARENT_CUBE_SIZE, depth: TRANSPARENT_CUBE_SIZE }]}
       />
-      <lambertMaterial args={[{ color: TRANSPARENT_COLORS[index]!, opacity: 0.4 }]} />
+      <lambertMaterial args={[{ color: TRANSPARENT_COLORS[index]!, opacity: 0.7 }]} />
     </mesh>
   )
 }

@@ -35,12 +35,8 @@ const mockMesh = (opts: {
 
 /** Create a mock camera at a position with a given far plane */
 const mockCamera = (x: number, y: number, z: number, far: number): PerspectiveCamera => {
-  const wm = mat4Create()
-  mat4Identity(wm)
-  wm[12] = x
-  wm[13] = y
-  wm[14] = z
-  return { _worldMatrix: wm, far } as unknown as PerspectiveCamera
+  const pos = new Float32Array([x, y, z])
+  return { position: pos, far } as unknown as PerspectiveCamera
 }
 
 // ─── createSortState ───────────────────────────────────────────────
@@ -158,6 +154,23 @@ describe('sortMeshes', () => {
     expect(ids[1]).toBe(1)
     expect(ids[2]).toBe(3)
     expect(ids[3]).toBe(3)
+  })
+
+  test('sorts transparent farthest-first across different materials', () => {
+    const state = createSortState(10)
+    const meshes = [
+      mockMesh({ x: 5, y: 0, z: 0, materialId: 1, transparent: true }),
+      mockMesh({ x: 50, y: 0, z: 0, materialId: 2, transparent: true }),
+      mockMesh({ x: 25, y: 0, z: 0, materialId: 3, transparent: true }),
+    ]
+    const camera = mockCamera(0, 0, 0, 100)
+    sortMeshes(state, meshes, 3, camera)
+
+    const sorted = Array.from(state.indices.subarray(0, 3)).map(i => meshes[i]!)
+    const distances = sorted.map(m => m._worldMatrix[12]!)
+    // Depth must win over material grouping for transparent meshes
+    expect(distances[0]).toBeGreaterThanOrEqual(distances[1]!)
+    expect(distances[1]).toBeGreaterThanOrEqual(distances[2]!)
   })
 
   test('auto-grows when meshCount exceeds capacity', () => {
