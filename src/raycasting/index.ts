@@ -13,6 +13,7 @@
 // and recurses. The resulting tree is stored in a flat array for cache-friendly traversal.
 //
 // buildMeshBVH()            – Builds a BVH for a mesh's triangles (done once, cached).
+// prebuildBVH()             – Pre-builds and caches a BVH for a geometry (avoids first-raycast stall).
 // Raycaster.set()           – Sets the ray from an origin and direction.
 // Raycaster.setFromCamera() – Creates a ray from screen coordinates through the camera.
 // Raycaster.intersectObject() / intersectObjects() – Returns sorted hits (nearest first).
@@ -475,6 +476,10 @@ const getMeshBVH = (geometry: Geometry): MeshBVH => {
     _bvhCache.set(geometry, bvh)
   }
   return bvh
+}
+
+export const prebuildBVH = (geometry: Geometry): void => {
+  getMeshBVH(geometry)
 }
 
 // ─── Mesh Intersection ─────────────────────────────────────────────────────────

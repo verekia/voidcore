@@ -97,6 +97,7 @@ struct MaterialUniforms {
   opacity: f32,
   hasPalette: f32,
   receiveShadow: f32,
+  aoIntensity: f32,
   palette: array<PaletteEntry, 32>,
 };
 
@@ -277,6 +278,7 @@ struct MaterialUniforms {
   opacity: f32,
   hasPalette: f32,
   receiveShadow: f32,
+  aoIntensity: f32,
   palette: array<PaletteEntry, 32>,
 };
 
@@ -471,6 +473,7 @@ struct MaterialUniforms {
   opacity: f32,
   hasPalette: f32,
   receiveShadow: f32,
+  aoIntensity: f32,
   palette: array<PaletteEntry, 32>,
 };
 
@@ -610,7 +613,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
   let texColor = textureSample(colorMapTexture, mapSampler, in.uv).rgb;
   baseColor = baseColor * texColor;
 
-  let ao = textureSample(aoMapTexture, mapSampler, in.uv).r;
+  let ao = mix(1.0, textureSample(aoMapTexture, mapSampler, in.uv).r, material.aoIntensity);
   let ambient = frame.ambientColor * frame.ambientIntensity * ao;
 
   let NdotL = max(dot(normal, frame.lightDir), 0.0);
@@ -661,6 +664,7 @@ struct MaterialUniforms {
   opacity: f32,
   hasPalette: f32,
   receiveShadow: f32,
+  aoIntensity: f32,
   palette: array<PaletteEntry, 32>,
 };
 
@@ -748,6 +752,7 @@ struct MaterialUniforms {
   opacity: f32,
   hasPalette: f32,
   receiveShadow: f32,
+  aoIntensity: f32,
   palette: array<PaletteEntry, 32>,
 };
 
@@ -942,8 +947,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
   let scene = textureSample(sceneTexture, texSampler, in.uv).rgb;
   let bloom = textureSample(bloomTexture, texSampler, in.uv).rgb;
   var color = scene + bloom * params.bloomIntensity;
-  // Gamma correction
-  color = pow(color, vec3<f32>(1.0 / 2.2));
   return vec4<f32>(color, 1.0);
 }
 `

@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useCallback, useEffect, useState } from 'react'
 
 import { staticBundleSrc, playerBundleSrc } from '../components/assets'
 import BackendSwitch from '../components/BackendSwitch'
@@ -26,6 +26,8 @@ const CHARACTER_COUNT = 800
 
 const IndexPage = () => {
   const [engine, setEngine] = useState<Engine | null>(null)
+  const [edenReady, setEdenReady] = useState(false)
+  const onEdenReady = useCallback(() => setEdenReady(true), [])
 
   useEffect(() => {
     const fn = async () => {
@@ -50,14 +52,18 @@ const IndexPage = () => {
         onCreated={({ engine }) => setEngine(engine)}
         className="fixed top-0 left-0 h-screen w-screen"
       >
+        <Lighting />
+        <CameraControls />
+        <RotatingCube />
+        <ColoredCubes count={10} />
         <Suspense fallback={null}>
-          <Lighting />
-          <CameraControls />
-          <EdenMesh />
-          <Characters count={CHARACTER_COUNT} />
-          <RotatingCube />
-          <ColoredCubes count={10} />
+          <EdenMesh onReady={onEdenReady} />
         </Suspense>
+        {edenReady && (
+          <Suspense fallback={null}>
+            <Characters count={CHARACTER_COUNT} />
+          </Suspense>
+        )}
       </Canvas>
       <StatsOverlay engine={engine} />
       <BackendSwitch engine={engine} />

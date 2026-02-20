@@ -355,6 +355,7 @@ uniform highp sampler2DArrayShadow u_shadowMap;
 uniform bool u_receiveShadow;
 uniform sampler2D u_colorMap;
 uniform sampler2D u_aoMap;
+uniform float u_aoIntensity;
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
@@ -376,7 +377,7 @@ void main() {
   vec3 texColor = texture(u_colorMap, v_uv).rgb;
   baseColor *= texColor;
 
-  float ao = texture(u_aoMap, v_uv).r;
+  float ao = mix(1.0, texture(u_aoMap, v_uv).r, u_aoIntensity);
   vec3 ambient = u_ambientColor * u_ambientIntensity * ao;
 
   float NdotL = max(dot(normal, u_lightDirection), 0.0);
@@ -564,8 +565,6 @@ void main() {
   vec3 scene = texture(u_sceneTexture, v_uv).rgb;
   vec3 bloom = texture(u_bloomTexture, v_uv).rgb;
   vec3 color = scene + bloom * u_bloomIntensity;
-  // Gamma correction
-  color = pow(color, vec3(1.0 / 2.2));
   fragColor = vec4(color, 1.0);
 }
 `

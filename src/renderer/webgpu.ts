@@ -1437,6 +1437,7 @@ export class WebGPURenderer implements Renderer {
     const hasPalette = !!material.palette
     data[4] = hasPalette ? 1.0 : 0.0
     data[5] = material.receiveShadow ? 1.0 : 0.0
+    data[6] = material.aoIntensity
 
     if (hasPalette && material.palette) {
       for (let i = 0; i < 32; i++) {

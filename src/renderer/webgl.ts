@@ -135,6 +135,7 @@ interface SceneUniformLocs {
   u_receiveShadow: WebGLUniformLocation | null
   u_colorMap: WebGLUniformLocation | null
   u_aoMap: WebGLUniformLocation | null
+  u_aoIntensity: WebGLUniformLocation | null
 }
 
 interface PostUniformLocs {
@@ -166,6 +167,7 @@ const cacheSceneLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): Scen
     u_receiveShadow: gl.getUniformLocation(program, 'u_receiveShadow'),
     u_colorMap: gl.getUniformLocation(program, 'u_colorMap'),
     u_aoMap: gl.getUniformLocation(program, 'u_aoMap'),
+    u_aoIntensity: gl.getUniformLocation(program, 'u_aoIntensity'),
   }
 }
 
@@ -755,6 +757,8 @@ export class WebGLRenderer implements Renderer {
     gl.activeTexture(gl.TEXTURE4)
     gl.bindTexture(gl.TEXTURE_2D, material.aoMap ? this._ensureGLTexture(material.aoMap) : this._dummyWhiteTex)
     gl.uniform1i(locs.u_aoMap, 4)
+
+    gl.uniform1f(locs.u_aoIntensity, material.aoIntensity)
   }
 
   private _bindUBOBlocks(program: WebGLProgram, skinned: boolean) {

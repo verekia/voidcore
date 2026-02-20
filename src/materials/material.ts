@@ -11,6 +11,7 @@
 // Texture maps add per-pixel detail from images:
 //   - colorMap – Multiplies the base color by a texture sample (diffuse/albedo map).
 //   - aoMap    – Multiplies ambient light by the red channel of a texture (ambient occlusion).
+//   - aoIntensity – Controls how strongly the AO map affects lighting (0 = no effect, 1 = full).
 // When a material has texture maps, the renderer uses a textured shader variant that samples
 // the textures using the mesh's UV coordinates.
 //
@@ -48,6 +49,7 @@ export class Material {
   // Texture maps
   colorMap?: Texture
   aoMap?: Texture
+  aoIntensity: number
 
   // Computed
   _hasEmissive = false
@@ -64,6 +66,7 @@ export class Material {
     this.transparent = opts.transparent ?? false
     this.colorMap = opts.colorMap
     this.aoMap = opts.aoMap
+    this.aoIntensity = opts.aoIntensity ?? 1.0
     this._hasTextures = !!(opts.colorMap || opts.aoMap)
 
     if (opts.palette) {
@@ -86,6 +89,7 @@ export interface MaterialOptions {
   transparent?: boolean
   colorMap?: Texture
   aoMap?: Texture
+  aoIntensity?: number
 }
 
 export class BasicMaterial extends Material {
