@@ -291,7 +291,7 @@ void main() {
   vec3 finalColor = litColor + emissive;
 
   fragColor = vec4(finalColor, u_opacity);
-  fragEmissive = vec4(emissive * alpha, alpha);
+  fragEmissive = vec4(emissive * u_opacity, u_opacity);
 }
 `
 
