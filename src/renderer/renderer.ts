@@ -11,8 +11,8 @@
 // renderer.render() – Draws a single frame.
 // renderer.dispose() – Releases GPU resources.
 
-import type { PerspectiveCamera } from '../scene/camera.ts'
-import type { Scene } from '../scene/scene.ts'
+import type { PerspectiveCamera } from '../scene/camera'
+import type { Scene } from '../scene/scene'
 
 export interface ShadowConfig {
   enabled?: boolean

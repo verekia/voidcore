@@ -32,11 +32,11 @@ import {
   vec4Create,
   vec4Set,
   vec4TransformMat4,
-} from './math/index.ts'
+} from './math/index'
 
-import type { Mat4, Vec3, Vec4 } from './math/index.ts'
-import type { PerspectiveCamera } from './scene/camera.ts'
-import type { Node } from './scene/node.ts'
+import type { Mat4, Vec3, Vec4 } from './math/index'
+import type { PerspectiveCamera } from './scene/camera'
+import type { Node } from './scene/node'
 
 export interface OverlayOptions {
   element: HTMLElement

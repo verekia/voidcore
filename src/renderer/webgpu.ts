@@ -38,21 +38,22 @@ import {
   mat4OrthoZO,
   mat4Transpose,
   vec3Create,
-} from '../math/index.ts'
-import { Mesh } from '../scene/mesh.ts'
-import { Node } from '../scene/node.ts'
-import { packNormalsSnorm8, packUVsFloat16, packWeightsUnorm8 } from './pack.ts'
+} from '../math/index'
+import { Mesh } from '../scene/mesh'
+import { Node } from '../scene/node'
+import { packNormalsSnorm8, packUVsFloat16, packWeightsUnorm8 } from './pack'
 import {
   collectMeshes,
   computeLightDir,
   computeCascadeSplits,
   computeCascadeMatrix,
   defaultMaxDpr,
+  findAmbientLight,
   findDirectionalLight,
   findTransparentStart,
   NUM_CASCADES,
-} from './shared.ts'
-import { createSortState, sortMeshes } from './sort.ts'
+} from './shared'
+import { createSortState, sortMeshes } from './sort'
 import {
   LAMBERT_WGSL,
   BASIC_WGSL,
@@ -63,17 +64,17 @@ import {
   BLOOM_DOWN_WGSL,
   BLOOM_UP_WGSL,
   BLIT_WGSL,
-} from './webgpu-shaders.ts'
+} from './webgpu-shaders'
 
-import type { Geometry } from '../geometry/geometry.ts'
-import type { PaletteEntry } from '../materials/material.ts'
-import type { Material } from '../materials/material.ts'
-import type { AABB, Mat4, Vec3 } from '../math/index.ts'
-import type { PerspectiveCamera } from '../scene/camera.ts'
-import type { DirectionalLight } from '../scene/light.ts'
-import type { Scene } from '../scene/scene.ts'
-import type { Renderer, RendererConfig, FrameStats } from './renderer.ts'
-import type { SortState } from './sort.ts'
+import type { Geometry } from '../geometry/geometry'
+import type { PaletteEntry } from '../materials/material'
+import type { Material } from '../materials/material'
+import type { AABB, Mat4, Vec3 } from '../math/index'
+import type { PerspectiveCamera } from '../scene/camera'
+import type { DirectionalLight } from '../scene/light'
+import type { Scene } from '../scene/scene'
+import type { Renderer, RendererConfig, FrameStats } from './renderer'
+import type { SortState } from './sort'
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -1447,8 +1448,9 @@ export class WebGPURenderer implements Renderer {
     // Camera frustum
     frustumFromViewProjection(this._frustumPlanes, this._vpMatrix)
 
-    // Find directional light (quick early-exit traversal)
+    // Find lights (quick early-exit traversals)
     const dirLight = findDirectionalLight(scene, this._traversalStack)
+    const ambLight = findAmbientLight(scene, this._traversalStack)
 
     // Compute light direction
     const lightDir = this._lightDir
@@ -1611,10 +1613,10 @@ export class WebGPURenderer implements Renderer {
     fd[20] = dirLight ? (dirLight as DirectionalLight).color[0] : 0
     fd[21] = dirLight ? (dirLight as DirectionalLight).color[1] : 0
     fd[22] = dirLight ? (dirLight as DirectionalLight).color[2] : 0
-    fd[23] = scene.ambientLight.intensity
-    fd[24] = scene.ambientLight.color[0]
-    fd[25] = scene.ambientLight.color[1]
-    fd[26] = scene.ambientLight.color[2]
+    fd[23] = ambLight ? ambLight.intensity : 0
+    fd[24] = ambLight ? ambLight.color[0] : 0
+    fd[25] = ambLight ? ambLight.color[1] : 0
+    fd[26] = ambLight ? ambLight.color[2] : 0
     fd[27] = shadowActive ? 1.0 : 0.0
     if (shadowActive) {
       fd.set(this._cascadeVPs[0]!, 28)

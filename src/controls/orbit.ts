@@ -17,10 +17,10 @@
 // OrbitControls.dispose()   – Removes all event listeners.
 // new OrbitControls()       – Creates controls for a camera + canvas pair.
 
-import { mat4LookAt, VEC3_UP, vec3Create, vec3Set } from '../math/index.ts'
+import { mat4LookAt, VEC3_UP, vec3Create, vec3Set } from '../math/index'
 
-import type { Vec3 } from '../math/index.ts'
-import type { PerspectiveCamera } from '../scene/camera.ts'
+import type { Vec3 } from '../math/index'
+import type { PerspectiveCamera } from '../scene/camera'
 
 export interface OrbitControlsOptions {
   target?: [number, number, number]

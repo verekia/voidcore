@@ -25,8 +25,8 @@
 //
 // sortMeshes() – Sorts meshes in-place by the composite key described above.
 
-import type { PerspectiveCamera } from '../scene/camera.ts'
-import type { Mesh } from '../scene/mesh.ts'
+import type { PerspectiveCamera } from '../scene/camera'
+import type { Mesh } from '../scene/mesh'
 
 export interface SortState {
   keys: Uint32Array

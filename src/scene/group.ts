@@ -6,6 +6,6 @@
 //
 // new Group() – Creates an empty group node.
 
-import { Node } from './node.ts'
+import { Node } from './node'
 
 export class Group extends Node {}

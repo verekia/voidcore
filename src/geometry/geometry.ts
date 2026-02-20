@@ -8,13 +8,14 @@
 // Geometry also computes an axis-aligned bounding box (AABB) used for frustum culling
 // (skipping objects that are off-screen) and raycasting (click detection).
 //
-// new Geometry(data)      – Wraps raw arrays into a Geometry object.
-// geometry.hasAttribute() – Checks if optional attributes (UVs, colors, joints, etc.) exist.
-// geometry.dispose()      – Releases GPU buffer references.
+// new Geometry(data)       – Wraps raw arrays into a Geometry object.
+// mergeGeometries(geos)    – Merges multiple geometries into one with per-geometry material indices.
+// geometry.hasAttribute()  – Checks if optional attributes (UVs, colors, joints, etc.) exist.
+// geometry.dispose()       – Releases GPU buffer references.
 
-import { aabbFromPoints } from '../math/index.ts'
+import { aabbFromPoints } from '../math/index'
 
-import type { AABB } from '../math/index.ts'
+import type { AABB } from '../math/index'
 
 export interface GeometryData {
   positions: Float32Array
@@ -78,4 +79,42 @@ export class Geometry {
   dispose() {
     this._gpuBuffers = null
   }
+}
+
+/**
+ * Merges multiple geometries into one, assigning each geometry a material index
+ * (0, 1, 2, …) so a palette material can color each sub-mesh independently.
+ */
+export const mergeGeometries = (geometries: Geometry[]): Geometry => {
+  let totalVertices = 0
+  let totalIndices = 0
+  let hasUVs = false
+  for (const geo of geometries) {
+    totalVertices += geo.vertexCount
+    totalIndices += geo.indexCount
+    if (geo.uvs) hasUVs = true
+  }
+
+  const positions = new Float32Array(totalVertices * 3)
+  const normals = new Float32Array(totalVertices * 3)
+  const indices = totalVertices > 65535 ? new Uint32Array(totalIndices) : new Uint16Array(totalIndices)
+  const materialIndices = new Uint8Array(totalVertices)
+  const uvs = hasUVs ? new Float32Array(totalVertices * 2) : undefined
+
+  let vOff = 0
+  let iOff = 0
+  for (let i = 0; i < geometries.length; i++) {
+    const geo = geometries[i]!
+    positions.set(geo.positions, vOff * 3)
+    normals.set(geo.normals, vOff * 3)
+    if (uvs && geo.uvs) uvs.set(geo.uvs, vOff * 2)
+    materialIndices.fill(i, vOff, vOff + geo.vertexCount)
+    for (let j = 0; j < geo.indexCount; j++) {
+      indices[iOff + j] = geo.indices[j]! + vOff
+    }
+    vOff += geo.vertexCount
+    iOff += geo.indexCount
+  }
+
+  return new Geometry({ positions, normals, indices, materialIndices, uvs })
 }

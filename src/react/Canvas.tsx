@@ -7,16 +7,16 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 
-import { Engine } from '../engine.ts'
-import { Raycaster } from '../raycasting/index.ts'
-import { PerspectiveCamera } from '../scene/camera.ts'
-import { Scene, type AmbientLight } from '../scene/scene.ts'
-import { VoidContext, type VoidStore } from './context.ts'
-import { setupEvents } from './events.ts'
-import { reconciler, type VoidInstance } from './reconciler.ts'
-import { createTunnel, type Tunnel } from './tunnel.ts'
+import { Engine } from '../engine'
+import { Raycaster } from '../raycasting/index'
+import { PerspectiveCamera } from '../scene/camera'
+import { Scene } from '../scene/scene'
+import { VoidContext, type VoidStore } from './context'
+import { setupEvents } from './events'
+import { reconciler, type VoidInstance } from './reconciler'
+import { createTunnel, type Tunnel } from './tunnel'
 
-import type { ShadowConfig } from '../renderer/renderer.ts'
+import type { ShadowConfig } from '../renderer/renderer'
 
 export interface CanvasProps {
   children?: ReactNode
@@ -32,7 +32,6 @@ export interface CanvasProps {
     far?: number
     position?: [number, number, number]
   }
-  ambientLight?: Partial<AmbientLight>
   onCreated?: (state: { engine: Engine; scene: Scene; camera: PerspectiveCamera }) => void
   style?: React.CSSProperties
   className?: string
@@ -58,7 +57,6 @@ export const Canvas = ({
   maxFps,
   maxDpr,
   camera: cameraProps,
-  ambientLight,
   onCreated,
   style,
   className,
@@ -94,12 +92,6 @@ export const Canvas = ({
       if (maxDpr !== undefined) engine.maxDpr = maxDpr
 
       const scene = new Scene()
-      if (ambientLight) {
-        scene.ambientLight = {
-          color: ambientLight.color ?? scene.ambientLight.color,
-          intensity: ambientLight.intensity ?? scene.ambientLight.intensity,
-        }
-      }
 
       const camera = new PerspectiveCamera({
         fov: cameraProps?.fov ?? 60,
