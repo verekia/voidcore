@@ -28,7 +28,7 @@ export class DirectionalLight extends Node {
     this.type = 'directionalLight'
     this.color = opts.color ?? [1, 1, 1]
     this.intensity = opts.intensity ?? 1.0
-    this.castShadow = opts.castShadow ?? true
+    this.castShadow = opts.castShadow ?? false
     this.frustumCulled = false
     this.receiveShadow = false
   }

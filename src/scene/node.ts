@@ -45,8 +45,8 @@ export class Node {
 
   visible = true
   frustumCulled = true
-  castShadow = true
-  receiveShadow = true
+  castShadow = false
+  receiveShadow = false
 
   _localMatrix: Mat4 = mat4Create()
   _worldMatrix: Mat4 = mat4Create()

@@ -1,8 +1,8 @@
 import { useMemo } from 'react'
 
-import { LambertMaterial, mergeGeometries } from '../src/index'
-import { useGLTF } from '../src/react/index'
-import { staticBundleSrc } from './assets'
+import { LambertMaterial, mergeGeometries, prebuildBVH } from '../src/index'
+import { useGLTF, useKTX2 } from '../src/react/index'
+import { staticBundleSrc, cityAoSrc } from './assets'
 
 const EDEN_COLORS: [number, number, number][] = [
   [0.78, 0.44, 0.25],
@@ -39,18 +39,22 @@ const EDEN_PALETTE = EDEN_COLORS.map((color, i) => ({
   ...(i === 23 ? { emissive: [0.0, 0.75, 0.7] as [number, number, number], emissiveIntensity: 2.5 } : {}),
 }))
 
-const EdenMesh = () => {
+const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
   const gltf = useGLTF(staticBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
+  const aoTexture = useKTX2(cityAoSrc, '/basis-1.50/')
 
   const { geometry, material } = useMemo(() => {
     const edenMeshes = gltf.meshes.filter(m => m.name === 'Eden')
+    const geometry = mergeGeometries(edenMeshes.map(m => m.geometry))
+    prebuildBVH(geometry)
+    onReady?.()
     return {
       geometry: mergeGeometries(edenMeshes.map(m => m.geometry)),
-      material: new LambertMaterial({ palette: EDEN_PALETTE }),
+      material: new LambertMaterial({ palette: EDEN_PALETTE, aoMap: aoTexture, aoIntensity: 2 }),
     }
-  }, [gltf])
+  }, [gltf, aoTexture, onReady])
 
-  return <mesh geometry={geometry} material={material} name="eden" castShadow position={[-50, -70, 0]} />
+  return <mesh geometry={geometry} material={material} name="eden" castShadow receiveShadow position={[-50, -70, 0]} />
 }
 
 export default EdenMesh

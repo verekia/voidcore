@@ -8,11 +8,11 @@ VoidCore is a performant 3D graphics engine written in TypeScript. It supports b
 
 - **Coordinate system**: Z-up, right-handed. Forward is +Y, right is +X, up is +Z.
 - **Math**: All types are Float32Array-backed with a "write into output" pattern (zero allocation).
-- **Rendering**: Dual-backend (WebGPU/WebGL2), MSAA, MRT (color + emissive), single shadow map with PCF filtering, sorted alpha-blend transparency (premultiplied alpha on WebGPU), bloom post-processing, configurable DPR limiting.
+- **Rendering**: Dual-backend (WebGPU/WebGL2), MSAA, MRT (color + emissive), single shadow map with PCF filtering, sorted alpha-blend transparency (premultiplied alpha on WebGPU), bloom post-processing, configurable DPR limiting. Texture maps (color map, AO map) on Lambert materials with KTX2/Basis Universal support.
 - **Scheduler**: Single rAF loop with priority-ordered callbacks, global/per-callback FPS caps. Both `maxFps` and `maxDpr` can be changed dynamically at runtime.
 - **Scene graph**: Tree of Nodes with dirty-flag world matrix propagation. Transforms are set via `setPosition(x, y, z)`, `setRotation(x, y, z, w)`, `setScale(x, y, z)` / `setScale(s)` which automatically mark the node dirty. Per-component setters are also available: `setPositionX/Y/Z(v)`, `setScaleX/Y/Z(v)`. `markTransformDirty()` is available for code that writes directly to the underlying Float32Arrays (e.g., `quatFromAxisAngle`).
 - **HTML overlay**: DOM elements tracked to 3D world positions via CSS transforms. Supports node tracking with offset, centering, dirty checking, depth-based z-index, distance scaling, and per-element pointer events.
-- **React bindings**: Optional declarative layer via `voidcore/react` subpath. Uses a custom `react-reconciler` to map JSX elements (`<mesh>`, `<boxGeometry>`, `<lambertMaterial>`, `<directionalLight>`, `<ambientLight>`, etc.) to engine objects. Provides hooks (`useFrame`, `useEngine`, `useGLTF`, `useAnimations`) and a `<Canvas>` root component.
+- **React bindings**: Optional declarative layer via `voidcore/react` subpath. Uses a custom `react-reconciler` to map JSX elements (`<mesh>`, `<boxGeometry>`, `<lambertMaterial>`, `<directionalLight>`, `<ambientLight>`, etc.) to engine objects. Provides hooks (`useFrame`, `useEngine`, `useGLTF`, `useKTX2`, `useAnimations`) and a `<Canvas>` root component.
 
 ## Project Structure
 
@@ -24,8 +24,8 @@ src/
   animation/             – Skeletal animation (clips, mixer, skeleton)
   controls/              – Camera controls (orbit)
   geometry/              – Geometry data and procedural primitives
-  loaders/               – Asset loaders (glTF/GLB)
-  materials/             – Material definitions (basic, lambert)
+  loaders/               – Asset loaders (glTF/GLB, KTX2/Basis Universal)
+  materials/             – Material definitions (basic, lambert) and textures
   math/                  – Linear algebra (vec3, mat4, quat, AABB, frustum)
   raycasting/            – Ray-mesh intersection with BVH acceleration
   renderer/              – Rendering backends and shaders
@@ -43,7 +43,7 @@ src/
     Canvas.tsx           – Root component (engine init, reconciler mount, rAF loop)
     reconciler.ts        – Custom react-reconciler host config
     types.ts             – JSX catalogue, prop types, IntrinsicElements
-    hooks.ts             – useFrame, useEngine, useLoader, useGLTF, useAnimations
+    hooks.ts             – useFrame, useEngine, useLoader, useGLTF, useKTX2, useAnimations
     events.ts            – Pointer event system (raycast-based)
     context.ts           – React context for engine state
     Html.tsx             – DOM overlay projected to 3D coordinates

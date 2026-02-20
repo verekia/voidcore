@@ -8,12 +8,21 @@
 // geometry can reference a palette index, allowing a single mesh to display multiple colors
 // without needing textures. Palette entries can also specify emissive colors (self-glowing).
 //
+// Texture maps add per-pixel detail from images:
+//   - colorMap – Multiplies the base color by a texture sample (diffuse/albedo map).
+//   - aoMap    – Multiplies ambient light by the red channel of a texture (ambient occlusion).
+//   - aoIntensity – Controls how strongly the AO map affects lighting (0 = no effect, 1 = full).
+// When a material has texture maps, the renderer uses a textured shader variant that samples
+// the textures using the mesh's UV coordinates.
+//
 // Transparency is supported via sorted alpha blending. Set `transparent: true` and an
 // `opacity` value (0–1) to make a material see-through. Transparent meshes are drawn
 // back-to-front after all opaque meshes, with blending enabled and depth writes off.
 //
 // new BasicMaterial()   – Unlit material (ignores lights).
 // new LambertMaterial() – Diffuse-lit material (reacts to lights).
+
+import type { Texture } from './texture'
 
 export interface PaletteEntry {
   color: [number, number, number]
@@ -36,10 +45,15 @@ export class Material {
 
   // Lambert-specific
   receiveShadow: boolean
-  aoTexture?: unknown // For future texture support
+
+  // Texture maps
+  colorMap?: Texture
+  aoMap?: Texture
+  aoIntensity: number
 
   // Computed
   _hasEmissive = false
+  _hasTextures = false
   needsUpdate = true
 
   constructor(type: MaterialType, opts: MaterialOptions = {}) {
@@ -50,6 +64,10 @@ export class Material {
     this.receiveShadow = opts.receiveShadow ?? true
     this.opacity = opts.opacity ?? 1.0
     this.transparent = opts.transparent ?? false
+    this.colorMap = opts.colorMap
+    this.aoMap = opts.aoMap
+    this.aoIntensity = opts.aoIntensity ?? 1.0
+    this._hasTextures = !!(opts.colorMap || opts.aoMap)
 
     if (opts.palette) {
       this.palette = opts.palette
@@ -69,6 +87,9 @@ export interface MaterialOptions {
   palette?: PaletteEntry[]
   opacity?: number
   transparent?: boolean
+  colorMap?: Texture
+  aoMap?: Texture
+  aoIntensity?: number
 }
 
 export class BasicMaterial extends Material {

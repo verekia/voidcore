@@ -14,6 +14,7 @@ export { Mesh } from './scene/mesh'
 export { Group } from './scene/group'
 export { PerspectiveCamera, type CameraOptions } from './scene/camera'
 export { AmbientLight, type AmbientLightOptions, DirectionalLight, type DirectionalLightOptions } from './scene/light'
+export { cloneScene, type CloneOptions, type CloneResult } from './scene/clone'
 
 // Geometry
 export { Geometry, mergeGeometries } from './geometry/geometry'
@@ -29,6 +30,7 @@ export {
 
 // Materials
 export { BasicMaterial, LambertMaterial, Material } from './materials/material'
+export { Texture } from './materials/texture'
 
 // Controls
 export { OrbitControls } from './controls/orbit'
@@ -37,10 +39,11 @@ export { OrbitControls } from './controls/orbit'
 export { Skeleton, type AnimationClip, type KeyframeTrack, AnimationMixer, AnimationAction } from './animation/index'
 
 // Raycasting
-export { Raycaster, buildMeshBVH, type RaycastHit } from './raycasting/index'
+export { Raycaster, buildMeshBVH, prebuildBVH, type RaycastHit } from './raycasting/index'
 
 // Loaders
 export { loadGLTF } from './loaders/gltf'
+export { loadKTX2 } from './loaders/ktx2'
 
 // Overlay
 export { createOverlayManager, type OverlayHandle, type OverlayOptions } from './overlay'

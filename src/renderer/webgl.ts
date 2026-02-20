@@ -52,6 +52,7 @@ import { createSortState, sortMeshes } from './sort'
 import {
   LAMBERT_VERT,
   LAMBERT_FRAG,
+  LAMBERT_TEXTURED_FRAG,
   LAMBERT_SKINNED_VERT,
   BASIC_VERT,
   BASIC_FRAG,
@@ -67,6 +68,7 @@ import {
 
 import type { Geometry } from '../geometry/geometry'
 import type { Material, PaletteEntry } from '../materials/material'
+import type { Texture } from '../materials/texture'
 import type { AABB, Mat4, Vec3 } from '../math/index'
 import type { PerspectiveCamera } from '../scene/camera'
 import type { DirectionalLight } from '../scene/light'
@@ -129,6 +131,9 @@ interface SceneUniformLocs {
   u_paletteEmissive: (WebGLUniformLocation | null)[]
   u_shadowMap: WebGLUniformLocation | null
   u_receiveShadow: WebGLUniformLocation | null
+  u_colorMap: WebGLUniformLocation | null
+  u_aoMap: WebGLUniformLocation | null
+  u_aoIntensity: WebGLUniformLocation | null
 }
 
 interface PostUniformLocs {
@@ -158,6 +163,9 @@ const cacheSceneLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): Scen
     u_paletteEmissive: paletteEmissive,
     u_shadowMap: gl.getUniformLocation(program, 'u_shadowMap'),
     u_receiveShadow: gl.getUniformLocation(program, 'u_receiveShadow'),
+    u_colorMap: gl.getUniformLocation(program, 'u_colorMap'),
+    u_aoMap: gl.getUniformLocation(program, 'u_aoMap'),
+    u_aoIntensity: gl.getUniformLocation(program, 'u_aoIntensity'),
   }
 }
 
@@ -438,6 +446,7 @@ export class WebGLRenderer implements Renderer {
   }
 
   private lambertProgram: WebGLProgram
+  private lambertTexturedProgram: WebGLProgram
   private basicProgram: WebGLProgram
   private lambertSkinnedProgram: WebGLProgram
   private basicSkinnedProgram: WebGLProgram
@@ -449,9 +458,14 @@ export class WebGLRenderer implements Renderer {
 
   // Cached uniform locations
   private _lambertLocs!: SceneUniformLocs
+  private _lambertTexturedLocs!: SceneUniformLocs
   private _basicLocs!: SceneUniformLocs
   private _lambertSkinnedLocs!: SceneUniformLocs
   private _basicSkinnedLocs!: SceneUniformLocs
+
+  // Texture map cache
+  private _glTexCache = new WeakMap<Texture, WebGLTexture>()
+  private _dummyWhiteTex!: WebGLTexture
   private _bloomDownLocs!: PostUniformLocs
   private _bloomUpLocs!: PostUniformLocs
   private _blitLocs!: BlitUniformLocs
@@ -607,6 +621,7 @@ export class WebGLRenderer implements Renderer {
 
     // Compile programs
     this.lambertProgram = createProgram(gl, LAMBERT_VERT, LAMBERT_FRAG)
+    this.lambertTexturedProgram = createProgram(gl, LAMBERT_VERT, LAMBERT_TEXTURED_FRAG)
     this.basicProgram = createProgram(gl, BASIC_VERT, BASIC_FRAG)
     this.lambertSkinnedProgram = createProgram(gl, LAMBERT_SKINNED_VERT, LAMBERT_FRAG)
     this.basicSkinnedProgram = createProgram(gl, BASIC_SKINNED_VERT, BASIC_FRAG)
@@ -618,6 +633,7 @@ export class WebGLRenderer implements Renderer {
 
     // Cache uniform locations
     this._lambertLocs = cacheSceneLocs(gl, this.lambertProgram)
+    this._lambertTexturedLocs = cacheSceneLocs(gl, this.lambertTexturedProgram)
     this._basicLocs = cacheSceneLocs(gl, this.basicProgram)
     this._lambertSkinnedLocs = cacheSceneLocs(gl, this.lambertSkinnedProgram)
     this._basicSkinnedLocs = cacheSceneLocs(gl, this.basicSkinnedProgram)
@@ -646,6 +662,7 @@ export class WebGLRenderer implements Renderer {
 
     // Bind UBO block indices for all scene programs (done once at init)
     this._bindUBOBlocks(this.lambertProgram, false)
+    this._bindUBOBlocks(this.lambertTexturedProgram, false)
     this._bindUBOBlocks(this.basicProgram, false)
     this._bindUBOBlocks(this.lambertSkinnedProgram, true)
     this._bindUBOBlocks(this.basicSkinnedProgram, true)
@@ -678,6 +695,14 @@ export class WebGLRenderer implements Renderer {
     gl.readBuffer(gl.NONE)
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
 
+    // 1x1 white dummy texture for missing texture maps (sampling white = identity)
+    this._dummyWhiteTex = gl.createTexture()!
+    gl.bindTexture(gl.TEXTURE_2D, this._dummyWhiteTex)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]))
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.bindTexture(gl.TEXTURE_2D, null)
+
     // Cache canvas dimensions
     this._displayW = canvas.clientWidth
     this._displayH = canvas.clientHeight
@@ -686,6 +711,40 @@ export class WebGLRenderer implements Renderer {
       this._displayH = this.canvas.clientHeight
     })
     this._resizeObserver.observe(canvas)
+  }
+
+  private _ensureGLTexture(tex: Texture): WebGLTexture {
+    const cached = this._glTexCache.get(tex)
+    if (cached) return cached
+
+    const gl = this.gl
+    const glTex = gl.createTexture()!
+    gl.bindTexture(gl.TEXTURE_2D, glTex)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, tex.width, tex.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, tex.data)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.bindTexture(gl.TEXTURE_2D, null)
+
+    this._glTexCache.set(tex, glTex)
+    return glTex
+  }
+
+  private _bindMaterialTextures(material: Material, locs: SceneUniformLocs) {
+    const gl = this.gl
+
+    // Color map → texture unit 3
+    gl.activeTexture(gl.TEXTURE3)
+    gl.bindTexture(gl.TEXTURE_2D, material.colorMap ? this._ensureGLTexture(material.colorMap) : this._dummyWhiteTex)
+    gl.uniform1i(locs.u_colorMap, 3)
+
+    // AO map → texture unit 4
+    gl.activeTexture(gl.TEXTURE4)
+    gl.bindTexture(gl.TEXTURE_2D, material.aoMap ? this._ensureGLTexture(material.aoMap) : this._dummyWhiteTex)
+    gl.uniform1i(locs.u_aoMap, 4)
+
+    gl.uniform1f(locs.u_aoIntensity, material.aoIntensity)
   }
 
   private _bindUBOBlocks(program: WebGLProgram, skinned: boolean) {
@@ -1292,6 +1351,9 @@ export class WebGLRenderer implements Renderer {
           program = this.basicSkinnedProgram
           locs = this._basicSkinnedLocs
         }
+      } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
+        program = this.lambertTexturedProgram
+        locs = this._lambertTexturedLocs
       } else {
         if (mesh.material.type === 'lambert') {
           program = this.lambertProgram
@@ -1305,6 +1367,9 @@ export class WebGLRenderer implements Renderer {
       const programChanged = this._setProgram(program)
       if (programChanged && mesh.material.type === 'lambert') {
         gl.uniform1i(locs.u_shadowMap, 2)
+      }
+      if (mesh.material._hasTextures && !mesh._isSkinned) {
+        this._bindMaterialTextures(mesh.material, locs)
       }
 
       drawMesh(si, locs, programChanged, mesh)
@@ -1329,6 +1394,9 @@ export class WebGLRenderer implements Renderer {
             program = this.basicSkinnedProgram
             locs = this._basicSkinnedLocs
           }
+        } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
+          program = this.lambertTexturedProgram
+          locs = this._lambertTexturedLocs
         } else {
           if (mesh.material.type === 'lambert') {
             program = this.lambertProgram
@@ -1342,6 +1410,9 @@ export class WebGLRenderer implements Renderer {
         const programChanged = this._setProgram(program)
         if (programChanged && mesh.material.type === 'lambert') {
           gl.uniform1i(locs.u_shadowMap, 2)
+        }
+        if (mesh.material._hasTextures && !mesh._isSkinned) {
+          this._bindMaterialTextures(mesh.material, locs)
         }
 
         drawMesh(si, locs, programChanged, mesh)
@@ -1466,6 +1537,7 @@ export class WebGLRenderer implements Renderer {
     gl.deleteTexture(this._shadowTexture)
     gl.deleteFramebuffer(this._shadowFbo)
     gl.deleteProgram(this.lambertProgram)
+    gl.deleteProgram(this.lambertTexturedProgram)
     gl.deleteProgram(this.basicProgram)
     gl.deleteProgram(this.lambertSkinnedProgram)
     gl.deleteProgram(this.basicSkinnedProgram)

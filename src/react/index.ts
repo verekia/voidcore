@@ -7,7 +7,7 @@
 
 export { Canvas, type CanvasProps } from './Canvas'
 export { Html, type HtmlProps } from './Html'
-export { useEngine, useFrame, useLoader, useGLTF, useAnimations } from './hooks'
+export { useEngine, useFrame, useLoader, useGLTF, useKTX2, useAnimations } from './hooks'
 export { VoidContext, type VoidStore, type FrameCallback } from './context'
 export type {
   NodeProps,
