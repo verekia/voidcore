@@ -123,8 +123,6 @@ export interface GeometryProps extends BaseProps {
 export interface MaterialProps extends BaseProps {
   args?: [MaterialOptions?]
   color?: [number, number, number]
-  opacity?: number
-  transparent?: boolean
   vertexColors?: boolean
 }
 

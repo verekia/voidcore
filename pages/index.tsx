@@ -107,9 +107,9 @@ const RotatingCube = () => {
   )
 }
 
-// ─── Transparent Cube ───────────────────────────────────────────────────────
+// ─── Colored Cube ───────────────────────────────────────────────────────────
 
-const TRANSPARENT_COLORS: [number, number, number][] = [
+const CUBE_COLORS: [number, number, number][] = [
   [1.0, 0.2, 0.2],
   [0.2, 1.0, 0.3],
   [0.2, 0.4, 1.0],
@@ -122,15 +122,15 @@ const TRANSPARENT_COLORS: [number, number, number][] = [
   [1.0, 1.0, 1.0],
 ]
 
-const TRANSPARENT_RING_RADIUS = 30
-const TRANSPARENT_Z = 25
-const TRANSPARENT_CUBE_SIZE = 10
+const COLORED_RING_RADIUS = 30
+const COLORED_Z = 25
+const COLORED_CUBE_SIZE = 10
 
-const TransparentCube = ({ index }: { index: number }) => {
+const ColoredCube = ({ index }: { index: number }) => {
   const meshRef = useRef<any>(null)
   const angle = (index / 10) * Math.PI * 2
   const position = useMemo<[number, number, number]>(
-    () => [Math.cos(angle) * TRANSPARENT_RING_RADIUS, Math.sin(angle) * TRANSPARENT_RING_RADIUS, TRANSPARENT_Z],
+    () => [Math.cos(angle) * COLORED_RING_RADIUS, Math.sin(angle) * COLORED_RING_RADIUS, COLORED_Z],
     [angle],
   )
   const { axis, speed } = useMemo(() => {
@@ -153,18 +153,16 @@ const TransparentCube = ({ index }: { index: number }) => {
 
   return (
     <mesh ref={meshRef} position={position}>
-      <boxGeometry
-        args={[{ width: TRANSPARENT_CUBE_SIZE, height: TRANSPARENT_CUBE_SIZE, depth: TRANSPARENT_CUBE_SIZE }]}
-      />
-      <lambertMaterial args={[{ color: TRANSPARENT_COLORS[index]!, opacity: 0.4 }]} />
+      <boxGeometry args={[{ width: COLORED_CUBE_SIZE, height: COLORED_CUBE_SIZE, depth: COLORED_CUBE_SIZE }]} />
+      <lambertMaterial args={[{ color: CUBE_COLORS[index]! }]} />
     </mesh>
   )
 }
 
-const TransparentCubes = ({ count }: { count: number }) => (
+const ColoredCubes = ({ count }: { count: number }) => (
   <>
     {Array.from({ length: count }, (_, i) => (
-      <TransparentCube key={i} index={i} />
+      <ColoredCube key={i} index={i} />
     ))}
   </>
 )
@@ -499,7 +497,7 @@ const IndexPage = () => {
           <SphereTerrain />
           <Characters count={CHARACTER_COUNT} />
           <RotatingCube />
-          <TransparentCubes count={10} />
+          <ColoredCubes count={10} />
         </Suspense>
       </Canvas>
       <StatsOverlay engine={engine} />

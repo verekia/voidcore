@@ -5,11 +5,10 @@
 // these costly switches.
 //
 // Sort key layout (32-bit unsigned integer):
-//   Bits 31-30: Layer       – Opaque (0) before transparent (1)
+//   Bits 31-30: (reserved)
 //   Bits 29-22: Pipeline ID – Groups by shader program (lambert/basic × skinned/static)
 //   Bits 21-10: Material ID – Groups by material to reduce uniform uploads
-//   Bits 9-0:   Depth       – Opaque: nearest first (early-Z optimization).
-//                              Transparent: farthest first (correct alpha blending).
+//   Bits 9-0:   Depth       – Nearest first (early-Z optimization).
 //
 // Uses a 4-pass LSD (Least Significant Digit) radix sort with an 8-bit radix.
 // Radix sort is O(n) and stable, making it ideal for the thousands of meshes a scene
@@ -66,26 +65,21 @@ export const sortMeshes = (state: SortState, meshes: Mesh[], meshCount: number, 
     const material = mesh.material
     mesh._isSkinned = !!mesh.skeleton && !!mesh.geometry.joints && !!mesh.geometry.weights
 
-    // Layer: bits 31-30 (opaque=0, transparent=1)
-    const layer = material.transparent ? 1 : 0
-
     // Pipeline ID: bits 29-22
     const pipelineId = (material.type === 'lambert' ? 1 : 0) | (mesh._isSkinned ? 2 : 0)
 
     // Material ID: bits 21-10 (masked to 12 bits)
     const materialId = material._id & 0xfff
 
-    // Depth: bits 9-0 (10 bits, quantized distance)
-    // Opaque: nearest first (ascending depth). Transparent: farthest first (inverted depth).
+    // Depth: bits 9-0 (10 bits, quantized distance, nearest first for early-Z)
     const wm = mesh._worldMatrix
     const dx = wm[12]! - camX
     const dy = wm[13]! - camY
     const dz = wm[14]! - camZ
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
-    const rawDepth = Math.min(dist * invFar * 1023, 1023) | 0
-    const depth = layer === 1 ? 1023 - rawDepth : rawDepth
+    const depth = Math.min(dist * invFar * 1023, 1023) | 0
 
-    keys[i] = (layer << 30) | (pipelineId << 22) | (materialId << 10) | depth
+    keys[i] = (pipelineId << 22) | (materialId << 10) | depth
     indices[i] = i
   }
 

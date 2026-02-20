@@ -420,8 +420,6 @@ export const loadGLTF = async (url: string, options?: LoadOptions): Promise<GLTF
 
           material = new Material(isUnlit ? 'basic' : 'lambert', {
             color: [baseColor[0], baseColor[1], baseColor[2]],
-            opacity: baseColor[3] ?? 1.0,
-            transparent: matDef.alphaMode === 'BLEND',
           })
         } else {
           material = new LambertMaterial()

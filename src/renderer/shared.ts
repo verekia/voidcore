@@ -11,9 +11,6 @@
 //   3. Skip invisible nodes and meshes outside both frustums
 //   All arrays use index-based writes instead of push/pop to minimize GC pressure.
 //
-// findTransparentStart() – Finds the index where transparent meshes begin in the sorted array.
-//   Used by both renderers to split the draw loop into opaque and transparent passes.
-//
 // computeLightDir() – Extracts the light direction from a directional light's world matrix.
 //   The light's world position is treated as a direction vector (like the sun – infinitely
 //   far away, only direction matters), then normalized.
@@ -109,22 +106,6 @@ export const collectMeshes = (
   meshes.length = meshCount
   shadowMeshes.length = shadowCount
   return culledCount
-}
-
-/**
- * Find the index where transparent meshes begin in the sorted array.
- * Since meshes are sorted with opaque (layer bit 0) before transparent (layer bit 1),
- * this is the first index where the layer bit is set. Returns meshCount if no transparent meshes.
- */
-export const findTransparentStart = (
-  sortState: { keys: Uint32Array; indices: Uint32Array },
-  meshCount: number,
-): number => {
-  for (let i = 0; i < meshCount; i++) {
-    const key = sortState.keys[sortState.indices[i]!]!
-    if (key >>> 30 > 0) return i
-  }
-  return meshCount
 }
 
 /** Compute normalized light direction from a directional light's world position. */

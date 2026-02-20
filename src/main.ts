@@ -253,19 +253,19 @@ export const main = async (canvas: HTMLCanvasElement) => {
     'color:#fff;font:bold 16px monospace;background:rgba(0,0,0,0.6);padding:4px 10px;border-radius:4px;white-space:nowrap'
   overlay.add({ element: labelDiv, node: cube, center: true })
 
-  // ─── Transparent Cubes (WBOIT test) ───────────────────────────────
-  const TRANSPARENT_COUNT = 10
-  const TRANSPARENT_RING_RADIUS = 30
-  const TRANSPARENT_Z = 25
-  const TRANSPARENT_CUBE_SIZE = 10
+  // ─── Colored Cubes ──────────────────────────────────────────────────
+  const COLORED_COUNT = 10
+  const COLORED_RING_RADIUS = 30
+  const COLORED_Z = 25
+  const COLORED_CUBE_SIZE = 10
 
-  const transparentCubeGeo = new BoxGeometry({
-    width: TRANSPARENT_CUBE_SIZE,
-    height: TRANSPARENT_CUBE_SIZE,
-    depth: TRANSPARENT_CUBE_SIZE,
+  const coloredCubeGeo = new BoxGeometry({
+    width: COLORED_CUBE_SIZE,
+    height: COLORED_CUBE_SIZE,
+    depth: COLORED_CUBE_SIZE,
   })
 
-  const transparentColors: [number, number, number][] = [
+  const cubeColors: [number, number, number][] = [
     [1.0, 0.2, 0.2], // red
     [0.2, 1.0, 0.3], // green
     [0.2, 0.4, 1.0], // blue
@@ -278,29 +278,25 @@ export const main = async (canvas: HTMLCanvasElement) => {
     [1.0, 1.0, 1.0], // white
   ]
 
-  const transparentCubes: Mesh[] = []
-  const transparentAxes: Float32Array[] = []
-  const transparentSpeeds: number[] = []
+  const coloredCubes: Mesh[] = []
+  const coloredAxes: Float32Array[] = []
+  const coloredSpeeds: number[] = []
 
-  for (let i = 0; i < TRANSPARENT_COUNT; i++) {
-    const angle = (i / TRANSPARENT_COUNT) * Math.PI * 2
-    const mat = new LambertMaterial({ color: transparentColors[i]!, opacity: 0.4 })
-    const mesh = new Mesh(transparentCubeGeo, mat)
-    mesh.setPosition(
-      Math.cos(angle) * TRANSPARENT_RING_RADIUS,
-      Math.sin(angle) * TRANSPARENT_RING_RADIUS,
-      TRANSPARENT_Z,
-    )
+  for (let i = 0; i < COLORED_COUNT; i++) {
+    const angle = (i / COLORED_COUNT) * Math.PI * 2
+    const mat = new LambertMaterial({ color: cubeColors[i]! })
+    const mesh = new Mesh(coloredCubeGeo, mat)
+    mesh.setPosition(Math.cos(angle) * COLORED_RING_RADIUS, Math.sin(angle) * COLORED_RING_RADIUS, COLORED_Z)
     scene.add(mesh)
-    transparentCubes.push(mesh)
+    coloredCubes.push(mesh)
 
     // Each cube gets a unique rotation axis and speed
     const ax = Math.random() - 0.5
     const ay = Math.random() - 0.5
     const az = Math.random() - 0.5
     const len = Math.sqrt(ax * ax + ay * ay + az * az)
-    transparentAxes.push(new Float32Array([ax / len, ay / len, az / len]))
-    transparentSpeeds.push(1.5 + Math.random() * 2.0)
+    coloredAxes.push(new Float32Array([ax / len, ay / len, az / len]))
+    coloredSpeeds.push(1.5 + Math.random() * 2.0)
   }
 
   // ─── Stats overlay ────────────────────────────────────────────
@@ -351,10 +347,10 @@ export const main = async (canvas: HTMLCanvasElement) => {
       quatFromAxisAngle(cube.rotation, cubeAxis, elapsed)
       cube.markTransformDirty()
 
-      // Rotate transparent cubes individually
-      for (let i = 0; i < transparentCubes.length; i++) {
-        quatFromAxisAngle(transparentCubes[i]!.rotation, transparentAxes[i]!, elapsed * transparentSpeeds[i]!)
-        transparentCubes[i]!.markTransformDirty()
+      // Rotate colored cubes individually
+      for (let i = 0; i < coloredCubes.length; i++) {
+        quatFromAxisAngle(coloredCubes[i]!.rotation, coloredAxes[i]!, elapsed * coloredSpeeds[i]!)
+        coloredCubes[i]!.markTransformDirty()
       }
     },
     { priority: -1 },

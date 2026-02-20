@@ -12,7 +12,6 @@ const mockMesh = (opts: {
   y: number
   z: number
   materialId: number
-  transparent?: boolean
   materialType?: 'basic' | 'lambert'
 }): Mesh => {
   const wm = mat4Create()
@@ -24,7 +23,6 @@ const mockMesh = (opts: {
     _worldMatrix: wm,
     material: {
       _id: opts.materialId,
-      transparent: opts.transparent ?? false,
       type: opts.materialType ?? 'basic',
     },
     skeleton: null,
@@ -70,22 +68,7 @@ describe('sortMeshes', () => {
     // Should not throw
   })
 
-  test('sorts opaque before transparent', () => {
-    const state = createSortState(10)
-    const meshes = [
-      mockMesh({ x: 5, y: 0, z: 0, materialId: 1, transparent: true }),
-      mockMesh({ x: 5, y: 0, z: 0, materialId: 1, transparent: false }),
-    ]
-    const camera = mockCamera(0, 0, 0, 100)
-    sortMeshes(state, meshes, 2, camera)
-
-    // Read sorted order from state.indices
-    const sorted = Array.from(state.indices.subarray(0, 2)).map(i => meshes[i]!)
-    expect(sorted[0]!.material.transparent).toBe(false)
-    expect(sorted[1]!.material.transparent).toBe(true)
-  })
-
-  test('sorts opaque nearest-first', () => {
+  test('sorts nearest-first', () => {
     const state = createSortState(10)
     // Same material so depth is the tiebreaker
     const meshes = [
@@ -98,26 +81,9 @@ describe('sortMeshes', () => {
 
     const sorted = Array.from(state.indices.subarray(0, 3)).map(i => meshes[i]!)
     const distances = sorted.map(m => m._worldMatrix[12]!)
-    // Nearest first for opaque
+    // Nearest first
     expect(distances[0]).toBeLessThanOrEqual(distances[1]!)
     expect(distances[1]).toBeLessThanOrEqual(distances[2]!)
-  })
-
-  test('sorts transparent farthest-first', () => {
-    const state = createSortState(10)
-    const meshes = [
-      mockMesh({ x: 5, y: 0, z: 0, materialId: 1, transparent: true }),
-      mockMesh({ x: 50, y: 0, z: 0, materialId: 1, transparent: true }),
-      mockMesh({ x: 25, y: 0, z: 0, materialId: 1, transparent: true }),
-    ]
-    const camera = mockCamera(0, 0, 0, 100)
-    sortMeshes(state, meshes, 3, camera)
-
-    const sorted = Array.from(state.indices.subarray(0, 3)).map(i => meshes[i]!)
-    const distances = sorted.map(m => m._worldMatrix[12]!)
-    // Farthest first for transparent
-    expect(distances[0]).toBeGreaterThanOrEqual(distances[1]!)
-    expect(distances[1]).toBeGreaterThanOrEqual(distances[2]!)
   })
 
   test('groups by pipeline (lambert vs basic)', () => {
@@ -133,7 +99,7 @@ describe('sortMeshes', () => {
 
     const sorted = Array.from(state.indices.subarray(0, 4)).map(i => meshes[i]!)
     const types = sorted.map(m => m.material.type)
-    // Basic (0) should come before lambert (1) within same layer
+    // Basic (0) should come before lambert (1)
     expect(types[0]).toBe('basic')
     expect(types[1]).toBe('basic')
     expect(types[2]).toBe('lambert')
