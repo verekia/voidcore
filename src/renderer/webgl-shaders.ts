@@ -11,19 +11,14 @@
 //   Basic            – Flat unlit color (no lighting calculations).
 //   Basic Skinned    – Flat unlit color with skeletal deformation.
 //
-// Plus transparent variants for WBOIT (Weighted Blended Order-Independent Transparency):
-//   Lambert Transparent – Same lighting as lambert, but outputs to OIT accumulation/reveal MRT.
-//   Basic Transparent   – Same as basic, but outputs to OIT accumulation/reveal MRT.
-//
 // Plus two shadow depth shaders (depth-only, used to render the shadow map):
 //   Shadow Depth         – Writes depth from light's perspective (static meshes).
 //   Shadow Depth Skinned – Same but with skeletal deformation.
 //
-// Plus four post-processing shaders (fullscreen triangle, no vertex buffer needed):
+// Plus three post-processing shaders (fullscreen triangle, no vertex buffer needed):
 //   Bloom Downsample – 13-tap filter that progressively shrinks the emissive image.
 //                      First pass uses Karis average to prevent "firefly" artifacts.
 //   Bloom Upsample   – 9-tap tent filter that blurs back up, additively blending.
-//   OIT Composite    – Blends WBOIT transparent result over the resolved opaque color.
 //   Blit             – Combines the scene color + bloom and applies gamma correction.
 //
 // Data flow: CPU uploads uniform buffers (UBOs) with matrices and light info. The vertex
@@ -279,13 +274,11 @@ ${SHADOW_FUNCTIONS}
 void main() {
   vec3 normal = normalize(v_normal);
   vec3 baseColor = u_baseColor;
-  float alpha = u_opacity;
   vec3 emissive = vec3(0.0);
 
   if (u_hasPalette) {
     int idx = clamp(v_materialIndex, 0, 31);
     baseColor = u_palette[idx].color.rgb;
-    alpha = u_palette[idx].color.a;
     emissive = u_palette[idx].emissive.rgb * u_palette[idx].emissive.a;
   }
 
@@ -297,8 +290,8 @@ void main() {
   vec3 litColor = baseColor * (ambient + diffuse);
   vec3 finalColor = litColor + emissive;
 
-  fragColor = vec4(finalColor, alpha);
-  fragEmissive = vec4(emissive, 1.0);
+  fragColor = vec4(finalColor, u_opacity);
+  fragEmissive = vec4(emissive * u_opacity, u_opacity);
 }
 `
 
@@ -397,120 +390,7 @@ layout(location = 1) out vec4 fragEmissive;
 
 void main() {
   fragColor = vec4(u_baseColor, u_opacity);
-  fragEmissive = vec4(0.0, 0.0, 0.0, 1.0);
-}
-`
-
-// ─── Transparent shaders (WBOIT) ────────────────────────────────────
-
-export const LAMBERT_TRANSPARENT_FRAG = `#version 300 es
-precision highp float;
-
-in vec3 v_worldPos;
-in vec3 v_normal;
-in vec2 v_uv;
-flat in int v_materialIndex;
-
-struct PaletteEntry {
-  vec4 color;    // xyz = RGB, w = opacity
-  vec4 emissive; // xyz = RGB, w = emissiveIntensity
-};
-
-${FRAME_BLOCK}
-
-uniform vec3 u_baseColor;
-uniform float u_opacity;
-uniform bool u_hasPalette;
-uniform PaletteEntry u_palette[32];
-uniform highp sampler2DArrayShadow u_shadowMap;
-uniform bool u_receiveShadow;
-
-layout(location = 0) out vec4 oitAccum;
-layout(location = 1) out vec4 oitReveal;
-
-${SHADOW_FUNCTIONS}
-
-void main() {
-  vec3 normal = normalize(v_normal);
-  vec3 baseColor = u_baseColor;
-  float alpha = u_opacity;
-  vec3 emissive = vec3(0.0);
-
-  if (u_hasPalette) {
-    int idx = clamp(v_materialIndex, 0, 31);
-    baseColor = u_palette[idx].color.rgb;
-    alpha = u_palette[idx].color.a;
-    emissive = u_palette[idx].emissive.rgb * u_palette[idx].emissive.a;
-  }
-
-  vec3 ambient = u_ambientColor * u_ambientIntensity;
-  float NdotL = max(dot(normal, u_lightDirection), 0.0);
-  float shadow = u_receiveShadow ? sampleShadow(v_worldPos, NdotL) : 1.0;
-  vec3 diffuse = u_lightColor * u_lightIntensity * NdotL * shadow;
-
-  vec3 litColor = baseColor * (ambient + diffuse);
-  vec3 color = litColor + emissive;
-
-  // WBOIT weight function
-  float z = gl_FragCoord.z;
-  float w = alpha * clamp(0.03 / (1e-5 + pow(z / 200.0, 4.0)), 1e-2, 3e3);
-
-  oitAccum = vec4(color * alpha * w, alpha * w);
-  oitReveal = vec4(alpha, 0.0, 0.0, alpha);
-}
-`
-
-export const BASIC_TRANSPARENT_FRAG = `#version 300 es
-precision mediump float;
-
-in vec2 v_uv;
-
-uniform vec3 u_baseColor;
-uniform float u_opacity;
-
-layout(location = 0) out vec4 oitAccum;
-layout(location = 1) out vec4 oitReveal;
-
-void main() {
-  vec3 color = u_baseColor;
-  float alpha = u_opacity;
-
-  // WBOIT weight function
-  float z = gl_FragCoord.z;
-  float w = alpha * clamp(0.03 / (1e-5 + pow(z / 200.0, 4.0)), 1e-2, 3e3);
-
-  oitAccum = vec4(color * alpha * w, alpha * w);
-  oitReveal = vec4(alpha, 0.0, 0.0, alpha);
-}
-`
-
-export const OIT_COMPOSITE_FRAG = `#version 300 es
-precision highp float;
-
-in vec2 v_uv;
-
-uniform sampler2D u_accumTexture;
-uniform sampler2D u_revealTexture;
-uniform sampler2D u_opaqueTexture;
-
-out vec4 fragColor;
-
-void main() {
-  vec4 accum = texture(u_accumTexture, v_uv);
-  float reveal = texture(u_revealTexture, v_uv).r;
-
-  // No transparent fragments — keep opaque color
-  if (accum.a < 1e-5) {
-    fragColor = texture(u_opaqueTexture, v_uv);
-    return;
-  }
-
-  vec3 avgColor = accum.rgb / max(accum.a, 1e-5);
-  vec3 opaqueColor = texture(u_opaqueTexture, v_uv).rgb;
-
-  // Blend transparent over opaque
-  vec3 result = avgColor * (1.0 - reveal) + opaqueColor * reveal;
-  fragColor = vec4(result, 1.0);
+  fragEmissive = vec4(0.0, 0.0, 0.0, u_opacity);
 }
 `
 
