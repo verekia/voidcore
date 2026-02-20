@@ -25,6 +25,9 @@
 // computeShadowMatrix() – Builds the light-space view-projection matrix for the shadow map.
 //   Both renderers share the same logic; the only difference is the orthographic
 //   projection function (mat4Ortho for WebGL2 [-1,1] depth, mat4OrthoZO for WebGPU [0,1]).
+//   The shadow volume is a fixed ortho box centered at the world origin, oriented along
+//   the light direction. Size and depth are configured on the DirectionalLight itself
+//   (shadowMapSize, shadowNear, shadowFar). The camera has no involvement.
 
 import {
   aabbTransform,
@@ -40,7 +43,6 @@ import {
 import { Mesh } from '../scene/mesh'
 
 import type { AABB, Mat4, Vec3 } from '../math/index'
-import type { PerspectiveCamera } from '../scene/camera'
 import type { AmbientLight, DirectionalLight } from '../scene/light'
 import type { Node } from '../scene/node'
 import type { SortState } from './sort'
@@ -167,133 +169,49 @@ export const computeLightDir = (
 
 /** Scratch buffers for shadow computation — avoids per-call allocation. */
 const _csCenter: Vec3 = new Float32Array(3) as unknown as Vec3
-const _csCorner: Vec3 = new Float32Array(3) as unknown as Vec3
-const _csCorners = new Float32Array(24)
+const _csEye: Vec3 = new Float32Array(3) as unknown as Vec3
+const _csSnap: Vec3 = new Float32Array(3) as unknown as Vec3
 
 /** Build the light-space view-projection matrix for the shadow map. */
 export const computeShadowMatrix = (
   shadowVP: Mat4,
-  camera: PerspectiveCamera,
   lightDir: Vec3,
-  shadowBackExtend: number,
+  shadowMapSize: number,
+  shadowNear: number,
+  shadowFar: number,
   shadowResolution: number,
   lightView: Mat4,
   lightProj: Mat4,
   orthoFn: (out: Mat4, left: number, right: number, bottom: number, top: number, near: number, far: number) => void,
 ): void => {
-  // Extract camera basis from _viewMatrix (correct even when orbit controls
-  // bypass the node's rotation quaternion). View matrix rows = camera axes.
-  const V = camera._viewMatrix
-  const rx = V[0]!,
-    ry = V[4]!,
-    rz = V[8]! // right (row 0)
-  const ux = V[1]!,
-    uy = V[5]!,
-    uz = V[9]! // up (row 1)
-  const fx = -V[2]!,
-    fy = -V[6]!,
-    fz = -V[10]! // forward = -row2 (camera looks along -Z in view space)
-  const px = camera.position[0]!,
-    py = camera.position[1]!,
-    pz = camera.position[2]!
+  // Center = world origin (the directional light always looks at origin)
+  vec3Set(_csCenter, 0, 0, 0)
 
-  const nearDist = camera.near
-  const farDist = camera.far
-  const fovY = camera.fov * (Math.PI / 180)
-  const aspect = camera.aspect
-
-  const nearH = Math.tan(fovY / 2) * nearDist
-  const nearW = nearH * aspect
-  const farH = Math.tan(fovY / 2) * farDist
-  const farW = farH * aspect
-
-  // 8 frustum corners written into pre-allocated Float32Array (zero allocation)
-  // Order: 4 near + 4 far, each bottom-left, bottom-right, top-right, top-left
-  const corners = _csCorners
-  // Near
-  corners[0] = px + fx * nearDist - rx * nearW - ux * nearH
-  corners[1] = py + fy * nearDist - ry * nearW - uy * nearH
-  corners[2] = pz + fz * nearDist - rz * nearW - uz * nearH
-  corners[3] = px + fx * nearDist + rx * nearW - ux * nearH
-  corners[4] = py + fy * nearDist + ry * nearW - uy * nearH
-  corners[5] = pz + fz * nearDist + rz * nearW - uz * nearH
-  corners[6] = px + fx * nearDist + rx * nearW + ux * nearH
-  corners[7] = py + fy * nearDist + ry * nearW + uy * nearH
-  corners[8] = pz + fz * nearDist + rz * nearW + uz * nearH
-  corners[9] = px + fx * nearDist - rx * nearW + ux * nearH
-  corners[10] = py + fy * nearDist - ry * nearW + uy * nearH
-  corners[11] = pz + fz * nearDist - rz * nearW + uz * nearH
-  // Far
-  corners[12] = px + fx * farDist - rx * farW - ux * farH
-  corners[13] = py + fy * farDist - ry * farW - uy * farH
-  corners[14] = pz + fz * farDist - rz * farW - uz * farH
-  corners[15] = px + fx * farDist + rx * farW - ux * farH
-  corners[16] = py + fy * farDist + ry * farW - uy * farH
-  corners[17] = pz + fz * farDist + rz * farW - uz * farH
-  corners[18] = px + fx * farDist + rx * farW + ux * farH
-  corners[19] = py + fy * farDist + ry * farW + uy * farH
-  corners[20] = pz + fz * farDist + rz * farW + uz * farH
-  corners[21] = px + fx * farDist - rx * farW + ux * farH
-  corners[22] = py + fy * farDist - ry * farW + uy * farH
-  corners[23] = pz + fz * farDist - rz * farW + uz * farH
-
-  // Frustum center
-  let cx = 0,
-    cy = 0,
-    cz = 0
-  for (let i = 0; i < 24; i += 3) {
-    cx += corners[i]!
-    cy += corners[i + 1]!
-    cz += corners[i + 2]!
-  }
-  cx /= 8
-  cy /= 8
-  cz /= 8
-
-  // Light view matrix
-  vec3Set(_csCenter, cx, cy, cz)
-  const offset = shadowBackExtend + farDist
-  vec3Set(_csCorner, cx + lightDir[0]! * offset, cy + lightDir[1]! * offset, cz + lightDir[2]! * offset)
+  // Eye = placed behind the scene along the light direction at shadowFar distance
+  vec3Set(_csEye, lightDir[0]! * shadowFar, lightDir[1]! * shadowFar, lightDir[2]! * shadowFar)
 
   // Use VEC3_RIGHT as up when light is nearly vertical (Z-up system)
   const upVec = Math.abs(lightDir[2]!) > 0.99 ? VEC3_RIGHT : VEC3_UP
-  mat4LookAt(lightView, _csCorner, _csCenter, upVec)
+  mat4LookAt(lightView, _csEye, _csCenter, upVec)
 
-  // Transform corners to light space, compute tight AABB
-  let minX = Infinity,
-    minY = Infinity,
-    minZ = Infinity
-  let maxX = -Infinity,
-    maxY = -Infinity,
-    maxZ = -Infinity
+  // Texel snapping: transform center to light space, snap XY to texel grid
+  vec3TransformMat4(_csSnap, _csCenter, lightView)
+  const texelSize = shadowMapSize / shadowResolution
+  const snappedX = Math.floor(_csSnap[0]! / texelSize) * texelSize
+  const snappedY = Math.floor(_csSnap[1]! / texelSize) * texelSize
 
-  for (let i = 0; i < 24; i += 3) {
-    vec3Set(_csCorner, corners[i]!, corners[i + 1]!, corners[i + 2]!)
-    vec3TransformMat4(_csCorner, _csCorner, lightView)
-    const lx = _csCorner[0]!
-    const ly = _csCorner[1]!
-    const lz = _csCorner[2]!
-    if (lx < minX) minX = lx
-    if (lx > maxX) maxX = lx
-    if (ly < minY) minY = ly
-    if (ly > maxY) maxY = ly
-    if (lz < minZ) minZ = lz
-    if (lz > maxZ) maxZ = lz
-  }
-
-  // Back-extend minZ to catch casters behind the frustum
-  minZ -= shadowBackExtend
-
-  // Texel snapping to prevent shadow edge shimmering
-  const texelSizeX = (maxX - minX) / shadowResolution
-  const texelSizeY = (maxY - minY) / shadowResolution
-  minX = Math.floor(minX / texelSizeX) * texelSizeX
-  maxX = Math.ceil(maxX / texelSizeX) * texelSizeX
-  minY = Math.floor(minY / texelSizeY) * texelSizeY
-  maxY = Math.ceil(maxY / texelSizeY) * texelSizeY
+  const halfSize = shadowMapSize / 2
 
   // Orthographic projection (depth range depends on backend)
-  orthoFn(lightProj, minX, maxX, minY, maxY, -maxZ, -minZ)
+  orthoFn(
+    lightProj,
+    snappedX - halfSize,
+    snappedX + halfSize,
+    snappedY - halfSize,
+    snappedY + halfSize,
+    shadowNear,
+    shadowFar * 2,
+  )
 
   // Final shadow VP = proj * view
   mat4Multiply(shadowVP, lightProj, lightView)

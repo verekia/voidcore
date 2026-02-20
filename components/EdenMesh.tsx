@@ -1,7 +1,7 @@
-import { useMemo } from 'react'
+import { Suspense, useMemo } from 'react'
 
 import { LambertMaterial, mergeGeometries, prebuildBVH } from '../src/index'
-import { useGLTF, useKTX2 } from '../src/react/index'
+import { BakeShadows, useGLTF, useKTX2 } from '../src/react/index'
 import { staticBundleSrc, cityAoSrc } from './assets'
 
 const EDEN_COLORS: [number, number, number][] = [
@@ -54,7 +54,12 @@ const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
     }
   }, [gltf, aoTexture, onReady])
 
-  return <mesh geometry={geometry} material={material} name="eden" castShadow receiveShadow position={[-50, -70, 0]} />
+  return (
+    <Suspense fallback={null}>
+      <mesh geometry={geometry} material={material} name="eden" castShadow receiveShadow position={[-50, -70, 0]} />
+      <BakeShadows />
+    </Suspense>
+  )
 }
 
 export default EdenMesh

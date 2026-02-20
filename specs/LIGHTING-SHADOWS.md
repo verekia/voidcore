@@ -23,15 +23,20 @@ vec3 finalColor = litColor + emissive;    // Emissive is additive, unaffected by
 
 ### Directional Light (Scene Node)
 
-A regular scene graph node. Direction derived from the node's world rotation (default: pointing down -Z in local space, transformed by world rotation).
+A regular scene graph node. Direction derived from the node's world position (treated as a direction vector — like the sun, infinitely far away). Shadow configuration lives on the light itself.
 
 ```typescript
-const sun = createDirectionalLight({
+const sun = new DirectionalLight({
   color: [1, 1, 0.95], // Warm white
   intensity: 1.0,
   castShadow: true,
+  shadowMapSize: 200, // World-space ortho box size (default 200)
+  shadowNear: 1, // Near clip plane (default 1)
+  shadowFar: 300, // Far clip / eye offset distance (default 300)
+  shadowBias: 0.001, // Constant depth bias (default 0.001)
+  shadowSlopeBias: 0.005, // Slope-dependent bias (default 0.005)
 })
-sun.position.set(50, 50, 100) // Position affects shadow map framing
+sun.setPosition(50, 50, 100) // Direction only — shadow volume is always at world origin
 scene.add(sun)
 ```
 
@@ -79,7 +84,7 @@ WebGL2 layout is similar but uses std140 alignment (208 bytes / 52 floats), with
 
 ### Single Shadow Map
 
-A single depth texture covering the full camera frustum, with sufficient quality for small-to-medium low-poly worlds.
+A single depth texture covering a fixed orthographic volume centered at the world origin, oriented along the light direction. Camera-independent — shadow quality is consistent regardless of where the camera is looking. Sufficient quality for small-to-medium low-poly worlds.
 
 ### Shadow Map Resolution
 
@@ -107,49 +112,42 @@ const shadowMap = device.createTexture({
 
 ### Shadow Matrix Computation
 
-1. Extract the 8 camera frustum corners in world space
-2. Compute the frustum center
-3. Build a light view matrix via `mat4LookAt()` targeting the frustum center
-4. Transform all corners to light space
-5. Compute a tight AABB around the corners in light space
-6. Back-extend minZ by `backExtend` (default 75) to catch shadow casters behind the camera
-7. Apply texel snapping to prevent shimmer
-8. Build an orthographic projection from the snapped AABB
+The shadow volume is a fixed orthographic box centered at the world origin, oriented along the light direction. The camera has no involvement — shadow quality is consistent regardless of camera position.
+
+1. Center = world origin `[0, 0, 0]`
+2. Eye = `lightDir × shadowFar` (placed behind the scene along light direction)
+3. Build light view matrix via `mat4LookAt(eye, center, up)`
+4. Transform center to light space, snap XY to texel grid (`shadowMapSize / shadowResolution`)
+5. Build orthographic projection: `snappedXY ± halfSize`, near = `shadowNear`, far = `shadowFar × 2`
+6. `shadowVP = lightProj × lightView`
 
 ```typescript
-const frustumCorners = getFrustumCornersWorldSpace(camera)
-const center = computeFrustumCenter(frustumCorners)
-const lightView = mat4LookAt(lightViewMatrix, center, center + lightDir, VEC3_UP)
-const { minX, maxX, minY, maxY, minZ, maxZ } = computeAABBInLightSpace(frustumCorners, lightView)
+const center = [0, 0, 0] // World origin
+const eye = [lightDir[0] * shadowFar, lightDir[1] * shadowFar, lightDir[2] * shadowFar]
+const lightView = mat4LookAt(lightViewMatrix, eye, center, VEC3_UP)
 
-// Back-extend to catch casters behind camera
+// Texel snapping to prevent shadow shimmer
+const texelSize = shadowMapSize / shadowResolution
+const snappedX = Math.floor(centerInLightSpace.x / texelSize) * texelSize
+const snappedY = Math.floor(centerInLightSpace.y / texelSize) * texelSize
+
+const halfSize = shadowMapSize / 2
 const lightProj = mat4OrthoZO(
   // [0,1] depth for WebGPU, [-1,1] for WebGL2
   lightProjMatrix,
-  snappedMinX,
-  snappedMaxX,
-  snappedMinY,
-  snappedMaxY,
-  minZ - backExtend,
-  maxZ,
+  snappedX - halfSize,
+  snappedX + halfSize,
+  snappedY - halfSize,
+  snappedY + halfSize,
+  shadowNear,
+  shadowFar * 2,
 )
 shadowVP = mat4Multiply(result, lightProj, lightView)
 ```
 
 ### Texel Snapping
 
-Prevent shadow shimmer/swimming during camera movement:
-
-```typescript
-const texelSizeX = (maxX - minX) / shadowResolution
-const texelSizeY = (maxY - minY) / shadowResolution
-minX = Math.floor(minX / texelSizeX) * texelSizeX
-maxX = Math.ceil(maxX / texelSizeX) * texelSizeX
-minY = Math.floor(minY / texelSizeY) * texelSizeY
-maxY = Math.ceil(maxY / texelSizeY) * texelSizeY
-```
-
-Snaps the light projection to texel boundaries so the shadow map doesn't sub-pixel-shift when the camera moves.
+Prevents shadow shimmer by snapping the light projection to texel boundaries. Since the shadow volume is fixed at the world origin (camera-independent), shimmer is minimal — snapping handles sub-texel alignment.
 
 ### PCF Filtering
 
@@ -215,19 +213,42 @@ Objects with `castShadow: false` are skipped during shadow pass rendering. Objec
 
 ## Configuration API
 
+Shadow configuration is split between the renderer (GPU texture) and the light (scene-level):
+
 ```typescript
+// Renderer config: only texture resolution (GPU resource, set at init)
 const engine = await Engine.create(canvas, {
   shadows: {
     enabled: true,
-    resolution: 2048, // Shadow map size (default 2048)
-    backExtend: 75, // Frustum back extension in world units
-    constantBias: 0.001, // Constant depth bias
-    slopeBias: 0.005, // Slope-scaled depth bias
+    resolution: 2048, // Shadow map texture size in pixels (default 2048)
   },
 })
 
 // Boolean shorthand uses all defaults:
 const engine = await Engine.create(canvas, { shadows: true })
+
+// Light config: ortho box size, depth range, and bias (scene-level, can change at runtime)
+const light = new DirectionalLight({
+  castShadow: true,
+  shadowMapSize: 200, // World-space ortho box size (default 200)
+  shadowNear: 1, // Near clip plane (default 1)
+  shadowFar: 300, // Far clip / eye offset distance (default 300)
+  shadowBias: 0.001, // Constant depth bias (default 0.001)
+  shadowSlopeBias: 0.005, // Slope-dependent bias (default 0.005)
+})
+```
+
+### Shadow Baking
+
+For static scenes where neither the light nor shadow-casting objects move, the shadow map can be frozen after the first render:
+
+```typescript
+// Imperative
+engine.shadowsBaked = true   // Freeze
+engine.shadowsBaked = false  // Resume real-time
+
+// React
+<BakeShadows />  // Mount to freeze, unmount to resume
 ```
 
 ## Performance Budget

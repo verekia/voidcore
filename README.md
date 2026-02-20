@@ -12,7 +12,7 @@ A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 sup
 - **KTX2 textures** – Load Basis Universal compressed textures via WASM transcoder
 - **Material system** – Basic (unlit) and Lambert (diffuse) shading with palette support, opacity, transparency, color maps, and AO maps
 - **Sorted alpha blending** – Back-to-front transparent mesh rendering with premultiplied alpha (WebGPU)
-- **Shadow maps** – Single shadow map with PCF 3×3 filtering
+- **Shadow maps** – Single shadow map with PCF 3×3 filtering, light-owned configuration, shadow baking for static scenes
 - **Bloom post-processing** – Multi-level downsample/upsample with Karis average
 - **Frustum culling** – AABB-based visibility culling with Gribb-Hartmann plane extraction
 - **Raycasting** – BVH-accelerated ray-mesh intersection for mouse picking
@@ -47,7 +47,7 @@ camera.setPosition(5, 5, 5)
 const box = new Mesh(new BoxGeometry(), new LambertMaterial({ color: [0.8, 0.2, 0.3] }))
 scene.add(box)
 
-const light = new DirectionalLight({ intensity: 1.5 })
+const light = new DirectionalLight({ intensity: 1.5, castShadow: true, shadowMapSize: 200 })
 light.setPosition(5, 5, 10)
 scene.add(light)
 
@@ -107,7 +107,7 @@ const App = () => (
     camera={{ fov: 55, position: [0, -10, 5] }}
     ambientLight={{ color: [0.5, 0.5, 0.6], intensity: 0.4 }}
   >
-    <directionalLight args={[{ intensity: 1.2 }]} position={[5, 5, 10]} castShadow />
+    <directionalLight args={[{ intensity: 1.2 }]} position={[5, 5, 10]} castShadow shadowMapSize={200} />
     <RotatingBox />
   </Canvas>
 )

@@ -45,6 +45,9 @@ export { Raycaster, buildMeshBVH, prebuildBVH, type RaycastHit } from './raycast
 export { loadGLTF } from './loaders/gltf'
 export { loadKTX2 } from './loaders/ktx2'
 
+// Helpers
+export { DirectionalLightHelper } from './helpers/directional-light-helper'
+
 // Overlay
 export { createOverlayManager, type OverlayHandle, type OverlayOptions } from './overlay'
 

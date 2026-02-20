@@ -223,9 +223,8 @@ export class WebGPURenderer implements Renderer {
   // Shadow config
   private shadowEnabled: boolean
   private shadowResolution: number
-  private shadowBackExtend: number
-  private shadowConstantBias: number
-  private shadowSlopeBias: number
+  shadowsBaked = false
+  private _shadowIsBaked = false
 
   // Shadow GPU resources
   private shadowTexture: GPUTexture | null = null
@@ -369,9 +368,6 @@ export class WebGPURenderer implements Renderer {
     bloomLevels: number,
     shadowEnabled: boolean,
     shadowResolution: number,
-    shadowBackExtend: number,
-    shadowConstantBias: number,
-    shadowSlopeBias: number,
     shadowBGL: GPUBindGroupLayout,
     shadowSkinnedBGL: GPUBindGroupLayout,
     shadowPipeline: GPURenderPipeline,
@@ -415,9 +411,6 @@ export class WebGPURenderer implements Renderer {
     // Shadow config
     this.shadowEnabled = shadowEnabled
     this.shadowResolution = shadowResolution
-    this.shadowBackExtend = shadowBackExtend
-    this.shadowConstantBias = shadowConstantBias
-    this.shadowSlopeBias = shadowSlopeBias
     this.shadowBGL = shadowBGL
     this.shadowSkinnedBGL = shadowSkinnedBGL
     this.shadowPipeline = shadowPipeline
@@ -688,29 +681,17 @@ export class WebGPURenderer implements Renderer {
     // ─── Shadow config ────────────────────────────────────────────
     let shadowEnabled: boolean
     let shadowResolution: number
-    let shadowBackExtend: number
-    let shadowConstantBias: number
-    let shadowSlopeBias: number
 
     const shadowConfig = config.shadows
     if (!shadowConfig) {
       shadowEnabled = false
       shadowResolution = 2048
-      shadowBackExtend = 75
-      shadowConstantBias = 0.001
-      shadowSlopeBias = 0.005
     } else if (typeof shadowConfig === 'object') {
       shadowEnabled = shadowConfig.enabled !== false
       shadowResolution = shadowConfig.resolution ?? 2048
-      shadowBackExtend = shadowConfig.backExtend ?? 75
-      shadowConstantBias = shadowConfig.constantBias ?? 0.001
-      shadowSlopeBias = shadowConfig.slopeBias ?? 0.005
     } else {
       shadowEnabled = true
       shadowResolution = 2048
-      shadowBackExtend = 75
-      shadowConstantBias = 0.001
-      shadowSlopeBias = 0.005
     }
 
     // ─── Shader modules ────────────────────────────────────────────
@@ -1059,9 +1040,6 @@ export class WebGPURenderer implements Renderer {
       bloomLevels,
       shadowEnabled,
       shadowResolution,
-      shadowBackExtend,
-      shadowConstantBias,
-      shadowSlopeBias,
       shadowBGL,
       shadowSkinnedBGL,
       shadowPipeline,
@@ -1482,12 +1460,13 @@ export class WebGPURenderer implements Renderer {
 
   // ─── Shadow map computation ─────────────────────────────────────
 
-  private _computeShadowMatrix(camera: PerspectiveCamera, lightDir: Vec3): void {
+  private _computeShadowMatrix(dirLight: DirectionalLight, lightDir: Vec3): void {
     computeShadowMatrix(
       this._shadowVP,
-      camera,
       lightDir,
-      this.shadowBackExtend,
+      dirLight.shadowMapSize,
+      dirLight.shadowNear,
+      dirLight.shadowFar,
       this.shadowResolution,
       this._shadowLightView,
       this._shadowLightProj,
@@ -1543,7 +1522,7 @@ export class WebGPURenderer implements Renderer {
 
     this._frameNum++
     const frameNum = this._frameNum
-    const shadowActive = this.shadowEnabled && !!dirLight
+    const shadowActive = this.shadowEnabled && !!dirLight && dirLight.castShadow
 
     let drawCalls = 0
     let shadowDrawCalls = 0
@@ -1554,7 +1533,7 @@ export class WebGPURenderer implements Renderer {
     // casters in the same pass as camera-visible meshes.
     let shadowFrustum: Float32Array | null = null
     if (shadowActive) {
-      this._computeShadowMatrix(camera, lightDir)
+      this._computeShadowMatrix(dirLight!, lightDir)
       frustumFromViewProjection(this._shadowFrustumPlanes, this._shadowVP)
       shadowFrustum = this._shadowFrustumPlanes
     }
@@ -1704,8 +1683,8 @@ export class WebGPURenderer implements Renderer {
     fd[27] = shadowActive ? 1.0 : 0.0
     if (shadowActive) {
       fd.set(this._shadowVP, 28)
-      fd[44] = this.shadowConstantBias
-      fd[45] = this.shadowSlopeBias
+      fd[44] = dirLight!.shadowBias
+      fd[45] = dirLight!.shadowSlopeBias
       fd[46] = 1.0 / this.shadowResolution
     }
     this.device.queue.writeBuffer(this.frameUB, 0, fd.buffer, fd.byteOffset, fd.byteLength)
@@ -1715,8 +1694,11 @@ export class WebGPURenderer implements Renderer {
 
     const encoder = this.device.createCommandEncoder()
 
+    // ─── Shadow baking ──────────────────────────────────────────────
+    if (!this.shadowsBaked) this._shadowIsBaked = false
+
     // ─── Shadow render pass (single depth-only pass) ──────────────
-    if (shadowActive) {
+    if (shadowActive && !(this.shadowsBaked && this._shadowIsBaked)) {
       const shadowPass = encoder.beginRenderPass(this._shadowPassDesc)
 
       // Light-space frustum culling: project mesh center, skip if outside
@@ -1793,6 +1775,7 @@ export class WebGPURenderer implements Renderer {
       }
 
       shadowPass.end()
+      this._shadowIsBaked = true
     }
 
     // ─── Scene pass (MSAA MRT): opaque then transparent ─────────
