@@ -1,8 +1,8 @@
 import { useMemo } from 'react'
 
 import { LambertMaterial, mergeGeometries } from '../src/index'
-import { useGLTF } from '../src/react/index'
-import { staticBundleSrc } from './assets'
+import { useGLTF, useKTX2 } from '../src/react/index'
+import { staticBundleSrc, cityAoSrc } from './assets'
 
 const EDEN_COLORS: [number, number, number][] = [
   [0.78, 0.44, 0.25],
@@ -41,14 +41,15 @@ const EDEN_PALETTE = EDEN_COLORS.map((color, i) => ({
 
 const EdenMesh = () => {
   const gltf = useGLTF(staticBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
+  const aoTexture = useKTX2(cityAoSrc, '/basis-1.50/')
 
   const { geometry, material } = useMemo(() => {
     const edenMeshes = gltf.meshes.filter(m => m.name === 'Eden')
     return {
       geometry: mergeGeometries(edenMeshes.map(m => m.geometry)),
-      material: new LambertMaterial({ palette: EDEN_PALETTE }),
+      material: new LambertMaterial({ palette: EDEN_PALETTE, aoMap: aoTexture }),
     }
-  }, [gltf])
+  }, [gltf, aoTexture])
 
   return <mesh geometry={geometry} material={material} name="eden" castShadow position={[-50, -70, 0]} />
 }

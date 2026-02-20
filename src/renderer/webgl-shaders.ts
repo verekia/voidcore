@@ -4,9 +4,10 @@
 //   Vertex shader   – Transforms 3D positions into screen coordinates.
 //   Fragment shader – Computes the final color of each pixel.
 //
-// This file contains four pairs of shaders:
+// This file contains five shader variants plus shadow depth shaders:
 //   Lambert          – Diffuse lighting (ambient + directional light × surface normal)
 //                      with cascaded shadow map sampling (PCF 3×3).
+//   Lambert Textured – Same as Lambert but also samples color map and AO map textures.
 //   Lambert Skinned  – Same lighting + shadows, but vertices are deformed by bone matrices.
 //   Basic            – Flat unlit color (no lighting calculations).
 //   Basic Skinned    – Flat unlit color with skeletal deformation.
@@ -328,6 +329,65 @@ void main() {
   v_uv = a_uv;
   v_materialIndex = int(a_materialIndex);
   gl_Position = u_viewProjection * skinnedPos;
+}
+`
+
+export const LAMBERT_TEXTURED_FRAG = `#version 300 es
+precision highp float;
+
+in vec3 v_worldPos;
+in vec3 v_normal;
+in vec2 v_uv;
+flat in int v_materialIndex;
+
+struct PaletteEntry {
+  vec4 color;    // xyz = RGB, w = opacity
+  vec4 emissive; // xyz = RGB, w = emissiveIntensity
+};
+
+${FRAME_BLOCK}
+
+uniform vec3 u_baseColor;
+uniform float u_opacity;
+uniform bool u_hasPalette;
+uniform PaletteEntry u_palette[32];
+uniform highp sampler2DArrayShadow u_shadowMap;
+uniform bool u_receiveShadow;
+uniform sampler2D u_colorMap;
+uniform sampler2D u_aoMap;
+
+layout(location = 0) out vec4 fragColor;
+layout(location = 1) out vec4 fragEmissive;
+
+${SHADOW_FUNCTIONS}
+
+void main() {
+  vec3 normal = normalize(v_normal);
+  vec3 baseColor = u_baseColor;
+  vec3 emissive = vec3(0.0);
+
+  if (u_hasPalette) {
+    int idx = clamp(v_materialIndex, 0, 31);
+    baseColor = u_palette[idx].color.rgb;
+    emissive = u_palette[idx].emissive.rgb * u_palette[idx].emissive.a;
+  }
+
+  // Sample texture maps (dummy white textures → identity when no map assigned)
+  vec3 texColor = texture(u_colorMap, v_uv).rgb;
+  baseColor *= texColor;
+
+  float ao = texture(u_aoMap, v_uv).r;
+  vec3 ambient = u_ambientColor * u_ambientIntensity * ao;
+
+  float NdotL = max(dot(normal, u_lightDirection), 0.0);
+  float shadow = u_receiveShadow ? sampleShadow(v_worldPos, NdotL) : 1.0;
+  vec3 diffuse = u_lightColor * u_lightIntensity * NdotL * shadow;
+
+  vec3 litColor = baseColor * (ambient + diffuse);
+  vec3 finalColor = litColor + emissive;
+
+  fragColor = vec4(finalColor, u_opacity);
+  fragEmissive = vec4(emissive * u_opacity, u_opacity);
 }
 `
 

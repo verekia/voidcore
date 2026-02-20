@@ -439,6 +439,196 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 }
 `
 
+// ─── Textured Lambert shaders (with color map + AO map sampling) ─────
+
+export const LAMBERT_TEXTURED_WGSL = /* wgsl */ `
+struct FrameUniforms {
+  viewProjection: mat4x4<f32>,
+  lightDir: vec3<f32>,
+  lightIntensity: f32,
+  lightColor: vec3<f32>,
+  ambientIntensity: f32,
+  ambientColor: vec3<f32>,
+  shadowEnabled: f32,
+  cascadeVP0: mat4x4<f32>,
+  cascadeVP1: mat4x4<f32>,
+  cascadeVP2: mat4x4<f32>,
+  cascadeSplits: vec3<f32>,
+  _pad0: f32,
+  constantBias: f32,
+  slopeBias: f32,
+  invMapSize: f32,
+  blendRange: f32,
+};
+
+struct PaletteEntry {
+  color: vec4<f32>,
+  emissive: vec4<f32>,
+};
+
+struct MaterialUniforms {
+  baseColor: vec3<f32>,
+  opacity: f32,
+  hasPalette: f32,
+  receiveShadow: f32,
+  palette: array<PaletteEntry, 32>,
+};
+
+struct ObjectUniforms {
+  worldMatrix: mat4x4<f32>,
+  normalMatrix: mat4x4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> frame: FrameUniforms;
+@group(0) @binding(1) var shadowMap: texture_depth_2d_array;
+@group(0) @binding(2) var shadowSampler: sampler_comparison;
+@group(1) @binding(0) var<uniform> material: MaterialUniforms;
+@group(2) @binding(0) var<uniform> object: ObjectUniforms;
+@group(3) @binding(0) var colorMapTexture: texture_2d<f32>;
+@group(3) @binding(1) var aoMapTexture: texture_2d<f32>;
+@group(3) @binding(2) var mapSampler: sampler;
+
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldPos: vec3<f32>,
+  @location(1) normal: vec3<f32>,
+  @location(2) uv: vec2<f32>,
+  @location(3) @interpolate(flat) materialIndex: i32,
+};
+
+@vertex
+fn vs_main(
+  @location(0) a_position: vec3<f32>,
+  @location(1) a_normal: vec3<f32>,
+  @location(2) a_uv: vec2<f32>,
+  @location(3) a_materialIndex: f32,
+) -> VertexOutput {
+  var out: VertexOutput;
+  let worldPos = object.worldMatrix * vec4<f32>(a_position, 1.0);
+  out.worldPos = worldPos.xyz;
+  out.normal = normalize((object.normalMatrix * vec4<f32>(a_normal, 0.0)).xyz);
+  out.uv = a_uv;
+  out.materialIndex = i32(a_materialIndex);
+  out.position = frame.viewProjection * worldPos;
+  return out;
+}
+
+fn pcf9(uv: vec2<f32>, cascade: i32, d: f32, ts: f32) -> f32 {
+  var s = 0.0;
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, -ts), cascade, d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, -ts), cascade, d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, -ts), cascade, d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, 0.0), cascade, d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv, cascade, d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, 0.0), cascade, d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, ts), cascade, d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, ts), cascade, d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, ts), cascade, d);
+  return s / 9.0;
+}
+
+fn sampleShadow(worldPos: vec3<f32>, NdotL: f32) -> f32 {
+  if (frame.shadowEnabled < 0.5) {
+    return 1.0;
+  }
+
+  let viewDepth = abs((frame.viewProjection * vec4<f32>(worldPos, 1.0)).w);
+
+  var cascade: i32 = 2;
+  if (viewDepth < frame.cascadeSplits.x) {
+    cascade = 0;
+  } else if (viewDepth < frame.cascadeSplits.y) {
+    cascade = 1;
+  }
+
+  var lightVP: mat4x4<f32>;
+  if (cascade == 0) {
+    lightVP = frame.cascadeVP0;
+  } else if (cascade == 1) {
+    lightVP = frame.cascadeVP1;
+  } else {
+    lightVP = frame.cascadeVP2;
+  }
+
+  let lightClip = lightVP * vec4<f32>(worldPos, 1.0);
+  let uv = lightClip.xy * vec2<f32>(0.5, -0.5) + 0.5;
+  let depth = lightClip.z;
+
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || depth < 0.0 || depth > 1.0) {
+    return 1.0;
+  }
+
+  let bias = frame.constantBias + frame.slopeBias * (1.0 - NdotL);
+  let ts = frame.invMapSize;
+  var shadow = pcf9(uv, cascade, depth - bias, ts);
+
+  if (cascade < 2) {
+    let splitDist = select(frame.cascadeSplits.y, frame.cascadeSplits.x, cascade == 0);
+    let blendZone = splitDist * frame.blendRange;
+    if (viewDepth > splitDist - blendZone) {
+      var nextVP: mat4x4<f32>;
+      if (cascade == 0) {
+        nextVP = frame.cascadeVP1;
+      } else {
+        nextVP = frame.cascadeVP2;
+      }
+      let nextClip = nextVP * vec4<f32>(worldPos, 1.0);
+      let nextUV = nextClip.xy * vec2<f32>(0.5, -0.5) + 0.5;
+      var nextShadow = 1.0;
+      if (nextUV.x >= 0.0 && nextUV.x <= 1.0 && nextUV.y >= 0.0 && nextUV.y <= 1.0 && nextClip.z >= 0.0 && nextClip.z <= 1.0) {
+        nextShadow = pcf9(nextUV, cascade + 1, nextClip.z - bias, ts);
+      }
+      let t = smoothstep(splitDist - blendZone, splitDist, viewDepth);
+      shadow = mix(shadow, nextShadow, t);
+    }
+  }
+
+  return shadow;
+}
+
+struct FragmentOutput {
+  @location(0) color: vec4<f32>,
+  @location(1) emissive: vec4<f32>,
+};
+
+@fragment
+fn fs_main(in: VertexOutput) -> FragmentOutput {
+  var out: FragmentOutput;
+  let normal = normalize(in.normal);
+  var baseColor = material.baseColor;
+  var alpha = material.opacity;
+  var emissive = vec3<f32>(0.0, 0.0, 0.0);
+
+  if (material.hasPalette > 0.5) {
+    let idx = clamp(in.materialIndex, 0, 31);
+    baseColor = material.palette[idx].color.rgb;
+    alpha = material.palette[idx].color.a;
+    emissive = material.palette[idx].emissive.rgb * material.palette[idx].emissive.a;
+  }
+
+  // Sample texture maps (dummy white textures → identity when no map assigned)
+  let texColor = textureSample(colorMapTexture, mapSampler, in.uv).rgb;
+  baseColor = baseColor * texColor;
+
+  let ao = textureSample(aoMapTexture, mapSampler, in.uv).r;
+  let ambient = frame.ambientColor * frame.ambientIntensity * ao;
+
+  let NdotL = max(dot(normal, frame.lightDir), 0.0);
+  var shadow = 1.0;
+  if (material.receiveShadow > 0.5) {
+    shadow = sampleShadow(in.worldPos, NdotL);
+  }
+  let diffuse = frame.lightColor * frame.lightIntensity * NdotL * shadow;
+
+  let litColor = baseColor * (ambient + diffuse);
+  let finalColor = litColor + emissive;
+
+  out.color = vec4<f32>(finalColor * alpha, alpha);
+  out.emissive = vec4<f32>(emissive * alpha, alpha);
+  return out;
+}
+`
+
 // ─── Basic shaders (unlit, shadow bindings declared for shared BGL) ──
 
 export const BASIC_SKINNED_WGSL = /* wgsl */ `

@@ -29,6 +29,7 @@ export {
 
 // Materials
 export { BasicMaterial, LambertMaterial, Material } from './materials/material'
+export { Texture } from './materials/texture'
 
 // Controls
 export { OrbitControls } from './controls/orbit'
@@ -41,6 +42,7 @@ export { Raycaster, buildMeshBVH, type RaycastHit } from './raycasting/index'
 
 // Loaders
 export { loadGLTF } from './loaders/gltf'
+export { loadKTX2 } from './loaders/ktx2'
 
 // Overlay
 export { createOverlayManager, type OverlayHandle, type OverlayOptions } from './overlay'
