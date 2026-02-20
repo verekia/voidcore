@@ -17,11 +17,9 @@ import type { Scene } from '../scene/scene'
 export interface ShadowConfig {
   enabled?: boolean
   resolution?: number
-  lambda?: number
   backExtend?: number
   constantBias?: number
   slopeBias?: number
-  blendRange?: number
 }
 
 export interface RendererConfig {

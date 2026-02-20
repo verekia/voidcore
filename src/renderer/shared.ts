@@ -2,15 +2,15 @@
 //
 // findDirectionalLight() – Quick scene graph traversal that returns the first directional
 //   light found. Stops early once a light is located. Used to determine light direction
-//   before computing cascade shadow maps.
+//   before computing the shadow map.
 //
 // findAmbientLight() – Quick scene graph traversal that returns the first ambient light
 //   found. Used to determine ambient color and intensity for the frame uniforms.
 //
 // collectMeshes() – Walks the scene graph in a single pass to:
 //   1. Collect camera-visible Mesh nodes (frustum culled against the camera frustum)
-//   2. Collect shadow-only casters (meshes outside camera frustum but inside the broadest
-//      shadow cascade frustum). This merges what used to be two separate traversals into one.
+//   2. Collect shadow-only casters (meshes outside camera frustum but inside the shadow
+//      frustum). This merges what used to be two separate traversals into one.
 //   3. Skip invisible nodes and meshes outside both frustums
 //   All arrays use index-based writes instead of push/pop to minimize GC pressure.
 //
@@ -22,9 +22,8 @@
 //   Transparent meshes have bit 31 set in the sort key, placing them after all opaques.
 //   Returns the index in the sorted draw order where transparent meshes begin.
 //
-// computeCascadeSplits() – Computes logarithmic/linear blend split distances for CSM.
-// computeCascadeMatrix() – Builds the light-space view-projection matrix for one cascade.
-//   Both renderers share the same cascade logic; the only difference is the orthographic
+// computeShadowMatrix() – Builds the light-space view-projection matrix for the shadow map.
+//   Both renderers share the same logic; the only difference is the orthographic
 //   projection function (mat4Ortho for WebGL2 [-1,1] depth, mat4OrthoZO for WebGPU [0,1]).
 
 import {
@@ -166,32 +165,16 @@ export const computeLightDir = (
   }
 }
 
-export const NUM_CASCADES = 3
-
-/** Compute logarithmic/linear blend split distances for cascaded shadow maps. */
-export const computeCascadeSplits = (cascadeSplits: Float32Array, camera: PerspectiveCamera, lambda: number): void => {
-  const near = camera.near
-  const far = camera.far
-  for (let i = 0; i < NUM_CASCADES; i++) {
-    const p = (i + 1) / NUM_CASCADES
-    const log = near * Math.pow(far / near, p)
-    const linear = near + (far - near) * p
-    cascadeSplits[i] = lambda * log + (1 - lambda) * linear
-  }
-}
-
-/** Scratch buffers for cascade computation — avoids per-call allocation. */
+/** Scratch buffers for shadow computation — avoids per-call allocation. */
 const _csCenter: Vec3 = new Float32Array(3) as unknown as Vec3
 const _csCorner: Vec3 = new Float32Array(3) as unknown as Vec3
 const _csCorners = new Float32Array(24)
 
-/** Build the light-space view-projection matrix for one cascade. */
-export const computeCascadeMatrix = (
-  cascadeVP: Mat4,
+/** Build the light-space view-projection matrix for the shadow map. */
+export const computeShadowMatrix = (
+  shadowVP: Mat4,
   camera: PerspectiveCamera,
   lightDir: Vec3,
-  nearDist: number,
-  farDist: number,
   shadowBackExtend: number,
   shadowResolution: number,
   lightView: Mat4,
@@ -214,6 +197,8 @@ export const computeCascadeMatrix = (
     py = camera.position[1]!,
     pz = camera.position[2]!
 
+  const nearDist = camera.near
+  const farDist = camera.far
   const fovY = camera.fov * (Math.PI / 180)
   const aspect = camera.aspect
 
@@ -310,6 +295,6 @@ export const computeCascadeMatrix = (
   // Orthographic projection (depth range depends on backend)
   orthoFn(lightProj, minX, maxX, minY, maxY, -maxZ, -minZ)
 
-  // Final cascade VP = proj * view
-  mat4Multiply(cascadeVP, lightProj, lightView)
+  // Final shadow VP = proj * view
+  mat4Multiply(shadowVP, lightProj, lightView)
 }
