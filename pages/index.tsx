@@ -103,12 +103,11 @@ const CameraControls = () => {
 
 const EdenMesh = () => {
   const groupRef = useRef<any>(null)
-  const meshRef = useRef<Mesh | null>(null)
   const gltf = useGLTF(staticBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
 
   useEffect(() => {
     const group = groupRef.current
-    if (!group || meshRef.current) return
+    if (!group) return
 
     // Filter Eden primitives from the GLB (single mesh with 27 primitives)
     const edenMeshes = gltf.meshes.filter(m => m.name === 'Eden')
@@ -161,12 +160,6 @@ const EdenMesh = () => {
     mesh.setPosition(-50, -70, 0)
 
     group.add(mesh)
-    meshRef.current = mesh
-
-    return () => {
-      group.remove(mesh)
-      meshRef.current = null
-    }
   }, [gltf])
 
   return <group ref={groupRef} />
