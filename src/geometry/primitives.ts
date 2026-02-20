@@ -14,7 +14,7 @@
 // new CapsuleGeometry()  – Cylinder with hemispherical caps (pill shape).
 // new CircleGeometry()   – Flat disc on the XY plane.
 
-import { Geometry } from './geometry.ts'
+import { Geometry } from './geometry'
 
 // All primitives: Z-up, centered at origin
 

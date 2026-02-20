@@ -12,7 +12,7 @@
 import Reconciler from 'react-reconciler'
 import { DefaultEventPriority } from 'react-reconciler/constants.js'
 
-import { catalogue, GEOMETRY_TYPES, MATERIAL_TYPES } from './types.ts'
+import { catalogue, GEOMETRY_TYPES, MATERIAL_TYPES } from './types'
 
 // ─── Instance wrapper ─────────────────────────────────────────────────────────
 

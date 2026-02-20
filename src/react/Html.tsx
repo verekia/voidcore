@@ -7,9 +7,9 @@
 
 import { useRef, useEffect, useId, useContext, type ReactNode, type CSSProperties } from 'react'
 
-import { mat4Multiply, vec4Create, vec4Set, vec4TransformMat4, mat4Create } from '../math/index.ts'
-import { VoidContext } from './context.ts'
-import { useFrame } from './hooks.ts'
+import { mat4Multiply, vec4Create, vec4Set, vec4TransformMat4, mat4Create } from '../math/index'
+import { VoidContext } from './context'
+import { useFrame } from './hooks'
 
 export interface HtmlProps {
   position?: [number, number, number]

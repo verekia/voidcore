@@ -8,14 +8,14 @@
 
 import { useContext, useEffect, useRef, useMemo } from 'react'
 
-import { AnimationMixer } from '../animation/index.ts'
-import { loadGLTF } from '../loaders/gltf.ts'
-import { VoidContext } from './context.ts'
+import { AnimationMixer } from '../animation/index'
+import { loadGLTF } from '../loaders/gltf'
+import { VoidContext } from './context'
 
-import type { AnimationClip } from '../animation/index.ts'
-import type { Skeleton } from '../animation/skeleton.ts'
-import type { GLTFResult, LoadOptions } from '../loaders/gltf.ts'
-import type { FrameCallback } from './context.ts'
+import type { AnimationClip } from '../animation/index'
+import type { Skeleton } from '../animation/skeleton'
+import type { GLTFResult, LoadOptions } from '../loaders/gltf'
+import type { FrameCallback } from './context'
 
 // ─── useEngine ────────────────────────────────────────────────────────────────
 

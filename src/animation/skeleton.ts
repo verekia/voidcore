@@ -9,10 +9,10 @@
 // Skeleton.update()   – Recomputes all bone matrices (called once per frame when dirty).
 // Skeleton.getBone()  – Finds a bone node by name.
 
-import { mat4Create, mat4Multiply } from '../math/index.ts'
+import { mat4Create, mat4Multiply } from '../math/index'
 
-import type { Mat4 } from '../math/index.ts'
-import type { Node } from '../scene/node.ts'
+import type { Mat4 } from '../math/index'
+import type { Node } from '../scene/node'
 
 export class Skeleton {
   bones: Node[]

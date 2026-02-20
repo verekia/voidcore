@@ -19,15 +19,15 @@
 // loadGLTF() – Async function that fetches a .glb URL and returns meshes, skeletons,
 //              animations, and a scene graph ready to add to your Scene.
 
-import { Skeleton } from '../animation/skeleton.ts'
-import { Geometry } from '../geometry/geometry.ts'
-import { Material, LambertMaterial } from '../materials/material.ts'
-import { Group } from '../scene/group.ts'
-import { Mesh } from '../scene/mesh.ts'
-import { Node } from '../scene/node.ts'
+import { Skeleton } from '../animation/skeleton'
+import { Geometry } from '../geometry/geometry'
+import { Material, LambertMaterial } from '../materials/material'
+import { Group } from '../scene/group'
+import { Mesh } from '../scene/mesh'
+import { Node } from '../scene/node'
 
-import type { AnimationClip, KeyframeTrack } from '../animation/clip.ts'
-import type { Mat4 } from '../math/index.ts'
+import type { AnimationClip, KeyframeTrack } from '../animation/clip'
+import type { Mat4 } from '../math/index'
 
 export interface LoadOptions {
   draco?: { decoderPath: string }

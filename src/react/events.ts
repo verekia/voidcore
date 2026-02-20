@@ -4,13 +4,13 @@
 // Walks hit results to find instances with event handlers (onClick, onPointerOver, etc.)
 // and dispatches synthetic events with 3D intersection data.
 
-import { instanceMap } from './reconciler.ts'
+import { instanceMap } from './reconciler'
 
-import type { RaycastHit } from '../raycasting/index.ts'
-import type { Mesh } from '../scene/mesh.ts'
-import type { Node } from '../scene/node.ts'
-import type { VoidStore } from './context.ts'
-import type { VoidInstance } from './reconciler.ts'
+import type { RaycastHit } from '../raycasting/index'
+import type { Mesh } from '../scene/mesh'
+import type { Node } from '../scene/node'
+import type { VoidStore } from './context'
+import type { VoidInstance } from './reconciler'
 
 export interface VoidEvent {
   object: any

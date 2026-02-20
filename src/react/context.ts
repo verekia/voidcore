@@ -5,11 +5,11 @@
 
 import { createContext } from 'react'
 
-import type { Engine } from '../engine.ts'
-import type { Raycaster } from '../raycasting/index.ts'
-import type { PerspectiveCamera } from '../scene/camera.ts'
-import type { Scene } from '../scene/scene.ts'
-import type { Tunnel } from './tunnel.ts'
+import type { Engine } from '../engine'
+import type { Raycaster } from '../raycasting/index'
+import type { PerspectiveCamera } from '../scene/camera'
+import type { Scene } from '../scene/scene'
+import type { Tunnel } from './tunnel'
 
 export interface FrameCallback {
   (state: { dt: number; elapsed: number; frame: number; engine: Engine; scene: Scene; camera: PerspectiveCamera }): void

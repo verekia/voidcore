@@ -4,6 +4,9 @@
 //   light found. Stops early once a light is located. Used to determine light direction
 //   before computing cascade shadow maps.
 //
+// findAmbientLight() – Quick scene graph traversal that returns the first ambient light
+//   found. Used to determine ambient color and intensity for the frame uniforms.
+//
 // collectMeshes() – Walks the scene graph in a single pass to:
 //   1. Collect camera-visible Mesh nodes (frustum culled against the camera frustum)
 //   2. Collect shadow-only casters (meshes outside camera frustum but inside the broadest
@@ -34,14 +37,14 @@ import {
   vec3TransformMat4,
   VEC3_UP,
   VEC3_RIGHT,
-} from '../math/index.ts'
-import { Mesh } from '../scene/mesh.ts'
+} from '../math/index'
+import { Mesh } from '../scene/mesh'
 
-import type { AABB, Mat4, Vec3 } from '../math/index.ts'
-import type { PerspectiveCamera } from '../scene/camera.ts'
-import type { DirectionalLight } from '../scene/light.ts'
-import type { Node } from '../scene/node.ts'
-import type { SortState } from './sort.ts'
+import type { AABB, Mat4, Vec3 } from '../math/index'
+import type { PerspectiveCamera } from '../scene/camera'
+import type { AmbientLight, DirectionalLight } from '../scene/light'
+import type { Node } from '../scene/node'
+import type { SortState } from './sort'
 
 /**
  * Find the index of the first transparent mesh in the sorted draw list.
@@ -71,6 +74,25 @@ export const findDirectionalLight = (root: Node, stack: Node[]): DirectionalLigh
     const node = stack[--stackTop]!
     if (!node.visible) continue
     if (node.type === 'directionalLight') return node as DirectionalLight
+    const children = node.children
+    for (let i = children.length - 1; i >= 0; i--) {
+      stack[stackTop++] = children[i]!
+    }
+  }
+  return null
+}
+
+/**
+ * Find the first ambient light in the scene graph.
+ * Uses a quick traversal that stops as soon as a light is found.
+ */
+export const findAmbientLight = (root: Node, stack: Node[]): AmbientLight | null => {
+  let stackTop = 0
+  stack[stackTop++] = root
+  while (stackTop > 0) {
+    const node = stack[--stackTop]!
+    if (!node.visible) continue
+    if (node.type === 'ambientLight') return node as AmbientLight
     const children = node.children
     for (let i = children.length - 1; i >= 0; i--) {
       stack[stackTop++] = children[i]!

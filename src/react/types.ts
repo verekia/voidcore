@@ -13,16 +13,16 @@ import {
   CylinderGeometry,
   CapsuleGeometry,
   CircleGeometry,
-} from '../geometry/primitives.ts'
-import { BasicMaterial, LambertMaterial } from '../materials/material.ts'
-import { PerspectiveCamera } from '../scene/camera.ts'
-import { Group } from '../scene/group.ts'
-import { DirectionalLight } from '../scene/light.ts'
-import { Mesh } from '../scene/mesh.ts'
-import { Scene } from '../scene/scene.ts'
+} from '../geometry/primitives'
+import { BasicMaterial, LambertMaterial } from '../materials/material'
+import { PerspectiveCamera } from '../scene/camera'
+import { Group } from '../scene/group'
+import { AmbientLight, DirectionalLight } from '../scene/light'
+import { Mesh } from '../scene/mesh'
+import { Scene } from '../scene/scene'
 
-import type { Skeleton } from '../animation/skeleton.ts'
-import type { Geometry } from '../geometry/geometry.ts'
+import type { Skeleton } from '../animation/skeleton'
+import type { Geometry } from '../geometry/geometry'
 import type {
   PlaneGeometryOptions,
   BoxGeometryOptions,
@@ -31,10 +31,10 @@ import type {
   CylinderGeometryOptions,
   CapsuleGeometryOptions,
   CircleGeometryOptions,
-} from '../geometry/primitives.ts'
-import type { Material, MaterialOptions } from '../materials/material.ts'
-import type { CameraOptions } from '../scene/camera.ts'
-import type { DirectionalLightOptions } from '../scene/light.ts'
+} from '../geometry/primitives'
+import type { Material, MaterialOptions } from '../materials/material'
+import type { CameraOptions } from '../scene/camera'
+import type { AmbientLightOptions, DirectionalLightOptions } from '../scene/light'
 
 // ─── Catalogue ────────────────────────────────────────────────────────────────
 
@@ -44,6 +44,7 @@ export const catalogue: Record<string, new (...args: any[]) => any> = {
   scene: Scene,
   perspectiveCamera: PerspectiveCamera,
   directionalLight: DirectionalLight,
+  ambientLight: AmbientLight,
   planeGeometry: PlaneGeometry,
   boxGeometry: BoxGeometry,
   sphereGeometry: SphereGeometry,
@@ -109,6 +110,12 @@ export interface DirectionalLightProps extends NodeProps {
   intensity?: number
 }
 
+export interface AmbientLightProps extends NodeProps {
+  args?: [AmbientLightOptions?]
+  color?: [number, number, number]
+  intensity?: number
+}
+
 export interface CameraProps extends NodeProps {
   args?: [CameraOptions?]
   fov?: number
@@ -140,6 +147,7 @@ type VoidElements = {
   scene: NodeProps
   perspectiveCamera: CameraProps
   directionalLight: DirectionalLightProps
+  ambientLight: AmbientLightProps
 
   planeGeometry: GeometryProps & { args?: [PlaneGeometryOptions?] }
   boxGeometry: GeometryProps & { args?: [BoxGeometryOptions?] }

@@ -11,10 +11,10 @@
 // AnimationMixer    – Manages multiple actions, blends them, and applies the result to bones.
 // new AnimationMixer(skeleton) – Creates a mixer for a given skeleton.
 
-import { quatSlerp } from '../math/index.ts'
+import { quatSlerp } from '../math/index'
 
-import type { AnimationClip, KeyframeTrack } from './clip.ts'
-import type { Skeleton } from './skeleton.ts'
+import type { AnimationClip, KeyframeTrack } from './clip'
+import type { Skeleton } from './skeleton'
 
 const easeInOutQuad = (t: number): number => {
   if (t < 0.5) return 2 * t * t

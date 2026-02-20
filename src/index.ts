@@ -1,22 +1,22 @@
 // Voidcore — Public API
 
 // Engine
-export { Engine, type EngineConfig } from './engine.ts'
-export { type Renderer, type RendererConfig, type FrameStats, type ShadowConfig } from './renderer/renderer.ts'
+export { Engine, type EngineConfig } from './engine'
+export { type Renderer, type RendererConfig, type FrameStats, type ShadowConfig } from './renderer/renderer'
 
 // Scheduler
-export { Scheduler, type SchedulerState, type SchedulerCallback, type SchedulerCallbackOptions } from './scheduler.ts'
+export { Scheduler, type SchedulerState, type SchedulerCallback, type SchedulerCallbackOptions } from './scheduler'
 
 // Scene
-export { Scene } from './scene/scene.ts'
-export { Node } from './scene/node.ts'
-export { Mesh } from './scene/mesh.ts'
-export { Group } from './scene/group.ts'
-export { PerspectiveCamera, type CameraOptions } from './scene/camera.ts'
-export { DirectionalLight, type DirectionalLightOptions } from './scene/light.ts'
+export { Scene } from './scene/scene'
+export { Node } from './scene/node'
+export { Mesh } from './scene/mesh'
+export { Group } from './scene/group'
+export { PerspectiveCamera, type CameraOptions } from './scene/camera'
+export { AmbientLight, type AmbientLightOptions, DirectionalLight, type DirectionalLightOptions } from './scene/light'
 
 // Geometry
-export { Geometry } from './geometry/geometry.ts'
+export { Geometry, mergeGeometries } from './geometry/geometry'
 export {
   PlaneGeometry,
   BoxGeometry,
@@ -25,25 +25,25 @@ export {
   CylinderGeometry,
   CapsuleGeometry,
   CircleGeometry,
-} from './geometry/primitives.ts'
+} from './geometry/primitives'
 
 // Materials
-export { BasicMaterial, LambertMaterial, Material } from './materials/material.ts'
+export { BasicMaterial, LambertMaterial, Material } from './materials/material'
 
 // Controls
-export { OrbitControls } from './controls/orbit.ts'
+export { OrbitControls } from './controls/orbit'
 
 // Animation
-export { Skeleton, type AnimationClip, type KeyframeTrack, AnimationMixer, AnimationAction } from './animation/index.ts'
+export { Skeleton, type AnimationClip, type KeyframeTrack, AnimationMixer, AnimationAction } from './animation/index'
 
 // Raycasting
-export { Raycaster, buildMeshBVH, type RaycastHit } from './raycasting/index.ts'
+export { Raycaster, buildMeshBVH, type RaycastHit } from './raycasting/index'
 
 // Loaders
-export { loadGLTF } from './loaders/gltf.ts'
+export { loadGLTF } from './loaders/gltf'
 
 // Overlay
-export { createOverlayManager, type OverlayHandle, type OverlayOptions } from './overlay.ts'
+export { createOverlayManager, type OverlayHandle, type OverlayOptions } from './overlay'
 
 // Math
 export {
@@ -86,4 +86,4 @@ export {
   VEC3_RIGHT,
   QUAT_IDENTITY,
   MAT4_IDENTITY,
-} from './math/index.ts'
+} from './math/index'

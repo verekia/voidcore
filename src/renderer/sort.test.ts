@@ -1,10 +1,10 @@
 import { expect, test, describe } from 'bun:test'
 
-import { mat4Create, mat4Identity } from '../math/index.ts'
-import { createSortState, sortMeshes } from './sort.ts'
+import { mat4Create, mat4Identity } from '../math/index'
+import { createSortState, sortMeshes } from './sort'
 
-import type { PerspectiveCamera } from '../scene/camera.ts'
-import type { Mesh } from '../scene/mesh.ts'
+import type { PerspectiveCamera } from '../scene/camera'
+import type { Mesh } from '../scene/mesh'
 
 /** Create a minimal mock mesh for sort testing */
 const mockMesh = (opts: {

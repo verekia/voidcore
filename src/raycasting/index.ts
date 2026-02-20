@@ -21,13 +21,13 @@
 //   Ray-AABB:     Slab method – tests ray against axis-aligned box entry/exit distances.
 //   Ray-Triangle: Möller-Trumbore – fast ray-triangle intersection using cross products.
 
-import { mat4Create, mat4Invert, vec3TransformMat4 } from '../math/index.ts'
+import { mat4Create, mat4Invert, vec3TransformMat4 } from '../math/index'
 
-import type { Geometry } from '../geometry/geometry.ts'
-import type { Vec2, Vec3 } from '../math/index.ts'
-import type { PerspectiveCamera } from '../scene/camera.ts'
-import type { Mesh } from '../scene/mesh.ts'
-import type { Node } from '../scene/node.ts'
+import type { Geometry } from '../geometry/geometry'
+import type { Vec2, Vec3 } from '../math/index'
+import type { PerspectiveCamera } from '../scene/camera'
+import type { Mesh } from '../scene/mesh'
+import type { Node } from '../scene/node'
 
 // ─── Public Types ──────────────────────────────────────────────────────────────
 

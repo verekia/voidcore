@@ -22,11 +22,11 @@
 // node.lookAt()  – Orients the node to face a target point (Z-up convention).
 // updateWorldMatrices() – Recursively recomputes world matrices for dirty nodes.
 
-import { mat4Compose, mat4Copy, mat4Create, mat4Multiply, quatCreate, vec3Create } from '../math/index.ts'
+import { mat4Compose, mat4Copy, mat4Create, mat4Multiply, quatCreate, vec3Create } from '../math/index'
 
-import type { Mat4, Quat, Vec3 } from '../math/index.ts'
+import type { Mat4, Quat, Vec3 } from '../math/index'
 
-export type NodeType = 'group' | 'mesh' | 'camera' | 'directionalLight'
+export type NodeType = 'group' | 'mesh' | 'camera' | 'directionalLight' | 'ambientLight'
 
 // Scratch for lookAt — avoids per-call allocation
 const _lookAtFwd = new Float32Array(3)

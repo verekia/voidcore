@@ -1,6 +1,6 @@
 import { expect, test, describe } from 'bun:test'
 
-import { packNormalsSnorm8, packUVsFloat16, packWeightsUnorm8 } from './pack.ts'
+import { packNormalsSnorm8, packUVsFloat16, packWeightsUnorm8 } from './pack'
 
 describe('packNormalsSnorm8', () => {
   test('packs unit axes correctly', () => {

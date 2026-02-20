@@ -15,12 +15,12 @@
 // engine.render()     – Renders a single frame (call this inside a registered callback).
 // engine.dispose()    – Cleans up the scheduler and GPU resources.
 
-import { createRenderer, type Renderer, type RendererConfig, type FrameStats } from './renderer/renderer.ts'
-import { Scheduler, type SchedulerCallback, type SchedulerCallbackOptions } from './scheduler.ts'
+import { createRenderer, type Renderer, type RendererConfig, type FrameStats } from './renderer/renderer'
+import { Scheduler, type SchedulerCallback, type SchedulerCallbackOptions } from './scheduler'
 
-import type { ShadowConfig } from './renderer/renderer.ts'
-import type { PerspectiveCamera } from './scene/camera.ts'
-import type { Scene } from './scene/scene.ts'
+import type { ShadowConfig } from './renderer/renderer'
+import type { PerspectiveCamera } from './scene/camera'
+import type { Scene } from './scene/scene'
 
 export interface EngineConfig extends RendererConfig {
   backend?: 'auto' | 'webgpu' | 'webgl2'

@@ -9,9 +9,9 @@ import {
   aabbCreate,
   aabbTransform,
   vec3TransformMat4,
-} from './index.ts'
+} from './index'
 
-import type { AABB, Mat4, Vec3 } from './index.ts'
+import type { AABB, Mat4, Vec3 } from './index'
 
 // ─── mat4Identity ──────────────────────────────────────────────────
 

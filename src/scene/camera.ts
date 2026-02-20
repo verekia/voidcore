@@ -14,10 +14,10 @@
 //
 // new PerspectiveCamera()   – Constructor with default values (60° FOV, 0.1–1000 range).
 
-import { mat4Create, mat4Perspective } from '../math/index.ts'
-import { Node } from './node.ts'
+import { mat4Create, mat4Perspective } from '../math/index'
+import { Node } from './node'
 
-import type { Mat4 } from '../math/index.ts'
+import type { Mat4 } from '../math/index'
 
 export interface CameraOptions {
   fov?: number

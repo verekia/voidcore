@@ -7,11 +7,11 @@
 // new Mesh(geometry, material) – Creates a mesh from a geometry and material.
 // Both parameters are optional to support deferred attachment (e.g. React reconciler).
 
-import { Node } from './node.ts'
+import { Node } from './node'
 
-import type { Skeleton } from '../animation/skeleton.ts'
-import type { Geometry } from '../geometry/geometry.ts'
-import type { Material } from '../materials/material.ts'
+import type { Skeleton } from '../animation/skeleton'
+import type { Geometry } from '../geometry/geometry'
+import type { Material } from '../materials/material'
 
 export class Mesh extends Node {
   geometry!: Geometry
