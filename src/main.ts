@@ -231,7 +231,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
 
   // ─── Eden mesh ────────────────────────────────────────────────
   // Merge all Eden primitives from the static bundle into a single mesh with palette colors
-  const edenMeshes = megaxeGltf.meshes.filter(m => m.name.toLowerCase().includes('eden'))
+  const edenMeshes = megaxeGltf.meshes.filter(m => m.name === 'Eden')
 
   // Capture the node scale from the parent Group (multi-primitive wrapper)
   const edenParent = edenMeshes[0]?.parent

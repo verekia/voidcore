@@ -111,7 +111,7 @@ const EdenMesh = () => {
     if (!group || meshRef.current) return
 
     // Filter Eden primitives from the GLB (single mesh with 27 primitives)
-    const edenMeshes = gltf.meshes.filter(m => m.name.toLowerCase().includes('eden'))
+    const edenMeshes = gltf.meshes.filter(m => m.name === 'Eden')
     if (edenMeshes.length === 0) return
 
     // Capture the node scale from the parent Group (multi-primitive wrapper)
