@@ -144,7 +144,7 @@ Mobile GPUs (Apple, Qualcomm Adreno, ARM Mali) use tile-based rendering:
 - **MSAA is nearly free** on tile-based GPUs (resolve happens on-chip)
 - **Minimize render target switches** — each forces an expensive tile store/load
 - **Half-resolution bloom** reduces memory bandwidth (dominant mobile cost)
-- **1024px shadow maps** by default (configurable to 2048 for desktop)
+- **2048px shadow maps** by default (configurable via `resolution`)
 - **9-sample Poisson PCF** provides good quality at reasonable cost
 
 ### Memory Bandwidth
@@ -174,7 +174,7 @@ Mobile GPUs are bandwidth-constrained. Key mitigations:
 
 | Phase                        | Cost       |
 | ---------------------------- | ---------- |
-| Shadow maps (3 CSM, 1024px)  | ~1.5ms     |
+| Shadow map (2048px)          | ~0.8ms     |
 | Opaque geometry (2000 draws) | 3.0-5.0ms  |
 | Transparent geometry (WBOIT) | 0.3-0.5ms  |
 | MSAA resolve                 | 0.2-0.5ms  |
@@ -191,7 +191,7 @@ Mobile GPUs are bandwidth-constrained. Key mitigations:
 | JavaScript heap                   | < 50MB      |
 | GPU buffers (geometry)            | < 100MB     |
 | GPU textures                      | < 200MB     |
-| Shadow maps (3 × 1024)            | ~12MB       |
+| Shadow map (2048)                  | ~16MB       |
 | Bloom chain (1080p, RGBA16F)      | ~5MB        |
 | OIT targets (1080p, RGBA16F + R8) | ~18MB       |
 | MSAA buffers (4×, 1080p)          | ~32MB       |

@@ -21,7 +21,7 @@ Auto-detection sequence:
 Every frame executes these passes in fixed order:
 
 ```
-1. Shadow Pass      — 3 CSM cascades, depth-only rendering
+1. Shadow Pass      — Single shadow map, depth-only rendering
 2. Opaque Pass      — Sorted draw calls, 4x MSAA, MRT (color + emissive)
 3. Transparent Pass — WBOIT accumulation (RGBA16F + R8), depth read-only
 4. MSAA Resolve     — Resolve multisample → single-sample
@@ -41,7 +41,7 @@ Pre-allocated at initialization, recreated on canvas resize:
 | Depth             | Depth24Plus | 4x   | Canvas     | Z-buffer                               |
 | OIT Accumulation  | RGBA16F     | 1x   | Canvas     | WBOIT weighted color sum               |
 | OIT Revealage     | R8          | 1x   | Canvas     | WBOIT alpha product                    |
-| Shadow Atlas      | Depth24Plus | 1x   | Per config | CSM depth (texture 2D array, 3 layers) |
+| Shadow Map        | Depth24Plus | 1x   | Per config | Single shadow depth texture             |
 | Bloom Mips        | RGBA16F     | 1x   | Halving    | Progressive downsample/upsample chain  |
 | Resolved Color    | RGBA8       | 1x   | Canvas     | Post-MSAA resolve                      |
 | Resolved Emissive | RGBA8       | 1x   | Canvas     | Post-MSAA emissive resolve             |
@@ -52,7 +52,7 @@ Three bind groups organized by update frequency:
 
 | Slot | Name         | Update Frequency               | Contents                                                                                                                                       |
 | ---- | ------------ | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0    | Per-frame    | Once per frame                 | Camera VP matrix, light direction/color/intensity, ambient color/intensity, 3× shadow VP matrices, cascade split distances, shadow bias params |
+| 0    | Per-frame    | Once per frame                 | Camera VP matrix, light direction/color/intensity, ambient color/intensity, shadow VP matrix, shadow bias params |
 | 1    | Per-material | Per material switch            | Material UBO (palette struct array, base color, opacity, flags), color/AO textures, samplers                                                   |
 | 2    | Per-object   | Per draw call (dynamic offset) | World matrix (16 floats), optional bone matrices                                                                                               |
 
@@ -281,7 +281,7 @@ Scene graph update:        0.2-0.5ms  (dirty nodes only)
 Frustum culling:           0.1-0.2ms  (AABB P-vertex test, brute force)
 Draw call sorting:         0.05-0.1ms (radix sort, O(n))
 Uniform uploads:           0.2-0.5ms  (single buffer write)
-Shadow pass (3 CSM):       1.5-2.5ms  (GPU, depth-only)
+Shadow pass:               0.5-1.0ms  (GPU, depth-only)
 Opaque pass (2000 draws):  3.0-5.0ms  (GPU, sorted, MSAA)
 Transparent pass:          0.3-0.5ms  (GPU, WBOIT)
 MSAA resolve:              0.2-0.5ms  (GPU)

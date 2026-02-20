@@ -3,8 +3,7 @@
 // Functionally identical to the GLSL shaders but written in WGSL (WebGPU Shading Language).
 // See webgl-shaders.ts for detailed explanations of each shader's purpose.
 //
-// Shadows use a single depth texture (not cascaded) covering the full camera frustum.
-// This is simpler and faster than CSM, suitable for small/medium scene sizes.
+// Shadows use a single depth texture covering the full camera frustum with PCF filtering.
 //
 // Transparency uses sorted back-to-front alpha blending with premultiplied alpha. Transparent
 // meshes reuse the same shaders as opaque — all fragment outputs are premultiplied (rgb * alpha).

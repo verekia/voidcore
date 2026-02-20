@@ -34,7 +34,7 @@ These modules are essentially the same implementation with minor naming differen
 
 ## Where v1v2-engine Does Better
 
-1. **Cascaded Shadow Mapping (CSM):** Full CSM with configurable cascade count (1-4), PSSM lambda blend (log/uniform), bounding-sphere-fit per cascade, and PCF9 sampling in the atlas. VoidCore has shadows but simpler (3 fixed cascades from the renderer code).
+1. **Cascaded Shadow Mapping (CSM):** Full CSM with configurable cascade count (1-4), PSSM lambda blend (log/uniform), bounding-sphere-fit per cascade, and PCF9 sampling in the atlas. VoidCore uses a single shadow map instead.
 
 2. **Outline rendering:** MRT-based outline system with per-group outlines, configurable thickness, color, and distance-based scaling. VoidCore doesn't have this.
 
@@ -82,7 +82,7 @@ These modules are essentially the same implementation with minor naming differen
 | WebGL2 fallback        | Yes                     | Yes                              |
 | MSAA 4x                | Yes                     | Yes                              |
 | Bloom                  | Yes                     | Yes                              |
-| Shadow mapping         | Yes (3 cascades)        | Yes (1-4 cascades, configurable) |
+| Shadow mapping         | Yes (single map)        | Yes (1-4 cascades, configurable) |
 | Outline rendering      | No                      | Yes                              |
 | Frustum culling        | AABB                    | Bounding sphere                  |
 | BVH raycasting         | Yes                     | Yes                              |
@@ -123,4 +123,4 @@ For v1v2's target workload (hundreds of similar skinned entities, few material t
 
 For a more complex scene (many different materials, mixed static/dynamic objects, large environments with lots of off-screen geometry) — VoidCore's tighter culling and sort-based batching could close the gap or win.
 
-The architectural differences are unlikely to be the bottleneck in either engine — at web scale, the GPU draw call count and shader complexity matter far more than the CPU-side data layout. Both engines are well-optimized for zero allocation. The real performance difference comes from features: v1v2's configurable cascade count lets you drop to 1-2 cascades for a big shadow pass savings, while VoidCore's radix sort prevents the pathological "thrashing between pipelines" case that v1v2 is vulnerable to with diverse scenes.
+The architectural differences are unlikely to be the bottleneck in either engine — at web scale, the GPU draw call count and shader complexity matter far more than the CPU-side data layout. Both engines are well-optimized for zero allocation. The real performance difference comes from features: v1v2's configurable cascade count gives better shadow quality over large distances, while VoidCore's single shadow map is simpler and faster. VoidCore's radix sort prevents the pathological "thrashing between pipelines" case that v1v2 is vulnerable to with diverse scenes.

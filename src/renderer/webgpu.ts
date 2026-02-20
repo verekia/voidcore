@@ -695,19 +695,19 @@ export class WebGPURenderer implements Renderer {
     const shadowConfig = config.shadows
     if (!shadowConfig) {
       shadowEnabled = false
-      shadowResolution = 1024
+      shadowResolution = 2048
       shadowBackExtend = 75
       shadowConstantBias = 0.001
       shadowSlopeBias = 0.005
     } else if (typeof shadowConfig === 'object') {
       shadowEnabled = shadowConfig.enabled !== false
-      shadowResolution = shadowConfig.resolution ?? 1024
+      shadowResolution = shadowConfig.resolution ?? 2048
       shadowBackExtend = shadowConfig.backExtend ?? 75
       shadowConstantBias = shadowConfig.constantBias ?? 0.001
       shadowSlopeBias = shadowConfig.slopeBias ?? 0.005
     } else {
       shadowEnabled = true
-      shadowResolution = 1024
+      shadowResolution = 2048
       shadowBackExtend = 75
       shadowConstantBias = 0.001
       shadowSlopeBias = 0.005

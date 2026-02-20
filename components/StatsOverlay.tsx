@@ -9,7 +9,7 @@ const StatsOverlay = ({ engine }: { engine: Engine | null }) => {
     if (!engine) return
     const interval = setInterval(() => {
       const stats = engine.getStats()
-      const shadowSuffix = stats.shadowDrawCalls > 0 ? ` (+${stats.shadowDrawCalls} CSM)` : ''
+      const shadowSuffix = stats.shadowDrawCalls > 0 ? ` (+${stats.shadowDrawCalls} for shadows)` : ''
       const dpr = Math.min(window.devicePixelRatio, engine.maxDpr)
       setStatsText(
         `${engine.backend.toUpperCase()} | ${Math.round(stats.fps)} FPS | DPR: ${dpr.toFixed(2)} | Draw calls: ${stats.drawCalls}${shadowSuffix}`,
@@ -21,7 +21,7 @@ const StatsOverlay = ({ engine }: { engine: Engine | null }) => {
   if (!statsText) return null
 
   return (
-    <div className="pointer-events-none fixed top-2.5 left-2.5 z-[1000] rounded bg-black/60 px-3 py-2 font-mono text-sm text-white">
+    <div className="pointer-events-none fixed top-2.5 left-2.5 z-1000 rounded bg-black/60 px-3 py-2 font-mono text-sm text-white">
       {statsText}
     </div>
   )
