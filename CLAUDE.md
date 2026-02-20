@@ -8,7 +8,7 @@ VoidCore is a performant 3D graphics engine written in TypeScript. It supports b
 
 - **Coordinate system**: Z-up, right-handed. Forward is +Y, right is +X, up is +Z.
 - **Math**: All types are Float32Array-backed with a "write into output" pattern (zero allocation).
-- **Rendering**: Dual-backend (WebGPU/WebGL2), MSAA, MRT (color + emissive), 3-cascade shadow maps (CSM), bloom post-processing, configurable DPR limiting. Transparency uses WBOIT (Weighted Blended OIT) when `OES_draw_buffers_indexed` is available, with a sorted alpha-blend fallback for devices that lack the extension (some Android GPUs).
+- **Rendering**: Dual-backend (WebGPU/WebGL2), MSAA, MRT (color + emissive), 3-cascade shadow maps (CSM), bloom post-processing, configurable DPR limiting. Transparency uses sorted back-to-front alpha blending in the same MSAA pass as opaque meshes (same shaders, different pipeline state).
 - **Scheduler**: Single rAF loop with priority-ordered callbacks, global/per-callback FPS caps. Both `maxFps` and `maxDpr` can be changed dynamically at runtime.
 - **Scene graph**: Tree of Nodes with dirty-flag world matrix propagation. Transforms are set via `setPosition(x, y, z)`, `setRotation(x, y, z, w)`, `setScale(x, y, z)` / `setScale(s)` which automatically mark the node dirty. Per-component setters are also available: `setPositionX/Y/Z(v)`, `setScaleX/Y/Z(v)`. `markTransformDirty()` is available for code that writes directly to the underlying Float32Arrays (e.g., `quatFromAxisAngle`).
 - **HTML overlay**: DOM elements tracked to 3D world positions via CSS transforms. Supports node tracking with offset, centering, dirty checking, depth-based z-index, distance scaling, and per-element pointer events.

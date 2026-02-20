@@ -2,8 +2,14 @@
 //
 // Functionally equivalent to the WebGPU renderer but uses the older WebGL2 API. The render
 // pipeline is: frustum culling → sort → batch uniform upload → shadow pass →
-// MSAA MRT draw (opaque only) → MSAA resolve → WBOIT transparent pass → OIT composite →
-// bloom post-processing → final blit with gamma correction.
+// MSAA MRT draw (opaque + transparent) → MSAA resolve → bloom post-processing →
+// final blit with gamma correction.
+//
+// Transparency uses sorted back-to-front alpha blending drawn in the SAME MSAA render pass
+// as opaque meshes (before the MSAA resolve blit). Transparent meshes use the same shader
+// programs as opaque meshes but with different GL state: alpha blending enabled, depth writes
+// disabled, and back-face culling disabled. This avoids the need for separate transparency
+// textures, framebuffers, or extensions.
 //
 // Shadow mapping uses 3-cascade CSM (Cascaded Shadow Maps) with PCF 3×3 filtering, matching
 // the WebGPU renderer. Shadow depth is rendered into a TEXTURE_2D_ARRAY with comparison mode.
@@ -55,18 +61,15 @@ import {
   LAMBERT_VERT,
   LAMBERT_FRAG,
   LAMBERT_SKINNED_VERT,
-  LAMBERT_TRANSPARENT_FRAG,
   BASIC_VERT,
   BASIC_FRAG,
   BASIC_SKINNED_VERT,
-  BASIC_TRANSPARENT_FRAG,
   SHADOW_DEPTH_VERT,
   SHADOW_DEPTH_SKINNED_VERT,
   SHADOW_DEPTH_FRAG,
   FULLSCREEN_VERT,
   BLOOM_DOWNSAMPLE_FRAG,
   BLOOM_UPSAMPLE_FRAG,
-  OIT_COMPOSITE_FRAG,
   BLIT_FRAG,
 } from './webgl-shaders.ts'
 
@@ -142,12 +145,6 @@ interface PostUniformLocs {
   u_useKarisAverage: WebGLUniformLocation | null
 }
 
-interface OITCompositeUniformLocs {
-  u_accumTexture: WebGLUniformLocation | null
-  u_revealTexture: WebGLUniformLocation | null
-  u_opaqueTexture: WebGLUniformLocation | null
-}
-
 interface BlitUniformLocs {
   u_sceneTexture: WebGLUniformLocation | null
   u_bloomTexture: WebGLUniformLocation | null
@@ -176,12 +173,6 @@ const cachePostLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): PostU
   u_srcTexture: gl.getUniformLocation(program, 'u_srcTexture'),
   u_texelSize: gl.getUniformLocation(program, 'u_texelSize'),
   u_useKarisAverage: gl.getUniformLocation(program, 'u_useKarisAverage'),
-})
-
-const cacheOITCompositeLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): OITCompositeUniformLocs => ({
-  u_accumTexture: gl.getUniformLocation(program, 'u_accumTexture'),
-  u_revealTexture: gl.getUniformLocation(program, 'u_revealTexture'),
-  u_opaqueTexture: gl.getUniformLocation(program, 'u_opaqueTexture'),
 })
 
 const cacheBlitLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): BlitUniformLocs => ({
@@ -323,14 +314,6 @@ interface RenderTargets {
   resolvedColorTex: WebGLTexture
   resolvedEmissiveFbo: WebGLFramebuffer
   resolvedEmissiveTex: WebGLTexture
-  // OIT (WBOIT transparency)
-  oitFbo: WebGLFramebuffer
-  oitAccumTex: WebGLTexture
-  oitRevealTex: WebGLTexture
-  resolvedDepthFbo: WebGLFramebuffer
-  resolvedDepthRb: WebGLRenderbuffer
-  opaqueColorFbo: WebGLFramebuffer
-  opaqueColorTex: WebGLTexture
   // Bloom chain
   bloomFbos: WebGLFramebuffer[]
   bloomTextures: WebGLTexture[]
@@ -346,7 +329,6 @@ const createRenderTargets = (
   h: number,
   samples: number,
   bloomLevels: number,
-  needsAlphaBlendFallback: boolean,
 ): RenderTargets => {
   // MSAA FBO with color + emissive + depth renderbuffers
   const msaaFbo = gl.createFramebuffer()!
@@ -395,60 +377,6 @@ const createRenderTargets = (
   gl.bindFramebuffer(gl.FRAMEBUFFER, resolvedEmissiveFbo)
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, resolvedEmissiveTex, 0)
 
-  // Copy of resolved opaque color (read by OIT composite to avoid feedback loop)
-  const opaqueColorTex = gl.createTexture()!
-  gl.bindTexture(gl.TEXTURE_2D, opaqueColorTex)
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-
-  const opaqueColorFbo = gl.createFramebuffer()!
-  gl.bindFramebuffer(gl.FRAMEBUFFER, opaqueColorFbo)
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, opaqueColorTex, 0)
-
-  // OIT accumulation texture (RGBA16F, non-MSAA)
-  const oitAccumTex = gl.createTexture()!
-  gl.bindTexture(gl.TEXTURE_2D, oitAccumTex)
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null)
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-
-  // OIT revealage texture (RGBA8, non-MSAA — we only use the R channel)
-  const oitRevealTex = gl.createTexture()!
-  gl.bindTexture(gl.TEXTURE_2D, oitRevealTex)
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-
-  // OIT FBO (accum + reveal as MRT, plus resolved depth for depth testing)
-  const resolvedDepthRb = gl.createRenderbuffer()!
-  gl.bindRenderbuffer(gl.RENDERBUFFER, resolvedDepthRb)
-  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h)
-
-  // Attach depth to resolvedColorFbo only when WBOIT is unavailable, so the
-  // alpha-blend fallback can render directly into it with depth testing.
-  if (needsAlphaBlendFallback) {
-    gl.bindFramebuffer(gl.FRAMEBUFFER, resolvedColorFbo)
-    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, resolvedDepthRb)
-  }
-
-  const resolvedDepthFbo = gl.createFramebuffer()!
-  gl.bindFramebuffer(gl.FRAMEBUFFER, resolvedDepthFbo)
-  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, resolvedDepthRb)
-
-  const oitFbo = gl.createFramebuffer()!
-  gl.bindFramebuffer(gl.FRAMEBUFFER, oitFbo)
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, oitAccumTex, 0)
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, oitRevealTex, 0)
-  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, resolvedDepthRb)
-  gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1])
-
   // Bloom chain (half-res progressive downsample/upsample)
   const bloomFbos: WebGLFramebuffer[] = []
   const bloomTextures: WebGLTexture[] = []
@@ -491,13 +419,6 @@ const createRenderTargets = (
     resolvedColorTex,
     resolvedEmissiveFbo,
     resolvedEmissiveTex,
-    oitFbo,
-    oitAccumTex,
-    oitRevealTex,
-    resolvedDepthFbo,
-    resolvedDepthRb,
-    opaqueColorFbo,
-    opaqueColorTex,
     bloomFbos,
     bloomTextures,
     bloomWidths,
@@ -530,11 +451,6 @@ export class WebGLRenderer implements Renderer {
   private basicSkinnedProgram: WebGLProgram
   private shadowDepthProgram: WebGLProgram
   private shadowDepthSkinnedProgram: WebGLProgram
-  private lambertTransparentProgram: WebGLProgram
-  private basicTransparentProgram: WebGLProgram
-  private lambertSkinnedTransparentProgram: WebGLProgram
-  private basicSkinnedTransparentProgram: WebGLProgram
-  private oitCompositeProgram: WebGLProgram
   private bloomDownsampleProgram: WebGLProgram
   private bloomUpsampleProgram: WebGLProgram
   private blitProgram: WebGLProgram
@@ -544,17 +460,9 @@ export class WebGLRenderer implements Renderer {
   private _basicLocs!: SceneUniformLocs
   private _lambertSkinnedLocs!: SceneUniformLocs
   private _basicSkinnedLocs!: SceneUniformLocs
-  private _lambertTransparentLocs!: SceneUniformLocs
-  private _basicTransparentLocs!: SceneUniformLocs
-  private _lambertSkinnedTransparentLocs!: SceneUniformLocs
-  private _basicSkinnedTransparentLocs!: SceneUniformLocs
-  private _oitCompositeLocs!: OITCompositeUniformLocs
   private _bloomDownLocs!: PostUniformLocs
   private _bloomUpLocs!: PostUniformLocs
   private _blitLocs!: BlitUniformLocs
-
-  // Per-draw-buffer blend extension (for WBOIT)
-  private _drawBuffersIndexed: OES_draw_buffers_indexed | null = null
 
   // ─── GL state cache ─────────────────────────────────────────────
   private _glProgram: WebGLProgram | null = null
@@ -666,8 +574,6 @@ export class WebGLRenderer implements Renderer {
     // Check for required extensions
     gl.getExtension('EXT_color_buffer_float')
     gl.getExtension('EXT_float_blend')
-    const dbi = gl.getExtension('OES_draw_buffers_indexed')
-    this._drawBuffersIndexed = dbi
 
     this.gl = gl
     this.canvas = canvas
@@ -722,11 +628,6 @@ export class WebGLRenderer implements Renderer {
     this.basicProgram = createProgram(gl, BASIC_VERT, BASIC_FRAG)
     this.lambertSkinnedProgram = createProgram(gl, LAMBERT_SKINNED_VERT, LAMBERT_FRAG)
     this.basicSkinnedProgram = createProgram(gl, BASIC_SKINNED_VERT, BASIC_FRAG)
-    this.lambertTransparentProgram = createProgram(gl, LAMBERT_VERT, LAMBERT_TRANSPARENT_FRAG)
-    this.basicTransparentProgram = createProgram(gl, BASIC_VERT, BASIC_TRANSPARENT_FRAG)
-    this.lambertSkinnedTransparentProgram = createProgram(gl, LAMBERT_SKINNED_VERT, LAMBERT_TRANSPARENT_FRAG)
-    this.basicSkinnedTransparentProgram = createProgram(gl, BASIC_SKINNED_VERT, BASIC_TRANSPARENT_FRAG)
-    this.oitCompositeProgram = createProgram(gl, FULLSCREEN_VERT, OIT_COMPOSITE_FRAG)
     this.shadowDepthProgram = createProgram(gl, SHADOW_DEPTH_VERT, SHADOW_DEPTH_FRAG)
     this.shadowDepthSkinnedProgram = createProgram(gl, SHADOW_DEPTH_SKINNED_VERT, SHADOW_DEPTH_FRAG)
     this.bloomDownsampleProgram = createProgram(gl, FULLSCREEN_VERT, BLOOM_DOWNSAMPLE_FRAG)
@@ -738,11 +639,6 @@ export class WebGLRenderer implements Renderer {
     this._basicLocs = cacheSceneLocs(gl, this.basicProgram)
     this._lambertSkinnedLocs = cacheSceneLocs(gl, this.lambertSkinnedProgram)
     this._basicSkinnedLocs = cacheSceneLocs(gl, this.basicSkinnedProgram)
-    this._lambertTransparentLocs = cacheSceneLocs(gl, this.lambertTransparentProgram)
-    this._basicTransparentLocs = cacheSceneLocs(gl, this.basicTransparentProgram)
-    this._lambertSkinnedTransparentLocs = cacheSceneLocs(gl, this.lambertSkinnedTransparentProgram)
-    this._basicSkinnedTransparentLocs = cacheSceneLocs(gl, this.basicSkinnedTransparentProgram)
-    this._oitCompositeLocs = cacheOITCompositeLocs(gl, this.oitCompositeProgram)
     this._bloomDownLocs = cachePostLocs(gl, this.bloomDownsampleProgram)
     this._bloomUpLocs = cachePostLocs(gl, this.bloomUpsampleProgram)
     this._blitLocs = cacheBlitLocs(gl, this.blitProgram)
@@ -771,11 +667,6 @@ export class WebGLRenderer implements Renderer {
     this._bindUBOBlocks(this.basicProgram, false)
     this._bindUBOBlocks(this.lambertSkinnedProgram, true)
     this._bindUBOBlocks(this.basicSkinnedProgram, true)
-    this._bindUBOBlocks(this.lambertTransparentProgram, false)
-    this._bindUBOBlocks(this.basicTransparentProgram, false)
-    this._bindUBOBlocks(this.lambertSkinnedTransparentProgram, true)
-    this._bindUBOBlocks(this.basicSkinnedTransparentProgram, true)
-
     // Shadow UBO (binding 2, 64 bytes = mat4)
     this._shadowUBO = gl.createBuffer()!
     gl.bindBuffer(gl.UNIFORM_BUFFER, this._shadowUBO)
@@ -941,14 +832,7 @@ export class WebGLRenderer implements Renderer {
     if (this.renderTargets && this.renderTargets.width === w && this.renderTargets.height === h) return
     // Destroy old targets
     if (this.renderTargets) this.destroyRenderTargets()
-    this.renderTargets = createRenderTargets(
-      this.gl,
-      w,
-      h,
-      this.samples,
-      this.bloomLevels,
-      this._drawBuffersIndexed === null,
-    )
+    this.renderTargets = createRenderTargets(this.gl, w, h, this.samples, this.bloomLevels)
   }
 
   private destroyRenderTargets() {
@@ -963,13 +847,6 @@ export class WebGLRenderer implements Renderer {
     gl.deleteTexture(rt.resolvedColorTex)
     gl.deleteFramebuffer(rt.resolvedEmissiveFbo)
     gl.deleteTexture(rt.resolvedEmissiveTex)
-    gl.deleteFramebuffer(rt.oitFbo)
-    gl.deleteTexture(rt.oitAccumTex)
-    gl.deleteTexture(rt.oitRevealTex)
-    gl.deleteFramebuffer(rt.resolvedDepthFbo)
-    gl.deleteRenderbuffer(rt.resolvedDepthRb)
-    gl.deleteFramebuffer(rt.opaqueColorFbo)
-    gl.deleteTexture(rt.opaqueColorTex)
     for (const fbo of rt.bloomFbos) gl.deleteFramebuffer(fbo)
     for (const tex of rt.bloomTextures) gl.deleteTexture(tex)
     this.renderTargets = null
@@ -1476,105 +1353,33 @@ export class WebGLRenderer implements Renderer {
 
     this._setVAO(null)
 
-    // ─── MSAA Resolve ──────────────────────────────────────────────
-    // Resolve color
-    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, rt.msaaFbo)
-    gl.readBuffer(gl.COLOR_ATTACHMENT0)
-    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, rt.resolvedColorFbo)
-    gl.blitFramebuffer(0, 0, rt.width, rt.height, 0, 0, rt.width, rt.height, gl.COLOR_BUFFER_BIT, gl.NEAREST)
-
-    // Resolve emissive
-    gl.readBuffer(gl.COLOR_ATTACHMENT1)
-    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, rt.resolvedEmissiveFbo)
-    gl.blitFramebuffer(0, 0, rt.width, rt.height, 0, 0, rt.width, rt.height, gl.COLOR_BUFFER_BIT, gl.NEAREST)
-
-    // Resolve depth (MSAA → 1x for transparent pass depth testing)
-    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, rt.resolvedDepthFbo)
-    gl.blitFramebuffer(0, 0, rt.width, rt.height, 0, 0, rt.width, rt.height, gl.DEPTH_BUFFER_BIT, gl.NEAREST)
-    this._glFbo = undefined // DRAW_FRAMEBUFFER changed outside cache
-
-    // ─── Transparent pass ─────────────────────────────────────────
+    // ─── Transparent meshes (same MSAA pass, alpha blend) ─────────
     if (transparentStart < meshes.length) {
-      const useWBOIT = !!this._drawBuffersIndexed
-
-      if (useWBOIT) {
-        // ─── WBOIT path (requires OES_draw_buffers_indexed) ───────
-        this._setFbo(rt.oitFbo)
-        gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1])
-        this._setViewport(rt.width, rt.height)
-
-        // Clear accum to (0,0,0,0), reveal to (1,0,0,1)
-        gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0])
-        gl.clearBufferfv(gl.COLOR, 1, [1, 0, 0, 1])
-
-        this._setDepthTest(true)
-        this._setDepthMask(false)
-
-        this._setBlend(true)
-        const dbi = this._drawBuffersIndexed!
-        dbi.blendFunciOES(0, gl.ONE, gl.ONE)
-        dbi.blendFunciOES(1, gl.ZERO, gl.ONE_MINUS_SRC_ALPHA)
-      } else {
-        // ─── Simple alpha-blend fallback (no per-buffer blend) ────
-        this._setFbo(rt.resolvedColorFbo)
-        gl.drawBuffers([gl.COLOR_ATTACHMENT0])
-        this._setViewport(rt.width, rt.height)
-
-        this._setDepthTest(true)
-        this._setDepthMask(false)
-
-        this._setBlend(true)
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-      }
-
-      // Disable back-face culling for transparent objects
+      // Change GL state for transparency
+      this._setDepthMask(false)
+      this._setBlend(true)
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
       this._setCullFace(false)
-
-      // Bind shadow texture to unit 2
-      gl.activeTexture(gl.TEXTURE2)
-      gl.bindTexture(gl.TEXTURE_2D_ARRAY, this._shadowTexture)
 
       for (let si = transparentStart; si < meshes.length; si++) {
         const mesh = meshes[sortedIndices[si]!]!
         let program: WebGLProgram
         let locs: SceneUniformLocs
-        if (useWBOIT) {
-          // WBOIT shaders output weighted accum + revealage into MRT
-          if (mesh._isSkinned) {
-            if (mesh.material.type === 'lambert') {
-              program = this.lambertSkinnedTransparentProgram
-              locs = this._lambertSkinnedTransparentLocs
-            } else {
-              program = this.basicSkinnedTransparentProgram
-              locs = this._basicSkinnedTransparentLocs
-            }
+        if (mesh._isSkinned) {
+          if (mesh.material.type === 'lambert') {
+            program = this.lambertSkinnedProgram
+            locs = this._lambertSkinnedLocs
           } else {
-            if (mesh.material.type === 'lambert') {
-              program = this.lambertTransparentProgram
-              locs = this._lambertTransparentLocs
-            } else {
-              program = this.basicTransparentProgram
-              locs = this._basicTransparentLocs
-            }
+            program = this.basicSkinnedProgram
+            locs = this._basicSkinnedLocs
           }
         } else {
-          // Fallback: reuse opaque shaders (they output fragColor with alpha)
-          if (mesh._isSkinned) {
-            if (mesh.material.type === 'lambert') {
-              program = this.lambertSkinnedProgram
-              locs = this._lambertSkinnedLocs
-            } else {
-              program = this.basicSkinnedProgram
-              locs = this._basicSkinnedLocs
-            }
+          if (mesh.material.type === 'lambert') {
+            program = this.lambertProgram
+            locs = this._lambertLocs
           } else {
-            if (mesh.material.type === 'lambert') {
-              program = this.lambertProgram
-              locs = this._lambertLocs
-            } else {
-              program = this.basicProgram
-              locs = this._basicLocs
-            }
+            program = this.basicProgram
+            locs = this._basicLocs
           }
         }
 
@@ -1641,39 +1446,20 @@ export class WebGLRenderer implements Renderer {
       this._setBlend(false)
       this._setCullFace(true)
       this._setDepthMask(true)
-
-      // ─── OIT Composite (WBOIT path only) ──────────────────────────
-      if (useWBOIT) {
-        // Copy opaque color to avoid feedback loop (reads opaqueColorTex, writes resolvedColorFbo)
-        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, rt.resolvedColorFbo)
-        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, rt.opaqueColorFbo)
-        gl.blitFramebuffer(0, 0, rt.width, rt.height, 0, 0, rt.width, rt.height, gl.COLOR_BUFFER_BIT, gl.NEAREST)
-        this._glFbo = undefined // DRAW_FRAMEBUFFER changed outside cache
-
-        // Composite: blend transparent result over opaque color
-        this._setFbo(rt.resolvedColorFbo)
-        this._setViewport(rt.width, rt.height)
-        this._setDepthTest(false)
-        this._setDepthMask(false)
-
-        this._setProgram(this.oitCompositeProgram)
-        const oitLocs = this._oitCompositeLocs
-
-        gl.activeTexture(gl.TEXTURE0)
-        gl.bindTexture(gl.TEXTURE_2D, rt.oitAccumTex)
-        gl.uniform1i(oitLocs.u_accumTexture, 0)
-
-        gl.activeTexture(gl.TEXTURE1)
-        gl.bindTexture(gl.TEXTURE_2D, rt.oitRevealTex)
-        gl.uniform1i(oitLocs.u_revealTexture, 1)
-
-        gl.activeTexture(gl.TEXTURE2)
-        gl.bindTexture(gl.TEXTURE_2D, rt.opaqueColorTex)
-        gl.uniform1i(oitLocs.u_opaqueTexture, 2)
-
-        gl.drawArrays(gl.TRIANGLES, 0, 3)
-      }
     }
+
+    // ─── MSAA Resolve ──────────────────────────────────────────────
+    // Resolve color
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, rt.msaaFbo)
+    gl.readBuffer(gl.COLOR_ATTACHMENT0)
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, rt.resolvedColorFbo)
+    gl.blitFramebuffer(0, 0, rt.width, rt.height, 0, 0, rt.width, rt.height, gl.COLOR_BUFFER_BIT, gl.NEAREST)
+
+    // Resolve emissive
+    gl.readBuffer(gl.COLOR_ATTACHMENT1)
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, rt.resolvedEmissiveFbo)
+    gl.blitFramebuffer(0, 0, rt.width, rt.height, 0, 0, rt.width, rt.height, gl.COLOR_BUFFER_BIT, gl.NEAREST)
+    this._glFbo = undefined // DRAW_FRAMEBUFFER changed outside cache
 
     // ─── Bloom ─────────────────────────────────────────────────────
     if (this.bloomEnabled && this.bloomLevels > 0) {
@@ -1776,11 +1562,6 @@ export class WebGLRenderer implements Renderer {
     gl.deleteProgram(this.basicProgram)
     gl.deleteProgram(this.lambertSkinnedProgram)
     gl.deleteProgram(this.basicSkinnedProgram)
-    gl.deleteProgram(this.lambertTransparentProgram)
-    gl.deleteProgram(this.basicTransparentProgram)
-    gl.deleteProgram(this.lambertSkinnedTransparentProgram)
-    gl.deleteProgram(this.basicSkinnedTransparentProgram)
-    gl.deleteProgram(this.oitCompositeProgram)
     gl.deleteProgram(this.shadowDepthProgram)
     gl.deleteProgram(this.shadowDepthSkinnedProgram)
     gl.deleteProgram(this.bloomDownsampleProgram)
