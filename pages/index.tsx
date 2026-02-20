@@ -433,7 +433,7 @@ const Characters = ({ count }: { count: number }) => {
       const x = root.position[0]!
       const y = root.position[1]!
 
-      let z = root.position[2]!
+      let z = -60
       if (edenMesh) {
         raycaster.set(new Float32Array([x, y, RAY_START_Z]), new Float32Array(rayDir))
         const hits = raycaster.intersectObject(edenMesh)

@@ -304,7 +304,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
     const y = root.position[1]!
     raycaster.set(new Float32Array([x, y, RAY_START_Z]), new Float32Array(rayDir))
     const hits = raycaster.intersectObject(eden)
-    const z = hits.length > 0 ? hits[0]!.point[2]! : root.position[2]!
+    const z = hits.length > 0 ? hits[0]!.point[2]! : -60
 
     // Store orbit origin and assign a random starting angle so characters spread out
     charOriginX.push(x)
