@@ -56,6 +56,7 @@ import {
 import { createSortState, sortMeshes } from './sort'
 import {
   LAMBERT_WGSL,
+  LAMBERT_TEXTURED_WGSL,
   BASIC_WGSL,
   LAMBERT_SKINNED_WGSL,
   BASIC_SKINNED_WGSL,
@@ -69,6 +70,7 @@ import {
 import type { Geometry } from '../geometry/geometry'
 import type { PaletteEntry } from '../materials/material'
 import type { Material } from '../materials/material'
+import type { Texture } from '../materials/texture'
 import type { AABB, Mat4, Vec3 } from '../math/index'
 import type { PerspectiveCamera } from '../scene/camera'
 import type { DirectionalLight } from '../scene/light'
@@ -195,6 +197,9 @@ export class WebGPURenderer implements Renderer {
   private bloomDownPipeline: GPURenderPipeline
   private bloomUpPipeline: GPURenderPipeline
   private blitPipeline: GPURenderPipeline
+  // Textured pipeline variants
+  private lambertTexturedPipeline!: GPURenderPipeline
+  private lambertTexturedTransparentPipeline!: GPURenderPipeline
 
   // Bind group layouts
   private frameBGL: GPUBindGroupLayout
@@ -203,6 +208,7 @@ export class WebGPURenderer implements Renderer {
   private skinnedObjectBGL: GPUBindGroupLayout
   private postProcessBGL: GPUBindGroupLayout
   private blitBGL: GPUBindGroupLayout
+  private textureBGL!: GPUBindGroupLayout
 
   // Per-frame resources
   private frameUB: GPUBuffer
@@ -256,6 +262,10 @@ export class WebGPURenderer implements Renderer {
   // Cached GPU resources
   private _geoCache = new WeakMap<Geometry, GeoBufs>()
   private _matCache = new WeakMap<Material, MatCache>()
+  private _gpuTexCache = new WeakMap<Texture, { texture: GPUTexture; view: GPUTextureView }>()
+  private _texBGCache = new WeakMap<Material, GPUBindGroup>()
+  private _dummyWhiteTexView!: GPUTextureView
+  private _linearSampler!: GPUSampler
   private _lastMaterial: Material | null = null
 
   // Dynamic uniform buffers
@@ -535,6 +545,126 @@ export class WebGPURenderer implements Renderer {
       this._displayH = this.canvas.clientHeight
     })
     this._resizeObserver.observe(canvas)
+
+    // Initialize textured pipeline resources
+    this._initTexturedPipelines()
+  }
+
+  private _initTexturedPipelines() {
+    const device = this.device
+
+    // Bind group layout for texture maps (group 3)
+    this.textureBGL = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+      ],
+    })
+
+    // Pipeline layout: frame + material + object + textures
+    const texturedPipelineLayout = device.createPipelineLayout({
+      bindGroupLayouts: [this.frameBGL, this.materialBGL, this.objectBGL, this.textureBGL],
+    })
+
+    // Shader module
+    const texturedModule = device.createShaderModule({ code: LAMBERT_TEXTURED_WGSL })
+
+    // MRT targets (same as non-textured)
+    const opaqueTargets: GPUColorTargetState[] = [{ format: 'rgba8unorm' }, { format: 'rgba16float' }]
+    const transparentBlend: GPUBlendState = {
+      color: { operation: 'add', srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+      alpha: { operation: 'add', srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+    }
+    const transparentTargets: GPUColorTargetState[] = [
+      { format: 'rgba8unorm', blend: transparentBlend },
+      { format: 'rgba16float', blend: transparentBlend },
+    ]
+
+    // Opaque textured Lambert pipeline
+    this.lambertTexturedPipeline = device.createRenderPipeline({
+      layout: texturedPipelineLayout,
+      vertex: { module: texturedModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
+      fragment: { module: texturedModule, entryPoint: 'fs_main', targets: opaqueTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
+      multisample: { count: this.samples },
+    })
+
+    // Transparent textured Lambert pipeline
+    this.lambertTexturedTransparentPipeline = device.createRenderPipeline({
+      layout: texturedPipelineLayout,
+      vertex: { module: texturedModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
+      fragment: { module: texturedModule, entryPoint: 'fs_main', targets: transparentTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+      multisample: { count: this.samples },
+    })
+
+    // 1x1 white dummy texture for missing maps (sampling white = identity)
+    const dummyWhiteTex = device.createTexture({
+      size: [1, 1],
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    })
+    device.queue.writeTexture(
+      { texture: dummyWhiteTex },
+      new Uint8Array([255, 255, 255, 255]),
+      { bytesPerRow: 4 },
+      [1, 1],
+    )
+    this._dummyWhiteTexView = dummyWhiteTex.createView()
+
+    // Linear sampler for texture maps
+    this._linearSampler = device.createSampler({
+      magFilter: 'linear',
+      minFilter: 'linear',
+      addressModeU: 'clamp-to-edge',
+      addressModeV: 'clamp-to-edge',
+    })
+  }
+
+  private _ensureGPUTexture(tex: Texture): { texture: GPUTexture; view: GPUTextureView } {
+    const cached = this._gpuTexCache.get(tex)
+    if (cached) return cached
+
+    const gpuTex = this.device.createTexture({
+      size: [tex.width, tex.height],
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    })
+    this.device.queue.writeTexture(
+      { texture: gpuTex },
+      tex.data.buffer as ArrayBuffer,
+      { bytesPerRow: tex.width * 4, rowsPerImage: tex.height },
+      [tex.width, tex.height],
+    )
+    const entry = { texture: gpuTex, view: gpuTex.createView() }
+    this._gpuTexCache.set(tex, entry)
+    return entry
+  }
+
+  private _ensureTextureBindGroup(material: Material): GPUBindGroup {
+    const cached = this._texBGCache.get(material)
+    if (cached) return cached
+
+    const colorView = material.colorMap
+      ? this._ensureGPUTexture(material.colorMap).view
+      : this._dummyWhiteTexView
+    const aoView = material.aoMap
+      ? this._ensureGPUTexture(material.aoMap).view
+      : this._dummyWhiteTexView
+
+    const bg = this.device.createBindGroup({
+      layout: this.textureBGL,
+      entries: [
+        { binding: 0, resource: colorView },
+        { binding: 1, resource: aoView },
+        { binding: 2, resource: this._linearSampler },
+      ],
+    })
+    this._texBGCache.set(material, bg)
+    return bg
   }
 
   static async create(canvas: HTMLCanvasElement, config: RendererConfig = {}): Promise<WebGPURenderer> {
@@ -1767,8 +1897,13 @@ export class WebGPURenderer implements Renderer {
       let pipeline: GPURenderPipeline
       if (mesh._isSkinned) {
         pipeline = mesh.material.type === 'lambert' ? this.lambertSkinnedPipeline : this.basicSkinnedPipeline
+      } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
+        pipeline = this.lambertTexturedPipeline
       } else {
         pipeline = mesh.material.type === 'lambert' ? this.lambertPipeline : this.basicPipeline
+      }
+      if (mesh.material._hasTextures && !mesh._isSkinned) {
+        scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))
       }
       drawMeshGPU(scenePass, mesh, pipeline)
     }
@@ -1782,8 +1917,13 @@ export class WebGPURenderer implements Renderer {
           mesh.material.type === 'lambert'
             ? this.lambertSkinnedTransparentPipeline
             : this.basicSkinnedTransparentPipeline
+      } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
+        pipeline = this.lambertTexturedTransparentPipeline
       } else {
         pipeline = mesh.material.type === 'lambert' ? this.lambertTransparentPipeline : this.basicTransparentPipeline
+      }
+      if (mesh.material._hasTextures && !mesh._isSkinned) {
+        scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))
       }
       drawMeshGPU(scenePass, mesh, pipeline)
     }

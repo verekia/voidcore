@@ -9,7 +9,8 @@ A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 sup
 - **Skeletal animation** – Clip-based animation with blending, crossfading, and loop modes
 - **Procedural geometry** – Box, sphere, plane, cone, cylinder, capsule, circle
 - **glTF/GLB loading** – Import 3D models with Draco compression support
-- **Material system** – Basic (unlit) and Lambert (diffuse) shading with palette support, opacity and transparency
+- **KTX2 textures** – Load Basis Universal compressed textures via WASM transcoder
+- **Material system** – Basic (unlit) and Lambert (diffuse) shading with palette support, opacity, transparency, color maps, and AO maps
 - **Sorted alpha blending** – Back-to-front transparent mesh rendering with premultiplied alpha (WebGPU)
 - **Cascaded shadow maps** – 3-cascade CSM with PCF filtering and cascade blending
 - **Bloom post-processing** – Multi-level downsample/upsample with Karis average
@@ -137,6 +138,6 @@ The engine is organized into focused modules:
 | `raycasting/`  | BVH-accelerated ray intersection                     |
 | `overlay.ts`   | HTML overlay (DOM elements tracking 3D positions)    |
 | `controls/`    | Camera interaction (orbit controls)                  |
-| `loaders/`     | Asset importers (glTF/GLB)                           |
+| `loaders/`     | Asset importers (glTF/GLB, KTX2)                     |
 
 Every engine source file includes educational comments at the top explaining the high-level concepts for developers who may not be familiar with graphics programming.

@@ -4,16 +4,19 @@
 // useFrame(cb)      – Register a callback that runs every frame (before render).
 // useLoader(fn,url) – Suspense-compatible asset loader with caching.
 // useGLTF(url)      – Load a glTF/GLB model (wrapper around useLoader).
+// useKTX2(url)      – Load a KTX2 texture (wrapper around useLoader).
 // useAnimations()   – Create an AnimationMixer and return action map.
 
 import { useContext, useEffect, useRef, useMemo } from 'react'
 
 import { AnimationMixer } from '../animation/index'
 import { loadGLTF } from '../loaders/gltf'
+import { loadKTX2 } from '../loaders/ktx2'
 import { VoidContext } from './context'
 
 import type { AnimationClip } from '../animation/index'
 import type { Skeleton } from '../animation/skeleton'
+import type { Texture } from '../materials/texture'
 import type { GLTFResult, LoadOptions } from '../loaders/gltf'
 import type { FrameCallback } from './context'
 
@@ -98,6 +101,12 @@ useGLTF.preload = (url: string, options?: LoadOptions) => {
       entry.error = error
     })
   entry.promise = promise as unknown as Promise<GLTFResult>
+}
+
+// ─── useKTX2 ─────────────────────────────────────────────────────────────────
+
+export const useKTX2 = (url: string, transcoderPath: string): Texture => {
+  return useLoader((u: string, tp: string) => loadKTX2(u, tp), url, transcoderPath)
 }
 
 // ─── useAnimations ────────────────────────────────────────────────────────────
