@@ -675,10 +675,9 @@ export class Raycaster {
    */
   setFromCamera(ndc: [number, number], camera: PerspectiveCamera): void {
     // Ray origin: camera world position
-    const wm = camera._worldMatrix
-    this.origin[0] = wm[12]!
-    this.origin[1] = wm[13]!
-    this.origin[2] = wm[14]!
+    this.origin[0] = camera.position[0]!
+    this.origin[1] = camera.position[1]!
+    this.origin[2] = camera.position[2]!
 
     // Compute view-space ray direction from NDC.
     // Camera looks in -Z in view space (standard right-handed convention).
@@ -690,11 +689,12 @@ export class Raycaster {
     const vy = ndc[1] * tanHalfFov
     const vz = -1
 
-    // Transform view-space direction to world space via camera's world matrix
-    // (3x3 rotation-scale part only, no translation)
-    const wx = wm[0]! * vx + wm[4]! * vy + wm[8]! * vz
-    const wy = wm[1]! * vx + wm[5]! * vy + wm[9]! * vz
-    const wz = wm[2]! * vx + wm[6]! * vy + wm[10]! * vz
+    // Transform view-space direction to world space via transpose of view matrix
+    // (view matrix rows = camera world axes, transpose gives world-space transform)
+    const V = camera._viewMatrix
+    const wx = V[0]! * vx + V[1]! * vy + V[2]! * vz
+    const wy = V[4]! * vx + V[5]! * vy + V[6]! * vz
+    const wz = V[8]! * vx + V[9]! * vy + V[10]! * vz
 
     const len = Math.sqrt(wx * wx + wy * wy + wz * wz)
     if (len > 1e-6) {

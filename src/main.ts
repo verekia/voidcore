@@ -284,7 +284,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
 
   for (let i = 0; i < COLORED_COUNT; i++) {
     const angle = (i / COLORED_COUNT) * Math.PI * 2
-    const mat = new LambertMaterial({ color: cubeColors[i]! })
+    const mat = new LambertMaterial({ color: cubeColors[i]!, opacity: 0.7, transparent: true })
     const mesh = new Mesh(coloredCubeGeo, mat)
     mesh.setPosition(Math.cos(angle) * COLORED_RING_RADIUS, Math.sin(angle) * COLORED_RING_RADIUS, COLORED_Z)
     scene.add(mesh)

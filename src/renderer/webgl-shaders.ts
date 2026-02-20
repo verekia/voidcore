@@ -260,6 +260,7 @@ struct PaletteEntry {
 ${FRAME_BLOCK}
 
 uniform vec3 u_baseColor;
+uniform float u_opacity;
 uniform bool u_hasPalette;
 uniform PaletteEntry u_palette[32];
 uniform highp sampler2DArrayShadow u_shadowMap;
@@ -289,8 +290,8 @@ void main() {
   vec3 litColor = baseColor * (ambient + diffuse);
   vec3 finalColor = litColor + emissive;
 
-  fragColor = vec4(finalColor, 1.0);
-  fragEmissive = vec4(emissive, 1.0);
+  fragColor = vec4(finalColor, u_opacity);
+  fragEmissive = vec4(emissive * alpha, alpha);
 }
 `
 
@@ -382,13 +383,14 @@ precision mediump float; // No precision-sensitive ops — mediump saves ALU reg
 in vec2 v_uv;
 
 uniform vec3 u_baseColor;
+uniform float u_opacity;
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
 
 void main() {
-  fragColor = vec4(u_baseColor, 1.0);
-  fragEmissive = vec4(0.0, 0.0, 0.0, 1.0);
+  fragColor = vec4(u_baseColor, u_opacity);
+  fragEmissive = vec4(0.0, 0.0, 0.0, u_opacity);
 }
 `
 

@@ -124,6 +124,8 @@ export interface MaterialProps extends BaseProps {
   args?: [MaterialOptions?]
   color?: [number, number, number]
   vertexColors?: boolean
+  opacity?: number
+  transparent?: boolean
 }
 
 export interface PrimitiveProps extends NodeProps {

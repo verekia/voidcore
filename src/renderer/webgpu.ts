@@ -18,6 +18,10 @@
 //   Bind group    – A set of GPU resources (buffers, textures) bound to shader slots.
 //   Uniform buffer – CPU-to-GPU data (matrices, colors) uploaded once and read by shaders.
 //   MSAA          – Multi-sample anti-aliasing (4x) to smooth jagged edges.
+//   Premul alpha  – Transparent pipelines use premultiplied alpha blend (src=one, dst=
+//                    one-minus-src-alpha). This avoids the 'src-alpha' blend factor which
+//                    triggers VK_ERROR_UNKNOWN on some Android Vulkan drivers when combined
+//                    with comparison texture sampling (textureSampleCompareLevel).
 //   MRT           – Multiple render targets: color and emissive are written simultaneously.
 //   Vertex packing – Normals use snorm8x4, UVs use float16x2, bone weights use unorm8x4
 //                    to reduce vertex buffer size (~40% smaller than all-float32).
@@ -45,6 +49,7 @@ import {
   computeCascadeMatrix,
   defaultMaxDpr,
   findDirectionalLight,
+  findTransparentStart,
   NUM_CASCADES,
 } from './shared.ts'
 import { createSortState, sortMeshes } from './sort.ts'
@@ -181,6 +186,11 @@ export class WebGPURenderer implements Renderer {
   private basicPipeline: GPURenderPipeline
   private lambertSkinnedPipeline: GPURenderPipeline
   private basicSkinnedPipeline: GPURenderPipeline
+  // Transparent variants (blend + no depth write + no cull)
+  private lambertTransparentPipeline: GPURenderPipeline
+  private basicTransparentPipeline: GPURenderPipeline
+  private lambertSkinnedTransparentPipeline: GPURenderPipeline
+  private basicSkinnedTransparentPipeline: GPURenderPipeline
   private bloomDownPipeline: GPURenderPipeline
   private bloomUpPipeline: GPURenderPipeline
   private blitPipeline: GPURenderPipeline
@@ -330,6 +340,10 @@ export class WebGPURenderer implements Renderer {
     basicPipeline: GPURenderPipeline,
     lambertSkinnedPipeline: GPURenderPipeline,
     basicSkinnedPipeline: GPURenderPipeline,
+    lambertTransparentPipeline: GPURenderPipeline,
+    basicTransparentPipeline: GPURenderPipeline,
+    lambertSkinnedTransparentPipeline: GPURenderPipeline,
+    basicSkinnedTransparentPipeline: GPURenderPipeline,
     bloomDownPipeline: GPURenderPipeline,
     bloomUpPipeline: GPURenderPipeline,
     blitPipeline: GPURenderPipeline,
@@ -371,6 +385,10 @@ export class WebGPURenderer implements Renderer {
     this.basicPipeline = basicPipeline
     this.lambertSkinnedPipeline = lambertSkinnedPipeline
     this.basicSkinnedPipeline = basicSkinnedPipeline
+    this.lambertTransparentPipeline = lambertTransparentPipeline
+    this.basicTransparentPipeline = basicTransparentPipeline
+    this.lambertSkinnedTransparentPipeline = lambertSkinnedTransparentPipeline
+    this.basicSkinnedTransparentPipeline = basicSkinnedTransparentPipeline
     this.bloomDownPipeline = bloomDownPipeline
     this.bloomUpPipeline = bloomUpPipeline
     this.blitPipeline = blitPipeline
@@ -525,6 +543,12 @@ export class WebGPURenderer implements Renderer {
     if (!adapter) throw new Error('No WebGPU adapter found')
 
     const device = await adapter.requestDevice()
+
+    // Surface hidden GPU errors (critical for Android debugging)
+    device.onuncapturederror = event => {
+      console.error('WebGPU uncaptured error:', event.error.message || event.error)
+    }
+
     const context = canvas.getContext('webgpu')
     if (!context) throw new Error('WebGPU canvas context not available')
 
@@ -724,6 +748,55 @@ export class WebGPURenderer implements Renderer {
       multisample: { count: samples },
     })
 
+    // ─── Transparent pipeline variants (premultiplied alpha blend + no depth write + no cull) ──
+    // Premultiplied alpha blend – avoids the 'src-alpha' blend factor which triggers
+    // VK_ERROR_UNKNOWN on some Android Vulkan drivers when combined with comparison sampling.
+    // Shaders output premultiplied color (rgb * alpha) so 'one' is correct for src factor.
+    const transparentBlend: GPUBlendState = {
+      color: { operation: 'add', srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+      alpha: { operation: 'add', srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+    }
+    const transparentTargets: GPUColorTargetState[] = [
+      { format: 'rgba8unorm', blend: transparentBlend },
+      { format: 'rgba16float', blend: transparentBlend },
+    ]
+
+    const lambertTransparentPipeline = device.createRenderPipeline({
+      layout: opaquePipelineLayout,
+      vertex: { module: lambertModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
+      fragment: { module: lambertModule, entryPoint: 'fs_main', targets: transparentTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+      multisample: { count: samples },
+    })
+
+    const basicTransparentPipeline = device.createRenderPipeline({
+      layout: opaquePipelineLayout,
+      vertex: { module: basicModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
+      fragment: { module: basicModule, entryPoint: 'fs_main', targets: transparentTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+      multisample: { count: samples },
+    })
+
+    const lambertSkinnedTransparentPipeline = device.createRenderPipeline({
+      layout: skinnedOpaquePipelineLayout,
+      vertex: { module: lambertSkinnedModule, entryPoint: 'vs_main', buffers: SKINNED_VERTEX_BUFFER_LAYOUT },
+      fragment: { module: lambertSkinnedModule, entryPoint: 'fs_main', targets: transparentTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+      multisample: { count: samples },
+    })
+
+    const basicSkinnedTransparentPipeline = device.createRenderPipeline({
+      layout: skinnedOpaquePipelineLayout,
+      vertex: { module: basicSkinnedModule, entryPoint: 'vs_main', buffers: SKINNED_VERTEX_BUFFER_LAYOUT },
+      fragment: { module: basicSkinnedModule, entryPoint: 'fs_main', targets: transparentTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+      multisample: { count: samples },
+    })
+
     const bloomDownPipeline = device.createRenderPipeline({
       layout: postProcessPipelineLayout,
       vertex: { module: bloomDownModule, entryPoint: 'vs_main' },
@@ -864,6 +937,10 @@ export class WebGPURenderer implements Renderer {
       basicPipeline,
       lambertSkinnedPipeline,
       basicSkinnedPipeline,
+      lambertTransparentPipeline,
+      basicTransparentPipeline,
+      lambertSkinnedTransparentPipeline,
+      basicSkinnedTransparentPipeline,
       bloomDownPipeline,
       bloomUpPipeline,
       blitPipeline,
@@ -1219,7 +1296,7 @@ export class WebGPURenderer implements Renderer {
     data[0] = material.color[0]
     data[1] = material.color[1]
     data[2] = material.color[2]
-    data[3] = 1.0
+    data[3] = material.opacity
 
     const hasPalette = !!material.palette
     data[4] = hasPalette ? 1.0 : 0.0
@@ -1631,31 +1708,26 @@ export class WebGPURenderer implements Renderer {
       }
     }
 
-    // ─── Opaque pass (MSAA MRT) ─────────────────────────────────
-    const opaquePass = encoder.beginRenderPass(this._opaquePassDesc)
+    // ─── Scene pass (MSAA MRT): opaque then transparent ─────────
+    const scenePass = encoder.beginRenderPass(this._opaquePassDesc)
 
-    // ─── Draw loop ──────────────────────────────────────────────
-    this._lastMaterial = null
-    for (let si = 0; si < meshes.length; si++) {
-      const mesh = meshes[sortedIndices[si]!]!
-      let pipeline: GPURenderPipeline
-      if (mesh._isSkinned) {
-        pipeline = mesh.material.type === 'lambert' ? this.lambertSkinnedPipeline : this.basicSkinnedPipeline
-      } else {
-        pipeline = mesh.material.type === 'lambert' ? this.lambertPipeline : this.basicPipeline
-      }
-      opaquePass.setPipeline(pipeline)
+    // Find the split between opaque and transparent meshes
+    const transparentStart = findTransparentStart(this._sortState, meshes.length)
+
+    // ─── Draw helper (shared by opaque + transparent loops) ─────
+    const drawMeshGPU = (pass: GPURenderPassEncoder, mesh: Mesh, pipeline: GPURenderPipeline) => {
+      pass.setPipeline(pipeline)
 
       const geoBufs = this.ensureGeometryBuffers(mesh.geometry)
-      opaquePass.setVertexBuffer(0, geoBufs.position)
-      opaquePass.setVertexBuffer(1, geoBufs.normal)
-      opaquePass.setVertexBuffer(2, geoBufs.uv)
-      opaquePass.setVertexBuffer(3, geoBufs.materialIndex)
+      pass.setVertexBuffer(0, geoBufs.position)
+      pass.setVertexBuffer(1, geoBufs.normal)
+      pass.setVertexBuffer(2, geoBufs.uv)
+      pass.setVertexBuffer(3, geoBufs.materialIndex)
       if (mesh._isSkinned && geoBufs.joints && geoBufs.weights) {
-        opaquePass.setVertexBuffer(4, geoBufs.joints)
-        opaquePass.setVertexBuffer(5, geoBufs.weights)
+        pass.setVertexBuffer(4, geoBufs.joints)
+        pass.setVertexBuffer(5, geoBufs.weights)
       }
-      opaquePass.setIndexBuffer(geoBufs.index, geoBufs.indexFormat)
+      pass.setIndexBuffer(geoBufs.index, geoBufs.indexFormat)
 
       const matCache = this.ensureMaterialCache(mesh.material)
       if (mesh.material !== this._lastMaterial) {
@@ -1664,20 +1736,48 @@ export class WebGPURenderer implements Renderer {
       }
 
       if (mesh._isSkinned) {
-        opaquePass.setBindGroup(2, this._skinnedDynBG, [mesh._batchIndex * this._alignedSkinnedSize])
+        pass.setBindGroup(2, this._skinnedDynBG, [mesh._batchIndex * this._alignedSkinnedSize])
       } else {
-        opaquePass.setBindGroup(2, this._objectDynBG, [mesh._batchIndex * this._alignedObjectSize])
+        pass.setBindGroup(2, this._objectDynBG, [mesh._batchIndex * this._alignedObjectSize])
       }
 
-      opaquePass.setBindGroup(0, this.frameBG)
-      opaquePass.setBindGroup(1, matCache.bindGroup)
+      pass.setBindGroup(0, this.frameBG)
+      pass.setBindGroup(1, matCache.bindGroup)
 
-      opaquePass.drawIndexed(geoBufs.indexCount)
+      pass.drawIndexed(geoBufs.indexCount)
       drawCalls++
       triangles += geoBufs.indexCount / 3
     }
 
-    opaquePass.end()
+    // ─── Opaque draw loop ────────────────────────────────────────
+    this._lastMaterial = null
+    for (let si = 0; si < transparentStart; si++) {
+      const mesh = meshes[sortedIndices[si]!]!
+      let pipeline: GPURenderPipeline
+      if (mesh._isSkinned) {
+        pipeline = mesh.material.type === 'lambert' ? this.lambertSkinnedPipeline : this.basicSkinnedPipeline
+      } else {
+        pipeline = mesh.material.type === 'lambert' ? this.lambertPipeline : this.basicPipeline
+      }
+      drawMeshGPU(scenePass, mesh, pipeline)
+    }
+
+    // ─── Transparent draw loop (back-to-front, blend + no depth write + no cull) ──
+    for (let si = transparentStart; si < meshes.length; si++) {
+      const mesh = meshes[sortedIndices[si]!]!
+      let pipeline: GPURenderPipeline
+      if (mesh._isSkinned) {
+        pipeline =
+          mesh.material.type === 'lambert'
+            ? this.lambertSkinnedTransparentPipeline
+            : this.basicSkinnedTransparentPipeline
+      } else {
+        pipeline = mesh.material.type === 'lambert' ? this.lambertTransparentPipeline : this.basicTransparentPipeline
+      }
+      drawMeshGPU(scenePass, mesh, pipeline)
+    }
+
+    scenePass.end()
 
     // ─── Bloom ──────────────────────────────────────────────────
     if (this.bloomEnabled && this.bloomLevels > 0) {

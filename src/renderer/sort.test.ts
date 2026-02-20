@@ -13,6 +13,7 @@ const mockMesh = (opts: {
   z: number
   materialId: number
   materialType?: 'basic' | 'lambert'
+  transparent?: boolean
 }): Mesh => {
   const wm = mat4Create()
   mat4Identity(wm)
@@ -24,6 +25,7 @@ const mockMesh = (opts: {
     material: {
       _id: opts.materialId,
       type: opts.materialType ?? 'basic',
+      transparent: opts.transparent ?? false,
     },
     skeleton: null,
     geometry: {},
@@ -33,12 +35,8 @@ const mockMesh = (opts: {
 
 /** Create a mock camera at a position with a given far plane */
 const mockCamera = (x: number, y: number, z: number, far: number): PerspectiveCamera => {
-  const wm = mat4Create()
-  mat4Identity(wm)
-  wm[12] = x
-  wm[13] = y
-  wm[14] = z
-  return { _worldMatrix: wm, far } as unknown as PerspectiveCamera
+  const pos = new Float32Array([x, y, z])
+  return { position: pos, far } as unknown as PerspectiveCamera
 }
 
 // ─── createSortState ───────────────────────────────────────────────
@@ -144,6 +142,60 @@ describe('sortMeshes', () => {
     expect(distances[0]).toBeLessThanOrEqual(distances[1]!)
     expect(distances[1]).toBeLessThanOrEqual(distances[2]!)
     expect(distances[2]).toBeLessThanOrEqual(distances[3]!)
+  })
+
+  test('transparent meshes sort after opaque meshes', () => {
+    const state = createSortState(10)
+    const meshes = [
+      mockMesh({ x: 10, y: 0, z: 0, materialId: 1, transparent: true }),
+      mockMesh({ x: 10, y: 0, z: 0, materialId: 1, transparent: false }),
+      mockMesh({ x: 10, y: 0, z: 0, materialId: 1, transparent: true }),
+      mockMesh({ x: 10, y: 0, z: 0, materialId: 1, transparent: false }),
+    ]
+    const camera = mockCamera(0, 0, 0, 100)
+    sortMeshes(state, meshes, 4, camera)
+
+    const sorted = Array.from(state.indices.subarray(0, 4)).map(i => meshes[i]!)
+    // Opaque first, then transparent
+    expect(sorted[0]!.material.transparent).toBe(false)
+    expect(sorted[1]!.material.transparent).toBe(false)
+    expect(sorted[2]!.material.transparent).toBe(true)
+    expect(sorted[3]!.material.transparent).toBe(true)
+  })
+
+  test('transparent meshes sort farthest-first (back-to-front)', () => {
+    const state = createSortState(10)
+    const meshes = [
+      mockMesh({ x: 5, y: 0, z: 0, materialId: 1, transparent: true }), // near
+      mockMesh({ x: 50, y: 0, z: 0, materialId: 1, transparent: true }), // far
+      mockMesh({ x: 25, y: 0, z: 0, materialId: 1, transparent: true }), // mid
+    ]
+    const camera = mockCamera(0, 0, 0, 100)
+    sortMeshes(state, meshes, 3, camera)
+
+    const sorted = Array.from(state.indices.subarray(0, 3)).map(i => meshes[i]!)
+    const distances = sorted.map(m => m._worldMatrix[12]!)
+    // Farthest first for transparent
+    expect(distances[0]).toBeGreaterThanOrEqual(distances[1]!)
+    expect(distances[1]).toBeGreaterThanOrEqual(distances[2]!)
+  })
+
+  test('sorts transparent farthest-first across different materials', () => {
+    const state = createSortState(10)
+    // Different materials — depth should still win for transparent meshes
+    const meshes = [
+      mockMesh({ x: 5, y: 0, z: 0, materialId: 1, transparent: true }), // near, mat 1
+      mockMesh({ x: 50, y: 0, z: 0, materialId: 2, transparent: true }), // far, mat 2
+      mockMesh({ x: 25, y: 0, z: 0, materialId: 3, transparent: true }), // mid, mat 3
+    ]
+    const camera = mockCamera(0, 0, 0, 100)
+    sortMeshes(state, meshes, 3, camera)
+
+    const sorted = Array.from(state.indices.subarray(0, 3)).map(i => meshes[i]!)
+    const distances = sorted.map(m => m._worldMatrix[12]!)
+    // Farthest first even across different materials
+    expect(distances[0]).toBeGreaterThanOrEqual(distances[1]!)
+    expect(distances[1]).toBeGreaterThanOrEqual(distances[2]!)
   })
 
   test('sort is stable (preserves insertion order for equal keys)', () => {

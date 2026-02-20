@@ -154,7 +154,7 @@ const ColoredCube = ({ index }: { index: number }) => {
   return (
     <mesh ref={meshRef} position={position}>
       <boxGeometry args={[{ width: COLORED_CUBE_SIZE, height: COLORED_CUBE_SIZE, depth: COLORED_CUBE_SIZE }]} />
-      <lambertMaterial args={[{ color: CUBE_COLORS[index]! }]} />
+      <lambertMaterial args={[{ color: CUBE_COLORS[index]!, opacity: 0.7, transparent: true }]} />
     </mesh>
   )
 }

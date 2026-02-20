@@ -15,6 +15,10 @@
 //   The light's world position is treated as a direction vector (like the sun – infinitely
 //   far away, only direction matters), then normalized.
 //
+// findTransparentStart() – Scans sorted keys to find the first transparent mesh.
+//   Transparent meshes have bit 31 set in the sort key, placing them after all opaques.
+//   Returns the index in the sorted draw order where transparent meshes begin.
+//
 // computeCascadeSplits() – Computes logarithmic/linear blend split distances for CSM.
 // computeCascadeMatrix() – Builds the light-space view-projection matrix for one cascade.
 //   Both renderers share the same cascade logic; the only difference is the orthographic
@@ -37,6 +41,20 @@ import type { AABB, Mat4, Vec3 } from '../math/index.ts'
 import type { PerspectiveCamera } from '../scene/camera.ts'
 import type { DirectionalLight } from '../scene/light.ts'
 import type { Node } from '../scene/node.ts'
+import type { SortState } from './sort.ts'
+
+/**
+ * Find the index of the first transparent mesh in the sorted draw list.
+ * Transparent meshes have bit 30 set in their sort key, so they sort after all opaques.
+ * Returns meshCount if no transparent meshes exist.
+ */
+export const findTransparentStart = (state: SortState, meshCount: number): number => {
+  const { keys, indices } = state
+  for (let i = 0; i < meshCount; i++) {
+    if (keys[indices[i]!]! >>> 30) return i
+  }
+  return meshCount
+}
 
 /** Default max DPR: 1.25 on mobile (coarse pointer), 1.5 on desktop. */
 export const defaultMaxDpr = (): number =>

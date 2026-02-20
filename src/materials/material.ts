@@ -8,6 +8,10 @@
 // geometry can reference a palette index, allowing a single mesh to display multiple colors
 // without needing textures. Palette entries can also specify emissive colors (self-glowing).
 //
+// Transparency is supported via sorted alpha blending. Set `transparent: true` and an
+// `opacity` value (0–1) to make a material see-through. Transparent meshes are drawn
+// back-to-front after all opaque meshes, with blending enabled and depth writes off.
+//
 // new BasicMaterial()   – Unlit material (ignores lights).
 // new LambertMaterial() – Diffuse-lit material (reacts to lights).
 
@@ -27,6 +31,8 @@ export class Material {
   color: [number, number, number]
   vertexColors: boolean
   palette?: PaletteEntry[]
+  opacity: number
+  transparent: boolean
 
   // Lambert-specific
   receiveShadow: boolean
@@ -42,6 +48,8 @@ export class Material {
     this.color = opts.color ?? [1, 1, 1]
     this.vertexColors = opts.vertexColors ?? false
     this.receiveShadow = opts.receiveShadow ?? true
+    this.opacity = opts.opacity ?? 1.0
+    this.transparent = opts.transparent ?? false
 
     if (opts.palette) {
       this.palette = opts.palette
@@ -59,6 +67,8 @@ export interface MaterialOptions {
   vertexColors?: boolean
   receiveShadow?: boolean
   palette?: PaletteEntry[]
+  opacity?: number
+  transparent?: boolean
 }
 
 export class BasicMaterial extends Material {

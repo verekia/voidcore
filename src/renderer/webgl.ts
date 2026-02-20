@@ -46,6 +46,7 @@ import {
   computeCascadeMatrix,
   defaultMaxDpr,
   findDirectionalLight,
+  findTransparentStart,
   NUM_CASCADES,
 } from './shared.ts'
 import { createSortState, sortMeshes } from './sort.ts'
@@ -123,6 +124,7 @@ const createProgram = (gl: WebGL2RenderingContext, vertSrc: string, fragSrc: str
 
 interface SceneUniformLocs {
   u_baseColor: WebGLUniformLocation | null
+  u_opacity: WebGLUniformLocation | null
   u_hasPalette: WebGLUniformLocation | null
   u_paletteColor: (WebGLUniformLocation | null)[]
   u_paletteEmissive: (WebGLUniformLocation | null)[]
@@ -151,6 +153,7 @@ const cacheSceneLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): Scen
   }
   return {
     u_baseColor: gl.getUniformLocation(program, 'u_baseColor'),
+    u_opacity: gl.getUniformLocation(program, 'u_opacity'),
     u_hasPalette: gl.getUniformLocation(program, 'u_hasPalette'),
     u_paletteColor: paletteColor,
     u_paletteEmissive: paletteEmissive,
@@ -1248,7 +1251,7 @@ export class WebGLRenderer implements Renderer {
     this.ensureRenderTargets()
     const rt = this.renderTargets!
 
-    // ─── Opaque pass (MSAA MRT) ────────────────────────────────────
+    // ─── Scene pass (MSAA MRT) ────────────────────────────────────
     this._setFbo(rt.msaaFbo)
     gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1])
     this._setViewport(rt.width, rt.height)
@@ -1261,36 +1264,11 @@ export class WebGLRenderer implements Renderer {
     gl.activeTexture(gl.TEXTURE2)
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, this._shadowTexture)
 
-    // ─── Draw loop ──────────────────────────────────────────────────
-    for (let si = 0; si < meshes.length; si++) {
-      const mesh = meshes[sortedIndices[si]!]!
-      let program: WebGLProgram
-      let locs: SceneUniformLocs
-      if (mesh._isSkinned) {
-        if (mesh.material.type === 'lambert') {
-          program = this.lambertSkinnedProgram
-          locs = this._lambertSkinnedLocs
-        } else {
-          program = this.basicSkinnedProgram
-          locs = this._basicSkinnedLocs
-        }
-      } else {
-        if (mesh.material.type === 'lambert') {
-          program = this.lambertProgram
-          locs = this._lambertLocs
-        } else {
-          program = this.basicProgram
-          locs = this._basicLocs
-        }
-      }
+    // Find the split between opaque and transparent meshes
+    const transparentStart = findTransparentStart(this._sortState, meshes.length)
 
-      const programChanged = this._setProgram(program)
-      if (programChanged) {
-        if (mesh.material.type === 'lambert') {
-          gl.uniform1i(locs.u_shadowMap, 2)
-        }
-      }
-
+    // ─── Draw helper (shared by opaque + transparent loops) ──────
+    const drawMesh = (si: number, locs: SceneUniformLocs, programChanged: boolean, mesh: Mesh) => {
       ensureGPUBuffers(gl, mesh.geometry)
       this._setVAO((mesh.geometry._gpuBuffers as GPUBuffers).vao!)
 
@@ -1304,6 +1282,7 @@ export class WebGLRenderer implements Renderer {
       if (materialChanged) {
         this._glMaterial = mesh.material
         gl.uniform3fv(locs.u_baseColor, mesh.material.color)
+        gl.uniform1f(locs.u_opacity, mesh.material.opacity)
         if (mesh.material.type === 'lambert') {
           const hasPalette = !!mesh.material.palette && mesh.geometry.hasAttribute('materialIndex')
           gl.uniform1i(locs.u_hasPalette, hasPalette ? 1 : 0)
@@ -1328,6 +1307,80 @@ export class WebGLRenderer implements Renderer {
       gl.drawElements(gl.TRIANGLES, mesh.geometry.indexCount, idxType, 0)
       drawCalls++
       triangles += mesh.geometry.indexCount / 3
+    }
+
+    // ─── Opaque draw loop ────────────────────────────────────────
+    for (let si = 0; si < transparentStart; si++) {
+      const mesh = meshes[sortedIndices[si]!]!
+      let program: WebGLProgram
+      let locs: SceneUniformLocs
+      if (mesh._isSkinned) {
+        if (mesh.material.type === 'lambert') {
+          program = this.lambertSkinnedProgram
+          locs = this._lambertSkinnedLocs
+        } else {
+          program = this.basicSkinnedProgram
+          locs = this._basicSkinnedLocs
+        }
+      } else {
+        if (mesh.material.type === 'lambert') {
+          program = this.lambertProgram
+          locs = this._lambertLocs
+        } else {
+          program = this.basicProgram
+          locs = this._basicLocs
+        }
+      }
+
+      const programChanged = this._setProgram(program)
+      if (programChanged && mesh.material.type === 'lambert') {
+        gl.uniform1i(locs.u_shadowMap, 2)
+      }
+
+      drawMesh(si, locs, programChanged, mesh)
+    }
+
+    // ─── Transparent draw loop (back-to-front, blend on, depth write off) ──
+    if (transparentStart < meshes.length) {
+      this._setBlend(true)
+      gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+      this._setDepthMask(false)
+      this._setCullFace(false)
+
+      for (let si = transparentStart; si < meshes.length; si++) {
+        const mesh = meshes[sortedIndices[si]!]!
+        let program: WebGLProgram
+        let locs: SceneUniformLocs
+        if (mesh._isSkinned) {
+          if (mesh.material.type === 'lambert') {
+            program = this.lambertSkinnedProgram
+            locs = this._lambertSkinnedLocs
+          } else {
+            program = this.basicSkinnedProgram
+            locs = this._basicSkinnedLocs
+          }
+        } else {
+          if (mesh.material.type === 'lambert') {
+            program = this.lambertProgram
+            locs = this._lambertLocs
+          } else {
+            program = this.basicProgram
+            locs = this._basicLocs
+          }
+        }
+
+        const programChanged = this._setProgram(program)
+        if (programChanged && mesh.material.type === 'lambert') {
+          gl.uniform1i(locs.u_shadowMap, 2)
+        }
+
+        drawMesh(si, locs, programChanged, mesh)
+      }
+
+      // Restore state
+      this._setBlend(false)
+      this._setDepthMask(true)
+      this._setCullFace(true)
     }
 
     this._setVAO(null)

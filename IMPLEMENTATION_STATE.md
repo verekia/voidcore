@@ -15,7 +15,7 @@ Audit of the Voidcore specs vs current implementation.
 | Engine Core / Lifecycle | ✓ Implemented |
 | Shadows (CSM)           | ✓ Implemented |
 | Raycasting / BVH        | ✓ Implemented |
-| Transparency (WBOIT)    | ✓ Implemented |
+| Transparency (Sorted)   | ✓ Implemented |
 | HTML Overlay            | ✓ Implemented |
 | React Bindings          | ✓ Implemented |
 | Bloom                   | ✓ Implemented |
@@ -39,7 +39,7 @@ Audit of the Voidcore specs vs current implementation.
 - **Shaders**: Dual WGSL + GLSL maintained separately
 - **Raycasting / BVH**: Two-level BVH (scene mesh + triangle level), binned SAH with 12 bins, slab ray-AABB, Möller-Trumbore ray-triangle, `Raycaster` class with `set`, `setFromCamera`, `intersectObject`, `intersectObjects`. Geometry BVH cached via `WeakMap`, invalidated on `needsUpdate`.
 - **Shadows (CSM)**: 3-cascade shadow maps, depth pass, texel snapping, PCF filtering, cascade blending, shadow bias. Implemented in both WebGPU and WebGL2 backends.
-- **Transparency (WBOIT)**: Two-pass OIT with accumulation (RGBA16F) and revealage buffers, McGuire weight function, MRT targets, composite pass. Full pipeline: Shadow → Opaque → WBOIT → Resolve → OIT Composite → Bloom → Blit. Implemented in both WebGPU and WebGL2 backends. WebGL2 falls back to sorted alpha blending on devices lacking `OES_draw_buffers_indexed` (some Android GPUs).
+- **Transparency (Sorted Alpha Blend)**: Back-to-front sorted alpha blending drawn after opaques in the same render pass. Sort key layout puts depth in the most significant bits for transparent meshes (correct blending order) vs pipeline/material for opaques (state-change minimization). WebGPU uses premultiplied alpha (`one / one-minus-src-alpha`) to avoid `VK_ERROR_UNKNOWN` on Android Vulkan drivers. WebGL2 uses straight alpha (`src-alpha / one-minus-src-alpha`). Transparent pipelines disable depth writes and back-face culling. glTF `alphaMode: 'BLEND'` and `baseColorFactor` alpha are supported.
 - **Bloom**: 5-level RGBA16F downsample/upsample chain driven by MRT emissive output. 13-tap Jimenez downsample with Karis average on the first mip (firefly suppression). 9-tap tent upsample with additive blending. Final blit merges bloom composite + gamma correction in a single pass. Implemented in both WebGPU (WGSL) and WebGL2 (GLSL) backends.
 - **Backend error handling**: WebGPU-first with automatic WebGL2 fallback in `'auto'` mode. Descriptive errors when an explicitly requested backend is unavailable.
 

@@ -417,9 +417,13 @@ export const loadGLTF = async (url: string, options?: LoadOptions): Promise<GLTF
           const pbr = matDef.pbrMetallicRoughness ?? {}
           const baseColor = pbr.baseColorFactor ?? [1, 1, 1, 1]
           const isUnlit = matDef.extensions?.KHR_materials_unlit !== undefined
+          const isBlend = matDef.alphaMode === 'BLEND'
+          const alpha = baseColor[3] ?? 1
 
           material = new Material(isUnlit ? 'basic' : 'lambert', {
             color: [baseColor[0], baseColor[1], baseColor[2]],
+            opacity: alpha,
+            transparent: isBlend || alpha < 1,
           })
         } else {
           material = new LambertMaterial()

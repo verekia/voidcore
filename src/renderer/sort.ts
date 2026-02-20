@@ -5,10 +5,17 @@
 // these costly switches.
 //
 // Sort key layout (32-bit unsigned integer):
-//   Bits 31-30: (reserved)
-//   Bits 29-22: Pipeline ID – Groups by shader program (lambert/basic × skinned/static)
-//   Bits 21-10: Material ID – Groups by material to reduce uniform uploads
-//   Bits 9-0:   Depth       – Nearest first (early-Z optimization).
+//   Bits 31-30: Layer – 0 = opaque (drawn first), 1 = transparent (drawn after)
+//
+//   Opaque key (layer 0) – minimizes state changes:
+//     Bits 29-22: Pipeline ID – Groups by shader program (lambert/basic × skinned/static)
+//     Bits 21-10: Material ID – Groups by material to reduce uniform uploads
+//     Bits 9-0:   Depth       – Nearest first (early-Z optimization)
+//
+//   Transparent key (layer 1) – prioritizes correct depth order:
+//     Bits 29-20: Depth       – Farthest first (back-to-front for correct blending)
+//     Bits 19-12: Pipeline ID – Secondary grouping by shader
+//     Bits 11-0:  Material ID – Tertiary grouping by material
 //
 // Uses a 4-pass LSD (Least Significant Digit) radix sort with an 8-bit radix.
 // Radix sort is O(n) and stable, making it ideal for the thousands of meshes a scene
@@ -53,10 +60,10 @@ export const sortMeshes = (state: SortState, meshes: Mesh[], meshCount: number, 
 
   const { keys, indices, tempIndices, counts } = state
 
-  // Camera position from view matrix inverse (world position is in _worldMatrix elements 12,13,14)
-  const camX = camera._worldMatrix[12]!
-  const camY = camera._worldMatrix[13]!
-  const camZ = camera._worldMatrix[14]!
+  // Camera world position
+  const camX = camera.position[0]!
+  const camY = camera.position[1]!
+  const camZ = camera.position[2]!
   const invFar = 1 / camera.far
 
   // Build sort keys and initial indices
@@ -65,21 +72,29 @@ export const sortMeshes = (state: SortState, meshes: Mesh[], meshCount: number, 
     const material = mesh.material
     mesh._isSkinned = !!mesh.skeleton && !!mesh.geometry.joints && !!mesh.geometry.weights
 
-    // Pipeline ID: bits 29-22
+    // Layer: bits 31-30 (0 = opaque, 1 = transparent)
+    const layer = material.transparent ? 1 : 0
+
+    // Pipeline ID
     const pipelineId = (material.type === 'lambert' ? 1 : 0) | (mesh._isSkinned ? 2 : 0)
 
-    // Material ID: bits 21-10 (masked to 12 bits)
+    // Material ID (masked to 12 bits)
     const materialId = material._id & 0xfff
 
-    // Depth: bits 9-0 (10 bits, quantized distance, nearest first for early-Z)
+    // Distance quantization
     const wm = mesh._worldMatrix
     const dx = wm[12]! - camX
     const dy = wm[13]! - camY
     const dz = wm[14]! - camZ
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
-    const depth = Math.min(dist * invFar * 1023, 1023) | 0
+    const quantized = Math.min(dist * invFar * 1023, 1023) | 0
 
-    keys[i] = (pipelineId << 22) | (materialId << 10) | depth
+    // Opaque: pipeline > material > depth (minimize state changes)
+    // Transparent: depth > pipeline > material (correct alpha blending order)
+    keys[i] =
+      layer === 0
+        ? (pipelineId << 22) | (materialId << 10) | quantized
+        : (1 << 30) | ((1023 - quantized) << 20) | (pipelineId << 12) | materialId
     indices[i] = i
   }
 
