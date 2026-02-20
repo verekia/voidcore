@@ -25,7 +25,7 @@
 | Coordinate system    | Z-up, right-handed (X=right, Y=forward, Z=up)                   | Blender convention, prompt requirement                        |
 | Materials            | Basic (unlit) + Lambert (N·L diffuse)                           | Sufficient for stylized/low-poly                              |
 | Transparency         | Weighted Blended OIT                                            | No sorting, single-pass, no ordering artifacts                |
-| Shadows              | 3-cascade CSM, 1024px default                                   | Smooth shadows for 200m worlds                                |
+| Shadows              | Single shadow map, 2048px default                               | Simple shadows for small/medium worlds                        |
 | Bloom                | Unreal-style progressive downsample/upsample                    | Per-vertex emissive control via MRT                           |
 | BVH                  | Binned SAH, flat 32-byte nodes                                  | three-mesh-bvh quality target                                 |
 | Animation            | GPU skinning, 4-bone weights, 32-bone limit, action-based mixer | glTF skeletal animation with crossfade, UBO always sufficient |
@@ -49,7 +49,7 @@ voidcore/
     geometry/       # Parametric primitives, buffer layouts
     animation/      # Skeleton, AnimationMixer, crossfade, bone attachment
     loaders/        # glTF, Draco, KTX2/Basis
-    lighting/       # Directional light, ambient light, CSM shadows
+    lighting/       # Directional light, ambient light, shadows
     spatial/        # BVH, raycasting, frustum culling
     postfx/         # Bloom, MSAA, OIT composite
     controls/       # OrbitControls
@@ -113,7 +113,7 @@ All of the following ship in v1:
 - Orbit controls (mouse + touch)
 - 7 parametric geometry primitives (plane, box, sphere, cone, cylinder, capsule, circle)
 - Directional light + ambient light
-- 3-cascade CSM shadows for 200x200m low-poly worlds
+- Single shadow map with PCF filtering
 - Parent/child scene graph with Groups
 - Bone attachment for static meshes
 - HTML overlay system (CSS-positioned DOM elements at 3D positions)

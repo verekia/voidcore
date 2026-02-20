@@ -13,7 +13,7 @@ Audit of the Voidcore specs vs current implementation.
 | Controls (Orbit)        | ✓ Implemented |
 | glTF Loader (core)      | ✓ Implemented |
 | Engine Core / Lifecycle | ✓ Implemented |
-| Shadows (CSM)           | ✓ Implemented |
+| Shadows                 | ✓ Implemented |
 | Raycasting / BVH        | ✓ Implemented |
 | Transparency (Sorted)   | ✓ Implemented |
 | HTML Overlay            | ✓ Implemented |
@@ -38,7 +38,7 @@ Audit of the Voidcore specs vs current implementation.
 - **Renderer**: WebGPU + WebGL2 backends, draw call sorting by pipeline→material→depth (32-bit radix sort), MSAA, frame stats API. All shader pipelines compiled eagerly at init (no first-frame hitching). Camera frustum culling via AABB-frustum testing in `collectMeshes()`.
 - **Shaders**: Dual WGSL + GLSL maintained separately
 - **Raycasting / BVH**: Two-level BVH (scene mesh + triangle level), binned SAH with 12 bins, slab ray-AABB, Möller-Trumbore ray-triangle, `Raycaster` class with `set`, `setFromCamera`, `intersectObject`, `intersectObjects`. Geometry BVH cached via `WeakMap`, invalidated on `needsUpdate`.
-- **Shadows (CSM)**: 3-cascade shadow maps, depth pass, texel snapping, PCF filtering, cascade blending, shadow bias. Implemented in both WebGPU and WebGL2 backends.
+- **Shadows**: Single shadow map, depth pass, texel snapping, PCF filtering, shadow bias. Implemented in both WebGPU and WebGL2 backends.
 - **Transparency (Sorted Alpha Blend)**: Back-to-front sorted alpha blending drawn after opaques in the same render pass. Sort key layout puts depth in the most significant bits for transparent meshes (correct blending order) vs pipeline/material for opaques (state-change minimization). WebGPU uses premultiplied alpha (`one / one-minus-src-alpha`) to avoid `VK_ERROR_UNKNOWN` on Android Vulkan drivers. WebGL2 uses straight alpha (`src-alpha / one-minus-src-alpha`). Transparent pipelines disable depth writes and back-face culling. glTF `alphaMode: 'BLEND'` and `baseColorFactor` alpha are supported.
 - **Bloom**: 5-level RGBA16F downsample/upsample chain driven by MRT emissive output. 13-tap Jimenez downsample with Karis average on the first mip (firefly suppression). 9-tap tent upsample with additive blending. Final blit merges bloom composite + gamma correction in a single pass. Implemented in both WebGPU (WGSL) and WebGL2 (GLSL) backends.
 - **Backend error handling**: WebGPU-first with automatic WebGL2 fallback in `'auto'` mode. Descriptive errors when an explicitly requested backend is unavailable.
@@ -65,17 +65,14 @@ Audit of the Voidcore specs vs current implementation.
 
 ## Remaining Renderer Improvements
 
-1. **Per-Cascade Shadow Frustum Culling** — Camera frustum culling correctly uses AABB-frustum testing, but shadow cascade culling uses a point-in-NDC check (mesh world center only). The math functions are available — the `collectMeshes()` pattern just needs to be applied to the shadow pass.
+1. **Conditional Vertex Attribute Fetch** (`specs/RENDERER.md`) — Vertex buffer layouts are hardcoded. Spec calls for separate-per-attribute buffers where unused attributes are skipped rather than always bound. Would require the shader variant feature-flag system (significant refactor).
 
-2. **Conditional Vertex Attribute Fetch** (`specs/RENDERER.md`) — Vertex buffer layouts are hardcoded. Spec calls for separate-per-attribute buffers where unused attributes are skipped rather than always bound. Would require the shader variant feature-flag system (significant refactor).
+2. **Bind Group Organization** — Shadow pass uses separate bind group layouts rather than the unified approach the spec describes.
 
-3. **Bind Group Organization** — Shadow pass uses separate bind group layouts rather than the unified approach the spec describes.
-
-4. **WebGL2 Pipeline as State Bundle** — WebGPU correctly uses `GPURenderPipeline` objects, but the WebGL2 backend sets blend/depth/cull state ad-hoc during rendering rather than using pre-built state bundles.
+3. **WebGL2 Pipeline as State Bundle** — WebGPU correctly uses `GPURenderPipeline` objects, but the WebGL2 backend sets blend/depth/cull state ad-hoc during rendering rather than using pre-built state bundles.
 
 ## Priority Order
 
 | Priority | Feature                  | Impact                   |
 | -------- | ------------------------ | ------------------------ |
-| 1        | Per-cascade AABB culling | Shadow accuracy at edges |
-| 2        | Conditional vertex fetch | Memory/bandwidth savings |
+| 1        | Conditional vertex fetch | Memory/bandwidth savings |

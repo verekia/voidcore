@@ -22,7 +22,7 @@ export interface CanvasProps {
   children?: ReactNode
   backend?: 'auto' | 'webgpu' | 'webgl2'
   antialias?: boolean
-  bloom?: { intensity: number }
+  bloom?: { intensity?: number; levels?: number }
   shadows?: boolean | ShadowConfig
   maxFps?: number
   maxDpr?: number

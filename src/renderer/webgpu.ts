@@ -7,7 +7,7 @@
 //   4. Sorts meshes by material/pipeline to minimize GPU state changes
 //   5. Uploads per-frame uniforms (view-projection matrix, light data) to the GPU
 //   6. Batches all object transforms into dynamic uniform buffers (1-2 uploads vs N)
-//   7. Renders shadow maps (3-cascade CSM with comparison sampling)
+//   7. Renders a single shadow depth pass (with comparison sampling)
 //   8. Draws meshes in an MSAA render pass with two render targets (color + emissive)
 //   9. MSAA resolve
 //  10. Runs a bloom post-processing chain (downsample → upsample with tent filter)
@@ -45,13 +45,11 @@ import { packNormalsSnorm8, packUVsFloat16, packWeightsUnorm8 } from './pack'
 import {
   collectMeshes,
   computeLightDir,
-  computeCascadeSplits,
-  computeCascadeMatrix,
+  computeShadowMatrix,
   defaultMaxDpr,
   findAmbientLight,
   findDirectionalLight,
   findTransparentStart,
-  NUM_CASCADES,
 } from './shared'
 import { createSortState, sortMeshes } from './sort'
 import {
@@ -118,8 +116,9 @@ interface RenderTargets {
 
 // ─── Uniform buffer sizes ────────────────────────────────────────────
 
-// FrameUniforms: mat4(64) + light(48) + 3×cascadeVP(192) + splits+bias(32) = 336 bytes
-const FRAME_UB_SIZE = 336
+// FrameUniforms: mat4(64) + light(48) + pad(16) + shadowVP(64) + bias(16) = 208 bytes
+// (WGSL layout is 192 bytes due to tighter packing, but we use 192 for the GPU buffer)
+const FRAME_UB_SIZE = 192
 // ShadowUniforms: mat4(64)
 const SHADOW_UB_SIZE = 64
 // ObjectUniforms: mat4(64) + mat4(64) = 128 bytes
@@ -224,16 +223,12 @@ export class WebGPURenderer implements Renderer {
   // Shadow config
   private shadowEnabled: boolean
   private shadowResolution: number
-  private shadowLambda: number
-  private shadowBackExtend: number
-  private shadowConstantBias: number
-  private shadowSlopeBias: number
-  private shadowBlendRange: number
+  shadowsBaked = false
+  private _shadowIsBaked = false
 
   // Shadow GPU resources
   private shadowTexture: GPUTexture | null = null
   private shadowTextureView: GPUTextureView | null = null
-  private shadowCascadeViews: GPUTextureView[] = []
   private shadowSampler!: GPUSampler
   private shadowUB!: GPUBuffer
   private shadowBGL!: GPUBindGroupLayout
@@ -301,15 +296,14 @@ export class WebGPURenderer implements Renderer {
 
   // Shadow scratch data
   private _shadowMeshes: Mesh[] = []
-  private _cascadeVPs: Mat4[] = [mat4Create(), mat4Create(), mat4Create()]
-  private _cascadeSplits = new Float32Array(NUM_CASCADES)
+  private _shadowVP: Mat4 = mat4Create()
   private _shadowUBData!: Float32Array
   private _shadowLightView: Mat4 = mat4Create()
   private _shadowLightProj: Mat4 = mat4Create()
   private _frameNum = 0
 
   // Pre-allocated render pass descriptors (avoid per-frame heap allocations)
-  private _shadowPassDescs: GPURenderPassDescriptor[] = []
+  private _shadowPassDesc: GPURenderPassDescriptor = null!
   private _opaquePassCA0: GPURenderPassColorAttachment = null!
   private _opaquePassCA1: GPURenderPassColorAttachment = null!
   private _opaquePassDA: GPURenderPassDepthStencilAttachment = null!
@@ -374,11 +368,6 @@ export class WebGPURenderer implements Renderer {
     bloomLevels: number,
     shadowEnabled: boolean,
     shadowResolution: number,
-    shadowLambda: number,
-    shadowBackExtend: number,
-    shadowConstantBias: number,
-    shadowSlopeBias: number,
-    shadowBlendRange: number,
     shadowBGL: GPUBindGroupLayout,
     shadowSkinnedBGL: GPUBindGroupLayout,
     shadowPipeline: GPURenderPipeline,
@@ -422,11 +411,6 @@ export class WebGPURenderer implements Renderer {
     // Shadow config
     this.shadowEnabled = shadowEnabled
     this.shadowResolution = shadowResolution
-    this.shadowLambda = shadowLambda
-    this.shadowBackExtend = shadowBackExtend
-    this.shadowConstantBias = shadowConstantBias
-    this.shadowSlopeBias = shadowSlopeBias
-    this.shadowBlendRange = shadowBlendRange
     this.shadowBGL = shadowBGL
     this.shadowSkinnedBGL = shadowSkinnedBGL
     this.shadowPipeline = shadowPipeline
@@ -439,23 +423,15 @@ export class WebGPURenderer implements Renderer {
     // Shadow textures
     if (shadowEnabled) {
       this.shadowTexture = shadowTexture
-      this.shadowTextureView = shadowTexture!.createView({ dimension: '2d-array' })
-      this.shadowCascadeViews = []
-      for (let i = 0; i < NUM_CASCADES; i++) {
-        this.shadowCascadeViews.push(
-          shadowTexture!.createView({ dimension: '2d', baseArrayLayer: i, arrayLayerCount: 1 }),
-        )
-      }
-      for (let i = 0; i < NUM_CASCADES; i++) {
-        this._shadowPassDescs.push({
-          colorAttachments: [],
-          depthStencilAttachment: {
-            view: this.shadowCascadeViews[i]!,
-            depthLoadOp: 'clear',
-            depthClearValue: 1.0,
-            depthStoreOp: 'store',
-          },
-        })
+      this.shadowTextureView = shadowTexture!.createView()
+      this._shadowPassDesc = {
+        colorAttachments: [],
+        depthStencilAttachment: {
+          view: this.shadowTextureView!,
+          depthLoadOp: 'clear',
+          depthClearValue: 1.0,
+          depthStoreOp: 'store',
+        },
       }
     }
 
@@ -464,7 +440,7 @@ export class WebGPURenderer implements Renderer {
     this._alignedObjectSize = Math.ceil(OBJECT_UB_SIZE / this._alignment) * this._alignment
     this._alignedSkinnedSize = Math.ceil(SKINNED_OBJECT_UB_SIZE / this._alignment) * this._alignment
     this._alignedShadowSize = Math.ceil(SHADOW_UB_SIZE / this._alignment) * this._alignment
-    this._shadowUBData = new Float32Array((this._alignedShadowSize * NUM_CASCADES) / 4)
+    this._shadowUBData = new Float32Array(this._alignedShadowSize / 4)
     this._objectCapacity = 2048
     this._skinnedCapacity = 2048
     this.createDynamicBuffers()
@@ -531,7 +507,7 @@ export class WebGPURenderer implements Renderer {
       ],
     })
 
-    // Shadow bind group (dynamic offset per cascade)
+    // Shadow bind group
     this.shadowBG = device.createBindGroup({
       layout: shadowBGL,
       entries: [{ binding: 0, resource: { buffer: shadowUB, size: SHADOW_UB_SIZE } }],
@@ -705,37 +681,17 @@ export class WebGPURenderer implements Renderer {
     // ─── Shadow config ────────────────────────────────────────────
     let shadowEnabled: boolean
     let shadowResolution: number
-    let shadowLambda: number
-    let shadowBackExtend: number
-    let shadowConstantBias: number
-    let shadowSlopeBias: number
-    let shadowBlendRange: number
 
     const shadowConfig = config.shadows
     if (!shadowConfig) {
       shadowEnabled = false
-      shadowResolution = 1024
-      shadowLambda = 0.7
-      shadowBackExtend = 75
-      shadowConstantBias = 0.001
-      shadowSlopeBias = 0.005
-      shadowBlendRange = 0.1
+      shadowResolution = 2048
     } else if (typeof shadowConfig === 'object') {
       shadowEnabled = shadowConfig.enabled !== false
-      shadowResolution = shadowConfig.resolution ?? 1024
-      shadowLambda = shadowConfig.lambda ?? 0.7
-      shadowBackExtend = shadowConfig.backExtend ?? 75
-      shadowConstantBias = shadowConfig.constantBias ?? 0.001
-      shadowSlopeBias = shadowConfig.slopeBias ?? 0.005
-      shadowBlendRange = shadowConfig.blendRange ?? 0.1
+      shadowResolution = shadowConfig.resolution ?? 2048
     } else {
       shadowEnabled = true
-      shadowResolution = 1024
-      shadowLambda = 0.7
-      shadowBackExtend = 75
-      shadowConstantBias = 0.001
-      shadowSlopeBias = 0.005
-      shadowBlendRange = 0.1
+      shadowResolution = 2048
     }
 
     // ─── Shader modules ────────────────────────────────────────────
@@ -756,7 +712,7 @@ export class WebGPURenderer implements Renderer {
         {
           binding: 1,
           visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: 'depth', viewDimension: '2d-array' },
+          texture: { sampleType: 'depth', viewDimension: '2d' },
         },
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'comparison' } },
       ],
@@ -1008,10 +964,8 @@ export class WebGPURenderer implements Renderer {
     )
 
     // ─── Shadow resources ──────────────────────────────────────────
-    const alignment = device.limits.minUniformBufferOffsetAlignment
-    const alignedShadowSize = Math.ceil(SHADOW_UB_SIZE / alignment) * alignment
     const shadowUB = device.createBuffer({
-      size: alignedShadowSize * NUM_CASCADES,
+      size: SHADOW_UB_SIZE,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
 
@@ -1021,21 +975,20 @@ export class WebGPURenderer implements Renderer {
       minFilter: 'linear',
     })
 
-    // Dummy 1×1×3 depth texture for when shadows are disabled
+    // Dummy 1×1 depth texture for when shadows are disabled
     const dummyShadowTexture = device.createTexture({
-      size: [1, 1, NUM_CASCADES],
+      size: [1, 1],
       format: 'depth24plus',
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
     })
-    // Clear the dummy shadow texture layers to depth 1.0
-    for (let i = 0; i < NUM_CASCADES; i++) {
-      const view = dummyShadowTexture.createView({ dimension: '2d', baseArrayLayer: i, arrayLayerCount: 1 })
+    // Clear the dummy shadow texture to depth 1.0
+    {
       const enc = device.createCommandEncoder()
       enc
         .beginRenderPass({
           colorAttachments: [],
           depthStencilAttachment: {
-            view,
+            view: dummyShadowTexture.createView(),
             depthLoadOp: 'clear',
             depthClearValue: 1.0,
             depthStoreOp: 'store',
@@ -1049,7 +1002,7 @@ export class WebGPURenderer implements Renderer {
     let shadowTexture: GPUTexture | null = null
     if (shadowEnabled) {
       shadowTexture = device.createTexture({
-        size: [shadowResolution, shadowResolution, NUM_CASCADES],
+        size: [shadowResolution, shadowResolution],
         format: 'depth24plus',
         usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
       })
@@ -1087,11 +1040,6 @@ export class WebGPURenderer implements Renderer {
       bloomLevels,
       shadowEnabled,
       shadowResolution,
-      shadowLambda,
-      shadowBackExtend,
-      shadowConstantBias,
-      shadowSlopeBias,
-      shadowBlendRange,
       shadowBGL,
       shadowSkinnedBGL,
       shadowPipeline,
@@ -1510,26 +1458,15 @@ export class WebGPURenderer implements Renderer {
     }
   }
 
-  // ─── Cascade shadow map computation ─────────────────────────────
+  // ─── Shadow map computation ─────────────────────────────────────
 
-  private _computeCascadeSplits(camera: PerspectiveCamera): void {
-    computeCascadeSplits(this._cascadeSplits, camera, this.shadowLambda)
-  }
-
-  private _computeCascadeMatrix(
-    cascadeIdx: number,
-    camera: PerspectiveCamera,
-    lightDir: Vec3,
-    nearDist: number,
-    farDist: number,
-  ): void {
-    computeCascadeMatrix(
-      this._cascadeVPs[cascadeIdx]!,
-      camera,
+  private _computeShadowMatrix(dirLight: DirectionalLight, lightDir: Vec3): void {
+    computeShadowMatrix(
+      this._shadowVP,
       lightDir,
-      nearDist,
-      farDist,
-      this.shadowBackExtend,
+      dirLight.shadowMapSize,
+      dirLight.shadowNear,
+      dirLight.shadowFar,
       this.shadowResolution,
       this._shadowLightView,
       this._shadowLightProj,
@@ -1585,24 +1522,19 @@ export class WebGPURenderer implements Renderer {
 
     this._frameNum++
     const frameNum = this._frameNum
-    const shadowActive = this.shadowEnabled && !!dirLight
+    const shadowActive = this.shadowEnabled && !!dirLight && dirLight.castShadow
 
     let drawCalls = 0
     let shadowDrawCalls = 0
     let triangles = 0
 
-    // ─── Cascade computation ─────────────────────────────────────
-    // Compute shadow cascades BEFORE traversal so we can collect shadow-only
+    // ─── Shadow computation ────────────────────────────────────────
+    // Compute shadow matrix BEFORE traversal so we can collect shadow-only
     // casters in the same pass as camera-visible meshes.
     let shadowFrustum: Float32Array | null = null
     if (shadowActive) {
-      this._computeCascadeSplits(camera)
-      for (let c = 0; c < NUM_CASCADES; c++) {
-        const near = c === 0 ? camera.near : this._cascadeSplits[c - 1]!
-        const far = this._cascadeSplits[c]!
-        this._computeCascadeMatrix(c, camera, lightDir, near, far)
-      }
-      frustumFromViewProjection(this._shadowFrustumPlanes, this._cascadeVPs[NUM_CASCADES - 1]!)
+      this._computeShadowMatrix(dirLight!, lightDir)
+      frustumFromViewProjection(this._shadowFrustumPlanes, this._shadowVP)
       shadowFrustum = this._shadowFrustumPlanes
     }
 
@@ -1712,24 +1644,28 @@ export class WebGPURenderer implements Renderer {
       this.device.queue.writeBuffer(this._skinnedDynBuf, 0, skinnedBatch.buffer, skinnedBatch.byteOffset, byteLen)
     }
 
-    // ─── Write shadow UBO (all cascades at once) ─────────────────
+    // ─── Write shadow UBO ─────────────────────────────────────────
     if (shadowActive) {
-      const alignedFloats = this._alignedShadowSize / 4
       const sud = this._shadowUBData
       sud.fill(0)
-      for (let c = 0; c < NUM_CASCADES; c++) {
-        sud.set(this._cascadeVPs[c]!, c * alignedFloats)
-      }
-      this.device.queue.writeBuffer(
-        this.shadowUB,
-        0,
-        sud.buffer,
-        sud.byteOffset,
-        this._alignedShadowSize * NUM_CASCADES,
-      )
+      sud.set(this._shadowVP, 0)
+      this.device.queue.writeBuffer(this.shadowUB, 0, sud.buffer, sud.byteOffset, SHADOW_UB_SIZE)
     }
 
-    // ─── Update per-frame uniform buffer (336 bytes) ─────────────
+    // ─── Update per-frame uniform buffer ──────────────────────────
+    // WGSL layout (192 bytes / 48 floats):
+    //   viewProjection: mat4x4     (floats 0-15)
+    //   lightDir: vec3             (floats 16-18)
+    //   lightIntensity: f32        (float 19)
+    //   lightColor: vec3           (floats 20-22)
+    //   ambientIntensity: f32      (float 23)
+    //   ambientColor: vec3         (floats 24-26)
+    //   shadowEnabled: f32         (float 27)
+    //   shadowVP: mat4x4           (floats 28-43, offset 112 due to 16-byte alignment)
+    //   constantBias: f32          (float 44)
+    //   slopeBias: f32             (float 45)
+    //   invMapSize: f32            (float 46)
+    //   _pad0: f32                 (float 47)
     const fd = this._frameData
     fd.fill(0)
     fd.set(this._vpMatrix, 0)
@@ -1746,16 +1682,10 @@ export class WebGPURenderer implements Renderer {
     fd[26] = ambLight ? ambLight.color[2] : 0
     fd[27] = shadowActive ? 1.0 : 0.0
     if (shadowActive) {
-      fd.set(this._cascadeVPs[0]!, 28)
-      fd.set(this._cascadeVPs[1]!, 44)
-      fd.set(this._cascadeVPs[2]!, 60)
-      fd[76] = this._cascadeSplits[0]!
-      fd[77] = this._cascadeSplits[1]!
-      fd[78] = this._cascadeSplits[2]!
-      fd[80] = this.shadowConstantBias
-      fd[81] = this.shadowSlopeBias
-      fd[82] = 1.0 / this.shadowResolution
-      fd[83] = this.shadowBlendRange
+      fd.set(this._shadowVP, 28)
+      fd[44] = dirLight!.shadowBias
+      fd[45] = dirLight!.shadowSlopeBias
+      fd[46] = 1.0 / this.shadowResolution
     }
     this.device.queue.writeBuffer(this.frameUB, 0, fd.buffer, fd.byteOffset, fd.byteLength)
 
@@ -1764,86 +1694,88 @@ export class WebGPURenderer implements Renderer {
 
     const encoder = this.device.createCommandEncoder()
 
-    // ─── Shadow render pass (3 cascades, depth-only) ─────────────
-    if (shadowActive) {
-      for (let c = 0; c < NUM_CASCADES; c++) {
-        const shadowPass = encoder.beginRenderPass(this._shadowPassDescs[c]!)
+    // ─── Shadow baking ──────────────────────────────────────────────
+    if (!this.shadowsBaked) this._shadowIsBaked = false
 
-        // Per-cascade light frustum culling: project mesh center, skip if outside
-        const cvp = this._cascadeVPs[c]!
-        const PAD = 0.3
+    // ─── Shadow render pass (single depth-only pass) ──────────────
+    if (shadowActive && !(this.shadowsBaked && this._shadowIsBaked)) {
+      const shadowPass = encoder.beginRenderPass(this._shadowPassDesc)
 
-        // Draw camera-visible shadow casters
-        for (let si = 0; si < meshes.length; si++) {
-          const mesh = meshes[sortedIndices[si]!]!
-          if (!mesh.castShadow) continue
+      // Light-space frustum culling: project mesh center, skip if outside
+      const svp = this._shadowVP
+      const PAD = 0.3
 
-          // Light-space frustum cull using mesh world center
-          const wm = mesh._worldMatrix
-          const wx = wm[12]!,
-            wy = wm[13]!,
-            wz = wm[14]!
-          const lx = cvp[0]! * wx + cvp[4]! * wy + cvp[8]! * wz + cvp[12]!
-          const ly = cvp[1]! * wx + cvp[5]! * wy + cvp[9]! * wz + cvp[13]!
-          const lz = cvp[2]! * wx + cvp[6]! * wy + cvp[10]! * wz + cvp[14]!
-          if (lx < -(1 + PAD) || lx > 1 + PAD || ly < -(1 + PAD) || ly > 1 + PAD || lz < -PAD || lz > 1 + PAD) continue
+      // Draw camera-visible shadow casters
+      for (let si = 0; si < meshes.length; si++) {
+        const mesh = meshes[sortedIndices[si]!]!
+        if (!mesh.castShadow) continue
 
-          const geoBufs = this.ensureGeometryBuffers(mesh.geometry)
+        // Light-space frustum cull using mesh world center
+        const wm = mesh._worldMatrix
+        const wx = wm[12]!,
+          wy = wm[13]!,
+          wz = wm[14]!
+        const lx = svp[0]! * wx + svp[4]! * wy + svp[8]! * wz + svp[12]!
+        const ly = svp[1]! * wx + svp[5]! * wy + svp[9]! * wz + svp[13]!
+        const lz = svp[2]! * wx + svp[6]! * wy + svp[10]! * wz + svp[14]!
+        if (lx < -(1 + PAD) || lx > 1 + PAD || ly < -(1 + PAD) || ly > 1 + PAD || lz < -PAD || lz > 1 + PAD) continue
 
-          if (mesh._isSkinned) {
-            shadowPass.setPipeline(this.shadowSkinnedPipeline)
-            shadowPass.setVertexBuffer(0, geoBufs.position)
-            shadowPass.setVertexBuffer(1, geoBufs.joints!)
-            shadowPass.setVertexBuffer(2, geoBufs.weights!)
-            shadowPass.setBindGroup(1, this._skinnedDynBG, [mesh._batchIndex * this._alignedSkinnedSize])
-          } else {
-            shadowPass.setPipeline(this.shadowPipeline)
-            shadowPass.setVertexBuffer(0, geoBufs.position)
-            shadowPass.setBindGroup(1, this._objectDynBG, [mesh._batchIndex * this._alignedObjectSize])
-          }
+        const geoBufs = this.ensureGeometryBuffers(mesh.geometry)
 
-          shadowPass.setBindGroup(0, this.shadowBG, [c * this._alignedShadowSize])
-          shadowPass.setIndexBuffer(geoBufs.index, geoBufs.indexFormat)
-          shadowPass.drawIndexed(geoBufs.indexCount)
-          shadowDrawCalls++
+        if (mesh._isSkinned) {
+          shadowPass.setPipeline(this.shadowSkinnedPipeline)
+          shadowPass.setVertexBuffer(0, geoBufs.position)
+          shadowPass.setVertexBuffer(1, geoBufs.joints!)
+          shadowPass.setVertexBuffer(2, geoBufs.weights!)
+          shadowPass.setBindGroup(1, this._skinnedDynBG, [mesh._batchIndex * this._alignedSkinnedSize])
+        } else {
+          shadowPass.setPipeline(this.shadowPipeline)
+          shadowPass.setVertexBuffer(0, geoBufs.position)
+          shadowPass.setBindGroup(1, this._objectDynBG, [mesh._batchIndex * this._alignedObjectSize])
         }
 
-        // Draw shadow-only casters
-        for (let i = 0; i < shadowMeshes.length; i++) {
-          const mesh = shadowMeshes[i]!
-
-          // Light-space frustum cull
-          const wm = mesh._worldMatrix
-          const wx = wm[12]!,
-            wy = wm[13]!,
-            wz = wm[14]!
-          const lx = cvp[0]! * wx + cvp[4]! * wy + cvp[8]! * wz + cvp[12]!
-          const ly = cvp[1]! * wx + cvp[5]! * wy + cvp[9]! * wz + cvp[13]!
-          const lz = cvp[2]! * wx + cvp[6]! * wy + cvp[10]! * wz + cvp[14]!
-          if (lx < -(1 + PAD) || lx > 1 + PAD || ly < -(1 + PAD) || ly > 1 + PAD || lz < -PAD || lz > 1 + PAD) continue
-
-          const geoBufs = this.ensureGeometryBuffers(mesh.geometry)
-
-          if (mesh._isSkinned) {
-            shadowPass.setPipeline(this.shadowSkinnedPipeline)
-            shadowPass.setVertexBuffer(0, geoBufs.position)
-            shadowPass.setVertexBuffer(1, geoBufs.joints!)
-            shadowPass.setVertexBuffer(2, geoBufs.weights!)
-            shadowPass.setBindGroup(1, this._skinnedDynBG, [mesh._batchIndex * this._alignedSkinnedSize])
-          } else {
-            shadowPass.setPipeline(this.shadowPipeline)
-            shadowPass.setVertexBuffer(0, geoBufs.position)
-            shadowPass.setBindGroup(1, this._objectDynBG, [mesh._batchIndex * this._alignedObjectSize])
-          }
-
-          shadowPass.setBindGroup(0, this.shadowBG, [c * this._alignedShadowSize])
-          shadowPass.setIndexBuffer(geoBufs.index, geoBufs.indexFormat)
-          shadowPass.drawIndexed(geoBufs.indexCount)
-          shadowDrawCalls++
-        }
-
-        shadowPass.end()
+        shadowPass.setBindGroup(0, this.shadowBG, [0])
+        shadowPass.setIndexBuffer(geoBufs.index, geoBufs.indexFormat)
+        shadowPass.drawIndexed(geoBufs.indexCount)
+        shadowDrawCalls++
       }
+
+      // Draw shadow-only casters
+      for (let i = 0; i < shadowMeshes.length; i++) {
+        const mesh = shadowMeshes[i]!
+
+        // Light-space frustum cull
+        const wm = mesh._worldMatrix
+        const wx = wm[12]!,
+          wy = wm[13]!,
+          wz = wm[14]!
+        const lx = svp[0]! * wx + svp[4]! * wy + svp[8]! * wz + svp[12]!
+        const ly = svp[1]! * wx + svp[5]! * wy + svp[9]! * wz + svp[13]!
+        const lz = svp[2]! * wx + svp[6]! * wy + svp[10]! * wz + svp[14]!
+        if (lx < -(1 + PAD) || lx > 1 + PAD || ly < -(1 + PAD) || ly > 1 + PAD || lz < -PAD || lz > 1 + PAD) continue
+
+        const geoBufs = this.ensureGeometryBuffers(mesh.geometry)
+
+        if (mesh._isSkinned) {
+          shadowPass.setPipeline(this.shadowSkinnedPipeline)
+          shadowPass.setVertexBuffer(0, geoBufs.position)
+          shadowPass.setVertexBuffer(1, geoBufs.joints!)
+          shadowPass.setVertexBuffer(2, geoBufs.weights!)
+          shadowPass.setBindGroup(1, this._skinnedDynBG, [mesh._batchIndex * this._alignedSkinnedSize])
+        } else {
+          shadowPass.setPipeline(this.shadowPipeline)
+          shadowPass.setVertexBuffer(0, geoBufs.position)
+          shadowPass.setBindGroup(1, this._objectDynBG, [mesh._batchIndex * this._alignedObjectSize])
+        }
+
+        shadowPass.setBindGroup(0, this.shadowBG, [0])
+        shadowPass.setIndexBuffer(geoBufs.index, geoBufs.indexFormat)
+        shadowPass.drawIndexed(geoBufs.indexCount)
+        shadowDrawCalls++
+      }
+
+      shadowPass.end()
+      this._shadowIsBaked = true
     }
 
     // ─── Scene pass (MSAA MRT): opaque then transparent ─────────

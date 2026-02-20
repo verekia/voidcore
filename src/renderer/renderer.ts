@@ -17,11 +17,6 @@ import type { Scene } from '../scene/scene'
 export interface ShadowConfig {
   enabled?: boolean
   resolution?: number
-  lambda?: number
-  backExtend?: number
-  constantBias?: number
-  slopeBias?: number
-  blendRange?: number
 }
 
 export interface RendererConfig {
@@ -44,6 +39,7 @@ export interface FrameStats {
 export interface Renderer {
   readonly backend: 'webgpu' | 'webgl2'
   maxDpr: number
+  shadowsBaked: boolean
   render(scene: Scene, camera: PerspectiveCamera): void
   dispose(): void
   stats: FrameStats

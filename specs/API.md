@@ -25,7 +25,7 @@ Single async factory function:
 const engine = await createEngine(canvas, {
   backend: 'auto', // 'auto' | 'webgpu' | 'webgl2'
   antialias: true, // 4x MSAA (default true)
-  shadows: true, // or { mapSize: 1024, cascades: 3, ... }
+  shadows: true, // or { resolution: 2048, constantBias: 0.001, ... }
   bloom: true, // or { intensity: 0.5, levels: 5, ... }
   debug: false, // Verbose validation
 })
@@ -49,7 +49,7 @@ createEngine(canvas, { shadows: true, bloom: true })
 
 // Detailed — full control
 createEngine(canvas, {
-  shadows: { mapSize: 2048, cascades: 3, maxDistance: 200, lambda: 0.7 },
+  shadows: { resolution: 2048, backExtend: 75, constantBias: 0.001, slopeBias: 0.005 },
   bloom: { intensity: 0.5, levels: 5 },
 })
 ```

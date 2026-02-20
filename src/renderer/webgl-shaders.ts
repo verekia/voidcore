@@ -6,7 +6,7 @@
 //
 // This file contains five shader variants plus shadow depth shaders:
 //   Lambert          – Diffuse lighting (ambient + directional light × surface normal)
-//                      with cascaded shadow map sampling (PCF 3×3).
+//                      with shadow map sampling (PCF 3×3).
 //   Lambert Textured – Same as Lambert but also samples color map and AO map textures.
 //   Lambert Skinned  – Same lighting + shadows, but vertices are deformed by bone matrices.
 //   Basic            – Flat unlit color (no lighting calculations).
@@ -30,7 +30,7 @@
 
 // ─── Shared UBO block declarations ───────────────────────────────────
 //
-// FrameBlock (binding 0, 352 bytes / 88 floats, std140):
+// FrameBlock (binding 0, 208 bytes / 52 floats, std140):
 //   mat4  u_viewProjection       float 0-15   (64 bytes)
 //   vec3  u_lightDirection       float 16-18  (12 bytes + 4 pad)
 //   float _lightPad              float 19
@@ -40,15 +40,11 @@
 //   float u_ambientIntensity     float 27
 //   float u_shadowEnabled        float 28
 //   float _sp1, _sp2, _sp3       float 29-31  (pad for mat4 alignment)
-//   mat4  u_cascadeVP0           float 32-47
-//   mat4  u_cascadeVP1           float 48-63
-//   mat4  u_cascadeVP2           float 64-79
-//   vec3  u_cascadeSplits        float 80-82
-//   float _splitsPad             float 83
-//   float u_constantBias         float 84
-//   float u_slopeBias            float 85
-//   float u_invMapSize           float 86
-//   float u_blendRange           float 87
+//   mat4  u_shadowVP             float 32-47
+//   float u_constantBias         float 48
+//   float u_slopeBias            float 49
+//   float u_invMapSize           float 50
+//   float _biasPad               float 51
 //
 // ObjectBlock (binding 1, 128 bytes std140):
 //   mat4 u_worldMatrix    offset 0
@@ -73,15 +69,11 @@ layout(std140) uniform FrameBlock {
   float u_ambientIntensity;
   float u_shadowEnabled;
   float _sp1; float _sp2; float _sp3;
-  mat4 u_cascadeVP0;
-  mat4 u_cascadeVP1;
-  mat4 u_cascadeVP2;
-  vec3 u_cascadeSplits;
-  float _splitsPad;
+  mat4 u_shadowVP;
   float u_constantBias;
   float u_slopeBias;
   float u_invMapSize;
-  float u_blendRange;
+  float _biasPad;
 };`
 
 const OBJECT_BLOCK = `
@@ -103,42 +95,24 @@ layout(std140) uniform ShadowBlock {
 };`
 
 const SHADOW_FUNCTIONS = `
-float pcf9(vec2 uv, int cascade, float refDepth, float ts) {
+float pcf9(vec2 uv, float refDepth, float ts) {
   float s = 0.0;
-  s += texture(u_shadowMap, vec4(uv + vec2(-ts, -ts), float(cascade), refDepth));
-  s += texture(u_shadowMap, vec4(uv + vec2(0.0, -ts), float(cascade), refDepth));
-  s += texture(u_shadowMap, vec4(uv + vec2( ts, -ts), float(cascade), refDepth));
-  s += texture(u_shadowMap, vec4(uv + vec2(-ts, 0.0), float(cascade), refDepth));
-  s += texture(u_shadowMap, vec4(uv,                   float(cascade), refDepth));
-  s += texture(u_shadowMap, vec4(uv + vec2( ts, 0.0), float(cascade), refDepth));
-  s += texture(u_shadowMap, vec4(uv + vec2(-ts,  ts), float(cascade), refDepth));
-  s += texture(u_shadowMap, vec4(uv + vec2(0.0,  ts), float(cascade), refDepth));
-  s += texture(u_shadowMap, vec4(uv + vec2( ts,  ts), float(cascade), refDepth));
+  s += texture(u_shadowMap, vec3(uv + vec2(-ts, -ts), refDepth));
+  s += texture(u_shadowMap, vec3(uv + vec2(0.0, -ts), refDepth));
+  s += texture(u_shadowMap, vec3(uv + vec2( ts, -ts), refDepth));
+  s += texture(u_shadowMap, vec3(uv + vec2(-ts, 0.0), refDepth));
+  s += texture(u_shadowMap, vec3(uv,                   refDepth));
+  s += texture(u_shadowMap, vec3(uv + vec2( ts, 0.0), refDepth));
+  s += texture(u_shadowMap, vec3(uv + vec2(-ts,  ts), refDepth));
+  s += texture(u_shadowMap, vec3(uv + vec2(0.0,  ts), refDepth));
+  s += texture(u_shadowMap, vec3(uv + vec2( ts,  ts), refDepth));
   return s / 9.0;
 }
 
 float sampleShadow(vec3 worldPos, float NdotL) {
   if (u_shadowEnabled < 0.5) return 1.0;
 
-  float viewDepth = abs((u_viewProjection * vec4(worldPos, 1.0)).w);
-
-  int cascade = 2;
-  if (viewDepth < u_cascadeSplits.x) {
-    cascade = 0;
-  } else if (viewDepth < u_cascadeSplits.y) {
-    cascade = 1;
-  }
-
-  mat4 lightVP;
-  if (cascade == 0) {
-    lightVP = u_cascadeVP0;
-  } else if (cascade == 1) {
-    lightVP = u_cascadeVP1;
-  } else {
-    lightVP = u_cascadeVP2;
-  }
-
-  vec4 lightClip = lightVP * vec4(worldPos, 1.0);
+  vec4 lightClip = u_shadowVP * vec4(worldPos, 1.0);
   vec2 uv = lightClip.xy * 0.5 + 0.5;
   float depth = lightClip.z * 0.5 + 0.5;
 
@@ -147,32 +121,7 @@ float sampleShadow(vec3 worldPos, float NdotL) {
   }
 
   float bias = u_constantBias + u_slopeBias * (1.0 - NdotL);
-  float ts = u_invMapSize;
-  float shadow = pcf9(uv, cascade, depth - bias, ts);
-
-  if (cascade < 2) {
-    float splitDist = cascade == 0 ? u_cascadeSplits.x : u_cascadeSplits.y;
-    float blendZone = splitDist * u_blendRange;
-    if (viewDepth > splitDist - blendZone) {
-      mat4 nextVP;
-      if (cascade == 0) {
-        nextVP = u_cascadeVP1;
-      } else {
-        nextVP = u_cascadeVP2;
-      }
-      vec4 nextClip = nextVP * vec4(worldPos, 1.0);
-      vec2 nextUV = nextClip.xy * 0.5 + 0.5;
-      float nextDepth = nextClip.z * 0.5 + 0.5;
-      float nextShadow = 1.0;
-      if (nextUV.x >= 0.0 && nextUV.x <= 1.0 && nextUV.y >= 0.0 && nextUV.y <= 1.0 && nextDepth >= 0.0 && nextDepth <= 1.0) {
-        nextShadow = pcf9(nextUV, cascade + 1, nextDepth - bias, ts);
-      }
-      float t = smoothstep(splitDist - blendZone, splitDist, viewDepth);
-      shadow = mix(shadow, nextShadow, t);
-    }
-  }
-
-  return shadow;
+  return pcf9(uv, depth - bias, u_invMapSize);
 }
 `
 
@@ -264,7 +213,7 @@ uniform vec3 u_baseColor;
 uniform float u_opacity;
 uniform bool u_hasPalette;
 uniform PaletteEntry u_palette[32];
-uniform highp sampler2DArrayShadow u_shadowMap;
+uniform highp sampler2DShadow u_shadowMap;
 uniform bool u_receiveShadow;
 
 layout(location = 0) out vec4 fragColor;
@@ -351,7 +300,7 @@ uniform vec3 u_baseColor;
 uniform float u_opacity;
 uniform bool u_hasPalette;
 uniform PaletteEntry u_palette[32];
-uniform highp sampler2DArrayShadow u_shadowMap;
+uniform highp sampler2DShadow u_shadowMap;
 uniform bool u_receiveShadow;
 uniform sampler2D u_colorMap;
 uniform sampler2D u_aoMap;

@@ -59,6 +59,15 @@ export class Engine {
     this.renderer.maxDpr = dpr
   }
 
+  /** When true, the shadow map is frozen and not re-rendered each frame. */
+  get shadowsBaked(): boolean {
+    return this.renderer.shadowsBaked
+  }
+
+  set shadowsBaked(v: boolean) {
+    this.renderer.shadowsBaked = v
+  }
+
   /**
    * Register a callback to run each frame (or throttled via `fps`).
    * Callbacks execute in priority order (lower first, can be negative).

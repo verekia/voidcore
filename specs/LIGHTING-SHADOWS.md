@@ -23,15 +23,20 @@ vec3 finalColor = litColor + emissive;    // Emissive is additive, unaffected by
 
 ### Directional Light (Scene Node)
 
-A regular scene graph node. Direction derived from the node's world rotation (default: pointing down -Z in local space, transformed by world rotation).
+A regular scene graph node. Direction derived from the node's world position (treated as a direction vector — like the sun, infinitely far away). Shadow configuration lives on the light itself.
 
 ```typescript
-const sun = createDirectionalLight({
+const sun = new DirectionalLight({
   color: [1, 1, 0.95], // Warm white
   intensity: 1.0,
   castShadow: true,
+  shadowMapSize: 200, // World-space ortho box size (default 200)
+  shadowNear: 1, // Near clip plane (default 1)
+  shadowFar: 300, // Far clip / eye offset distance (default 300)
+  shadowBias: 0.001, // Constant depth bias (default 0.001)
+  shadowSlopeBias: 0.005, // Slope-dependent bias (default 0.005)
 })
-sun.position.set(50, 50, 100) // Position affects shadow map framing
+sun.setPosition(50, 50, 100) // Direction only — shadow volume is always at world origin
 scene.add(sun)
 ```
 
@@ -56,159 +61,118 @@ Ambient provides a base illumination level so shadowed areas aren't pure black. 
 All light data packed into the per-frame UBO (bind group 0). One upload per frame, zero per-draw overhead:
 
 ```
-Per-frame UBO layout (bind group 0):
-  mat4  viewProjectionMatrix      // 64 bytes
-  vec4  lightDirection            // 16 bytes (xyz = direction, w = unused)
-  vec4  lightColor                // 16 bytes (xyz = color, w = intensity)
-  vec4  ambientColor              // 16 bytes (xyz = color, w = intensity)
-  mat4  shadowMatrix[3]           // 192 bytes (3 cascade VP matrices)
-  vec4  cascadeSplits             // 16 bytes (xyz = split distances, w = unused)
-  vec4  shadowParams              // 16 bytes (x = bias, y = slopeBias, z = blendRange, w = mapSize)
-  vec4  cameraPosition            // 16 bytes (xyz = position, w = near)
-  vec4  cameraParams              // 16 bytes (x = far, yzw = unused)
+Per-frame UBO layout (bind group 0) — WebGPU (192 bytes / 48 floats):
+  mat4  viewProjectionMatrix      // 64 bytes (float 0–15)
+  vec3  lightDirection            // 12 bytes (float 16–18)
+  f32   lightIntensity            // 4 bytes  (float 19)
+  vec3  lightColor                // 12 bytes (float 20–22)
+  f32   ambientIntensity          // 4 bytes  (float 23)
+  vec3  ambientColor              // 12 bytes (float 24–26)
+  f32   shadowEnabled             // 4 bytes  (float 27)
+  mat4  shadowVP                  // 64 bytes (float 28–43, aligned to 16-byte boundary)
+  f32   constantBias              // 4 bytes  (float 44)
+  f32   slopeBias                 // 4 bytes  (float 45)
+  f32   invMapSize                // 4 bytes  (float 46, = 1.0 / shadowResolution)
+  f32   padding                   // 4 bytes  (float 47)
   ─────────────────────────────
-  Total: ~368 bytes
+  Total: 192 bytes
 ```
 
-## Cascaded Shadow Maps
+WebGL2 layout is similar but uses std140 alignment (208 bytes / 52 floats), with the shadow VP matrix at float 32–47 due to mat4 alignment padding.
 
-### 3-Cascade CSM
+## Shadow Map
 
-3 cascades for 200×200m low-poly worlds:
+### Single Shadow Map
 
-```
-Cascade 0:  ~0.1m – 12m    (high detail near camera)
-Cascade 1:  ~12m – 50m     (mid range)
-Cascade 2:  ~50m – 200m    (far range)
-```
+A single depth texture covering a fixed orthographic volume centered at the world origin, oriented along the light direction. Camera-independent — shadow quality is consistent regardless of where the camera is looking. Sufficient quality for small-to-medium low-poly worlds.
 
 ### Shadow Map Resolution
 
-**Default: 1024×1024 per cascade** (mobile-first). Configurable to 2048 for desktop.
+**Default: 2048×2048**. Configurable via `resolution`.
 
 ```
-3 cascades × 1024 × 1024 × 4 bytes (Depth24Plus) = ~12MB GPU memory
-3 cascades × 2048 × 2048 × 4 bytes                = ~48MB GPU memory
+2048 × 2048 × 4 bytes (Depth24Plus) = ~16MB GPU memory
 ```
 
 ### Shadow Map Storage
 
-**Texture 2D Array** with 3 layers (`TEXTURE_2D_ARRAY`):
+**Single 2D depth texture** (`depth24plus`):
 
 ```typescript
+// WebGPU
 const shadowMap = device.createTexture({
   format: 'depth24plus',
-  size: { width: mapSize, height: mapSize, depthOrArrayLayers: 3 },
-  usage: TextureUsage.RENDER_ATTACHMENT | TextureUsage.SAMPLED,
+  size: { width: mapSize, height: mapSize },
+  usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
 })
+
+// WebGL2
+// Depth texture attached to a dedicated FBO
 ```
-
-Advantages over a texture atlas:
-
-- Array index in shader instead of UV offset calculations
-- Better GPU cache behavior (each cascade is a separate layer)
-- No texel bleed between cascades
-- Supported on all WebGL2 (`TEXTURE_2D_ARRAY`) and WebGPU devices
-
-### Cascade Split Scheme
-
-Logarithmic-weighted split with lambda = 0.7:
-
-```typescript
-const lambda = 0.7 // More resolution near camera
-const near = camera.near
-const far = shadowConfig.maxDistance // 200m default
-
-for (let i = 0; i < cascadeCount; i++) {
-  const t = (i + 1) / cascadeCount
-  const log = near * Math.pow(far / near, t)
-  const linear = near + (far - near) * t
-  splits[i] = lambda * log + (1 - lambda) * linear
-}
-```
-
-Lambda 0.7 concentrates more shadow resolution near the camera where players look most. For a 200m world with 3 cascades:
-
-- Split 0: ~12m
-- Split 1: ~50m
-- Split 2: 200m
 
 ### Shadow Matrix Computation
 
-For each cascade:
+The shadow volume is a fixed orthographic box centered at the world origin, oriented along the light direction. The camera has no involvement — shadow quality is consistent regardless of camera position.
 
-1. Compute the frustum slice (near plane to split distance) in view space
-2. Transform the 8 frustum corners to world space
-3. Compute a tight AABB around the frustum corners in light space
-4. Build an orthographic projection from the AABB
-5. Apply texel snapping to prevent shimmer
+1. Center = world origin `[0, 0, 0]`
+2. Eye = `lightDir × shadowFar` (placed behind the scene along light direction)
+3. Build light view matrix via `mat4LookAt(eye, center, up)`
+4. Transform center to light space, snap XY to texel grid (`shadowMapSize / shadowResolution`)
+5. Build orthographic projection: `snappedXY ± halfSize`, near = `shadowNear`, far = `shadowFar × 2`
+6. `shadowVP = lightProj × lightView`
 
 ```typescript
-// Per cascade:
-const frustumCorners = getFrustumSliceCorners(camera, splitNear, splitFar)
-const lightView = mat4LookAt(lightViewMatrix, lightPosition, lightTarget, VEC3_UP)
-const lightSpaceAABB = computeAABBInLightSpace(frustumCorners, lightView)
-const lightProj = mat4Ortho(
+const center = [0, 0, 0] // World origin
+const eye = [lightDir[0] * shadowFar, lightDir[1] * shadowFar, lightDir[2] * shadowFar]
+const lightView = mat4LookAt(lightViewMatrix, eye, center, VEC3_UP)
+
+// Texel snapping to prevent shadow shimmer
+const texelSize = shadowMapSize / shadowResolution
+const snappedX = Math.floor(centerInLightSpace.x / texelSize) * texelSize
+const snappedY = Math.floor(centerInLightSpace.y / texelSize) * texelSize
+
+const halfSize = shadowMapSize / 2
+const lightProj = mat4OrthoZO(
+  // [0,1] depth for WebGPU, [-1,1] for WebGL2
   lightProjMatrix,
-  lightSpaceAABB.minX,
-  lightSpaceAABB.maxX,
-  lightSpaceAABB.minY,
-  lightSpaceAABB.maxY,
-  lightSpaceAABB.minZ - backExtend,
-  lightSpaceAABB.maxZ,
+  snappedX - halfSize,
+  snappedX + halfSize,
+  snappedY - halfSize,
+  snappedY + halfSize,
+  shadowNear,
+  shadowFar * 2,
 )
-cascadeShadowMatrix[i] = mat4Multiply(result, lightProj, lightView)
+shadowVP = mat4Multiply(result, lightProj, lightView)
 ```
 
 ### Texel Snapping
 
-Prevent shadow shimmer/swimming during camera movement:
-
-```typescript
-const texelSize = cascadeWorldSize / cascadeResolution
-lightMatrix[12] = Math.floor(lightMatrix[12] / texelSize) * texelSize
-lightMatrix[13] = Math.floor(lightMatrix[13] / texelSize) * texelSize
-```
-
-Snaps the light projection to texel boundaries so the shadow map doesn't sub-pixel-shift when the camera moves.
+Prevents shadow shimmer by snapping the light projection to texel boundaries. Since the shadow volume is fixed at the world origin (camera-independent), shimmer is minimal — snapping handles sub-texel alignment.
 
 ### PCF Filtering
 
-3×3 Poisson disk PCF (9 samples):
+3×3 grid PCF (9 samples):
 
-```glsl
-const vec2 poissonDisk[9] = vec2[](
-  vec2(-0.94, -0.34), vec2(0.94, 0.34),
-  vec2(-0.34, 0.94),  vec2(0.34, -0.94),
-  vec2(-0.54, -0.54), vec2(0.54, 0.54),
-  vec2(-0.07, -0.83), vec2(0.07, 0.83),
-  vec2(0.0, 0.0)
-);
-
-float shadow = 0.0;
-for (int i = 0; i < 9; i++) {
-  vec2 offset = poissonDisk[i] * texelSize;
-  shadow += textureSampleCompare(shadowMap, shadowSampler,
-    shadowUV + offset, cascadeIndex, depth);
+```wgsl
+fn pcf9(uv: vec2<f32>, d: f32, ts: f32) -> f32 {
+  var s = 0.0;
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2(-ts, -ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2(0.0, -ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2( ts, -ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2(-ts,  0.0), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv,                   d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2( ts,  0.0), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2(-ts,  ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2(0.0,  ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2( ts,  ts), d);
+  return s / 9.0;
 }
-shadow /= 9.0;
 ```
 
-Poisson disk breaks up grid aliasing patterns. Hardware comparison samplers on both backends:
+Hardware comparison samplers on both backends:
 
+- WebGPU: `sampler_comparison` with `compare: 'less'` and `textureSampleCompareLevel()`
 - WebGL2: `sampler2DShadow` with `TEXTURE_COMPARE_MODE`
-- WebGPU: `sampler_comparison` with `textureSampleCompareLevel()`
-
-### Cascade Blending
-
-Smooth transition between cascades to eliminate visible seams:
-
-```glsl
-float blendFactor = smoothstep(splitEnd - blendRange, splitEnd, viewDepth);
-float shadow = mix(cascadeShadow[i], cascadeShadow[i + 1], blendFactor);
-```
-
-Blend zone: ~2-5 meters (configurable via `blendRange`). The `smoothstep` produces a gradual transition that is invisible in practice.
 
 ### Shadow Bias
 
@@ -216,66 +180,83 @@ Combined depth bias + slope-scaled bias:
 
 ```glsl
 float bias = constantBias + slopeBias * (1.0 - NdotL);
-bias = clamp(bias, 0.0, maxBias);
 ```
 
 - `constantBias` (default 0.001): prevents acne on surfaces facing the light
 - `slopeBias` (default 0.005): increases bias for surfaces at grazing angles (where acne is worst)
-- Clamped to prevent peter-panning (shadows detaching from objects)
 
 Additional acne reduction: **front-face culling during shadow pass** — render back faces to the depth map, so the depth sample is from the back face, naturally offsetting from the front face.
 
 ### Shadow Pass Rendering
 
-For each of the 3 cascades:
+Single depth-only pass:
 
-1. Set render target to the cascade's texture array layer
+1. Set render target to the shadow depth texture
 2. Clear depth to 1.0
-3. Set the cascade's shadow VP matrix as the camera
-4. **Per-cascade frustum culling**: only render objects whose world AABB intersects the cascade's light frustum
-5. Render with **position-only vertex shader** (minimal attribute fetching)
+3. Set the shadow VP matrix as the camera
+4. **Light-space frustum culling**: project mesh center to light space, skip if outside bounds (with 0.3 padding margin)
+5. Render camera-visible meshes with `castShadow = true`
+6. Also render shadow-only casters (outside camera frustum but inside shadow frustum)
+7. **Position-only vertex shader** (minimal attribute fetching)
    - Exception: skinned meshes also need joint/weight attributes for skeletal transform
-6. **Front-face culling**: render back faces to reduce acne
-7. Extend light projection Z range backwards ~50-100m to catch shadow casters behind camera
+8. **Front-face culling**: render back faces to reduce acne
+9. Disable color writes (depth-only)
 
 ### Per-Mesh Shadow Control
 
 ```typescript
-mesh.castShadow = true // Include in shadow pass (default true)
-mesh.receiveShadow = true // Sample shadow map in fragment shader (default true)
+mesh.castShadow = true // Include in shadow pass (default false)
+mesh.receiveShadow = true // Sample shadow map in fragment shader (default false)
 ```
 
 Objects with `castShadow: false` are skipped during shadow pass rendering. Objects with `receiveShadow: false` get `shadow = 1.0` (fully lit) in the fragment shader.
 
 ## Configuration API
 
+Shadow configuration is split between the renderer (GPU texture) and the light (scene-level):
+
 ```typescript
-const engine = await createEngine(canvas, {
+// Renderer config: only texture resolution (GPU resource, set at init)
+const engine = await Engine.create(canvas, {
   shadows: {
     enabled: true,
-    mapSize: 1024, // Per cascade (1024 default, 2048 for desktop)
-    cascadeCount: 3, // Number of cascades
-    maxDistance: 200, // Shadow far plane in world units
-    lambda: 0.7, // Logarithmic split weight (0=linear, 1=logarithmic)
-    bias: 0.001, // Constant depth bias
-    slopeBias: 0.005, // Slope-scaled depth bias
-    cascadeBlend: true, // Smooth cascade transitions
-    blendRange: 2.0, // Blend zone in meters
+    resolution: 2048, // Shadow map texture size in pixels (default 2048)
   },
 })
 
 // Boolean shorthand uses all defaults:
-const engine = await createEngine(canvas, { shadows: true })
+const engine = await Engine.create(canvas, { shadows: true })
+
+// Light config: ortho box size, depth range, and bias (scene-level, can change at runtime)
+const light = new DirectionalLight({
+  castShadow: true,
+  shadowMapSize: 200, // World-space ortho box size (default 200)
+  shadowNear: 1, // Near clip plane (default 1)
+  shadowFar: 300, // Far clip / eye offset distance (default 300)
+  shadowBias: 0.001, // Constant depth bias (default 0.001)
+  shadowSlopeBias: 0.005, // Slope-dependent bias (default 0.005)
+})
+```
+
+### Shadow Baking
+
+For static scenes where neither the light nor shadow-casting objects move, the shadow map can be frozen after the first render:
+
+```typescript
+// Imperative
+engine.shadowsBaked = true   // Freeze
+engine.shadowsBaked = false  // Resume real-time
+
+// React
+<BakeShadows />  // Mount to freeze, unmount to resume
 ```
 
 ## Performance Budget
 
-| Pass                       | Cost (1024 resolution) |
+| Pass                       | Cost (2048 resolution) |
 | -------------------------- | ---------------------- |
-| Shadow cascade 0           | ~0.5ms GPU             |
-| Shadow cascade 1           | ~0.4ms GPU             |
-| Shadow cascade 2           | ~0.3ms GPU             |
+| Shadow depth pass          | ~0.8ms GPU             |
 | PCF sampling (opaque pass) | ~0.3ms GPU             |
-| **Total shadow overhead**  | **~1.5ms GPU**         |
+| **Total shadow overhead**  | **~1.1ms GPU**         |
 
-Shadow pass is cheaper per cascade because it uses depth-only rendering (no color writes, no lighting, minimal fragment work). Cascade 2 is cheapest because fewer objects are visible at long range.
+Shadow pass is cheap because it uses depth-only rendering (no color writes, no lighting, minimal fragment work).

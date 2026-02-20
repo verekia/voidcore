@@ -65,9 +65,9 @@ voidcore/
 │   │   └── action.ts
 │   ├── loaders/       # glTF, Draco, KTX2/Basis
 │   │   └── gltf.ts           # Main glTF loader
-│   ├── lighting/      # Directional light, ambient light, CSM
+│   ├── lighting/      # Directional light, ambient light, shadows
 │   │   ├── directional.ts
-│   │   └── csm.ts            # Cascade computation, shadow matrix generation
+│   │   └── shadow.ts          # Shadow matrix computation
 │   ├── spatial/       # BVH, raycasting, frustum culling
 │   │   ├── bvh.ts            # SAH construction, flat node layout
 │   │   ├── raycaster.ts      # Two-level BVH traversal
@@ -181,11 +181,11 @@ For 2000 objects, culling + radix sort completes in <0.3ms. Rebuilding is simple
 
 Three bind groups organized by update frequency:
 
-| Slot | Name         | Update Frequency                    | Contents                                                                                 |
-| ---- | ------------ | ----------------------------------- | ---------------------------------------------------------------------------------------- |
-| 0    | Per-frame    | Once per frame                      | Camera VP matrix, directional light data, shadow matrices, cascade splits, ambient light |
-| 1    | Per-material | Per material switch                 | Material UBO (palette entries, base color, opacity), textures, samplers                  |
-| 2    | Per-object   | Per draw call (dynamic offset only) | World matrix, bone matrices (skinned meshes)                                             |
+| Slot | Name         | Update Frequency                    | Contents                                                                                      |
+| ---- | ------------ | ----------------------------------- | --------------------------------------------------------------------------------------------- |
+| 0    | Per-frame    | Once per frame                      | Camera VP matrix, directional light data, shadow VP matrix, shadow bias params, ambient light |
+| 1    | Per-material | Per material switch                 | Material UBO (palette entries, base color, opacity), textures, samplers                       |
+| 2    | Per-object   | Per draw call (dynamic offset only) | World matrix, bone matrices (skinned meshes)                                                  |
 
 Per-object data uses **dynamic offsets** into a shared buffer. One bind group is created for slot 2; each draw call just changes the offset. This avoids per-object bind group creation.
 
@@ -213,7 +213,7 @@ Every frame executes this sequence:
 10. Upload per-frame uniforms (camera, lights, shadow matrices → bind group 0)
 11. Upload per-object uniforms (world matrices → shared buffer for bind group 2)
 12. Execute render passes:
-      a. Shadow pass (3 CSM cascades, depth-only, per-cascade frustum cull)
+      a. Shadow pass (single shadow map, depth-only, light-space frustum cull)
       b. Opaque pass (sorted draws, 4x MSAA, MRT: color + emissive)
       c. Transparent pass (WBOIT accumulation into RGBA16F + R8, depth read-only)
 13. MSAA resolve (multisample → single-sample for color + emissive)

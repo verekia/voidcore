@@ -108,6 +108,11 @@ export interface DirectionalLightProps extends NodeProps {
   args?: [DirectionalLightOptions?]
   color?: [number, number, number]
   intensity?: number
+  shadowMapSize?: number
+  shadowNear?: number
+  shadowFar?: number
+  shadowBias?: number
+  shadowSlopeBias?: number
 }
 
 export interface AmbientLightProps extends NodeProps {

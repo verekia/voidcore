@@ -3,6 +3,8 @@
 // Functionally identical to the GLSL shaders but written in WGSL (WebGPU Shading Language).
 // See webgl-shaders.ts for detailed explanations of each shader's purpose.
 //
+// Shadows use a single depth texture covering the full camera frustum with PCF filtering.
+//
 // Transparency uses sorted back-to-front alpha blending with premultiplied alpha. Transparent
 // meshes reuse the same shaders as opaque — all fragment outputs are premultiplied (rgb * alpha).
 // The pipeline uses blend factors one / one-minus-src-alpha (avoiding src-alpha, which triggers
@@ -76,15 +78,11 @@ struct FrameUniforms {
   ambientIntensity: f32,
   ambientColor: vec3<f32>,
   shadowEnabled: f32,
-  cascadeVP0: mat4x4<f32>,
-  cascadeVP1: mat4x4<f32>,
-  cascadeVP2: mat4x4<f32>,
-  cascadeSplits: vec3<f32>,
-  _pad0: f32,
+  shadowVP: mat4x4<f32>,
   constantBias: f32,
   slopeBias: f32,
   invMapSize: f32,
-  blendRange: f32,
+  _pad0: f32,
 };
 
 struct PaletteEntry {
@@ -107,7 +105,7 @@ struct ObjectUniforms {
 };
 
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
-@group(0) @binding(1) var shadowMap: texture_depth_2d_array;
+@group(0) @binding(1) var shadowMap: texture_depth_2d;
 @group(0) @binding(2) var shadowSampler: sampler_comparison;
 @group(1) @binding(0) var<uniform> material: MaterialUniforms;
 @group(2) @binding(0) var<uniform> object: ObjectUniforms;
@@ -137,17 +135,17 @@ fn vs_main(
   return out;
 }
 
-fn pcf9(uv: vec2<f32>, cascade: i32, d: f32, ts: f32) -> f32 {
+fn pcf9(uv: vec2<f32>, d: f32, ts: f32) -> f32 {
   var s = 0.0;
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, -ts), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, -ts), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, -ts), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, 0.0), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv, cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, 0.0), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, ts), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, ts), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, ts), cascade, d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, -ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, -ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, -ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, 0.0), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv, d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, 0.0), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, ts), d);
   return s / 9.0;
 }
 
@@ -156,59 +154,16 @@ fn sampleShadow(worldPos: vec3<f32>, NdotL: f32) -> f32 {
     return 1.0;
   }
 
-  let viewDepth = abs((frame.viewProjection * vec4<f32>(worldPos, 1.0)).w);
-
-  var cascade: i32 = 2;
-  if (viewDepth < frame.cascadeSplits.x) {
-    cascade = 0;
-  } else if (viewDepth < frame.cascadeSplits.y) {
-    cascade = 1;
-  }
-
-  var lightVP: mat4x4<f32>;
-  if (cascade == 0) {
-    lightVP = frame.cascadeVP0;
-  } else if (cascade == 1) {
-    lightVP = frame.cascadeVP1;
-  } else {
-    lightVP = frame.cascadeVP2;
-  }
-
-  let lightClip = lightVP * vec4<f32>(worldPos, 1.0);
+  let lightClip = frame.shadowVP * vec4<f32>(worldPos, 1.0);
   let uv = lightClip.xy * vec2<f32>(0.5, -0.5) + 0.5;
   let depth = lightClip.z;
 
-  // Outside shadow map bounds → lit (prevents edge-clamping artifacts)
   if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || depth < 0.0 || depth > 1.0) {
     return 1.0;
   }
 
   let bias = frame.constantBias + frame.slopeBias * (1.0 - NdotL);
-  let ts = frame.invMapSize;
-  var shadow = pcf9(uv, cascade, depth - bias, ts);
-
-  if (cascade < 2) {
-    let splitDist = select(frame.cascadeSplits.y, frame.cascadeSplits.x, cascade == 0);
-    let blendZone = splitDist * frame.blendRange;
-    if (viewDepth > splitDist - blendZone) {
-      var nextVP: mat4x4<f32>;
-      if (cascade == 0) {
-        nextVP = frame.cascadeVP1;
-      } else {
-        nextVP = frame.cascadeVP2;
-      }
-      let nextClip = nextVP * vec4<f32>(worldPos, 1.0);
-      let nextUV = nextClip.xy * vec2<f32>(0.5, -0.5) + 0.5;
-      var nextShadow = 1.0;
-      if (nextUV.x >= 0.0 && nextUV.x <= 1.0 && nextUV.y >= 0.0 && nextUV.y <= 1.0 && nextClip.z >= 0.0 && nextClip.z <= 1.0) {
-        nextShadow = pcf9(nextUV, cascade + 1, nextClip.z - bias, ts);
-      }
-      let t = smoothstep(splitDist - blendZone, splitDist, viewDepth);
-      shadow = mix(shadow, nextShadow, t);
-    }
-  }
-
-  return shadow;
+  return pcf9(uv, depth - bias, frame.invMapSize);
 }
 
 struct FragmentOutput {
@@ -257,15 +212,11 @@ struct FrameUniforms {
   ambientIntensity: f32,
   ambientColor: vec3<f32>,
   shadowEnabled: f32,
-  cascadeVP0: mat4x4<f32>,
-  cascadeVP1: mat4x4<f32>,
-  cascadeVP2: mat4x4<f32>,
-  cascadeSplits: vec3<f32>,
-  _pad0: f32,
+  shadowVP: mat4x4<f32>,
   constantBias: f32,
   slopeBias: f32,
   invMapSize: f32,
-  blendRange: f32,
+  _pad0: f32,
 };
 
 struct PaletteEntry {
@@ -289,7 +240,7 @@ struct ObjectUniforms {
 };
 
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
-@group(0) @binding(1) var shadowMap: texture_depth_2d_array;
+@group(0) @binding(1) var shadowMap: texture_depth_2d;
 @group(0) @binding(2) var shadowSampler: sampler_comparison;
 @group(1) @binding(0) var<uniform> material: MaterialUniforms;
 @group(2) @binding(0) var<uniform> object: ObjectUniforms;
@@ -330,17 +281,17 @@ fn vs_main(
   return out;
 }
 
-fn pcf9(uv: vec2<f32>, cascade: i32, d: f32, ts: f32) -> f32 {
+fn pcf9(uv: vec2<f32>, d: f32, ts: f32) -> f32 {
   var s = 0.0;
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, -ts), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, -ts), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, -ts), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, 0.0), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv, cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, 0.0), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, ts), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, ts), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, ts), cascade, d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, -ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, -ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, -ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, 0.0), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv, d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, 0.0), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, ts), d);
   return s / 9.0;
 }
 
@@ -349,59 +300,16 @@ fn sampleShadow(worldPos: vec3<f32>, NdotL: f32) -> f32 {
     return 1.0;
   }
 
-  let viewDepth = abs((frame.viewProjection * vec4<f32>(worldPos, 1.0)).w);
-
-  var cascade: i32 = 2;
-  if (viewDepth < frame.cascadeSplits.x) {
-    cascade = 0;
-  } else if (viewDepth < frame.cascadeSplits.y) {
-    cascade = 1;
-  }
-
-  var lightVP: mat4x4<f32>;
-  if (cascade == 0) {
-    lightVP = frame.cascadeVP0;
-  } else if (cascade == 1) {
-    lightVP = frame.cascadeVP1;
-  } else {
-    lightVP = frame.cascadeVP2;
-  }
-
-  let lightClip = lightVP * vec4<f32>(worldPos, 1.0);
+  let lightClip = frame.shadowVP * vec4<f32>(worldPos, 1.0);
   let uv = lightClip.xy * vec2<f32>(0.5, -0.5) + 0.5;
   let depth = lightClip.z;
 
-  // Outside shadow map bounds → lit (prevents edge-clamping artifacts)
   if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || depth < 0.0 || depth > 1.0) {
     return 1.0;
   }
 
   let bias = frame.constantBias + frame.slopeBias * (1.0 - NdotL);
-  let ts = frame.invMapSize;
-  var shadow = pcf9(uv, cascade, depth - bias, ts);
-
-  if (cascade < 2) {
-    let splitDist = select(frame.cascadeSplits.y, frame.cascadeSplits.x, cascade == 0);
-    let blendZone = splitDist * frame.blendRange;
-    if (viewDepth > splitDist - blendZone) {
-      var nextVP: mat4x4<f32>;
-      if (cascade == 0) {
-        nextVP = frame.cascadeVP1;
-      } else {
-        nextVP = frame.cascadeVP2;
-      }
-      let nextClip = nextVP * vec4<f32>(worldPos, 1.0);
-      let nextUV = nextClip.xy * vec2<f32>(0.5, -0.5) + 0.5;
-      var nextShadow = 1.0;
-      if (nextUV.x >= 0.0 && nextUV.x <= 1.0 && nextUV.y >= 0.0 && nextUV.y <= 1.0 && nextClip.z >= 0.0 && nextClip.z <= 1.0) {
-        nextShadow = pcf9(nextUV, cascade + 1, nextClip.z - bias, ts);
-      }
-      let t = smoothstep(splitDist - blendZone, splitDist, viewDepth);
-      shadow = mix(shadow, nextShadow, t);
-    }
-  }
-
-  return shadow;
+  return pcf9(uv, depth - bias, frame.invMapSize);
 }
 
 struct FragmentOutput {
@@ -452,15 +360,11 @@ struct FrameUniforms {
   ambientIntensity: f32,
   ambientColor: vec3<f32>,
   shadowEnabled: f32,
-  cascadeVP0: mat4x4<f32>,
-  cascadeVP1: mat4x4<f32>,
-  cascadeVP2: mat4x4<f32>,
-  cascadeSplits: vec3<f32>,
-  _pad0: f32,
+  shadowVP: mat4x4<f32>,
   constantBias: f32,
   slopeBias: f32,
   invMapSize: f32,
-  blendRange: f32,
+  _pad0: f32,
 };
 
 struct PaletteEntry {
@@ -483,7 +387,7 @@ struct ObjectUniforms {
 };
 
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
-@group(0) @binding(1) var shadowMap: texture_depth_2d_array;
+@group(0) @binding(1) var shadowMap: texture_depth_2d;
 @group(0) @binding(2) var shadowSampler: sampler_comparison;
 @group(1) @binding(0) var<uniform> material: MaterialUniforms;
 @group(2) @binding(0) var<uniform> object: ObjectUniforms;
@@ -516,17 +420,17 @@ fn vs_main(
   return out;
 }
 
-fn pcf9(uv: vec2<f32>, cascade: i32, d: f32, ts: f32) -> f32 {
+fn pcf9(uv: vec2<f32>, d: f32, ts: f32) -> f32 {
   var s = 0.0;
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, -ts), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, -ts), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, -ts), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, 0.0), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv, cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, 0.0), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, ts), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, ts), cascade, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, ts), cascade, d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, -ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, -ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, -ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, 0.0), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv, d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, 0.0), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, ts), d);
   return s / 9.0;
 }
 
@@ -535,25 +439,7 @@ fn sampleShadow(worldPos: vec3<f32>, NdotL: f32) -> f32 {
     return 1.0;
   }
 
-  let viewDepth = abs((frame.viewProjection * vec4<f32>(worldPos, 1.0)).w);
-
-  var cascade: i32 = 2;
-  if (viewDepth < frame.cascadeSplits.x) {
-    cascade = 0;
-  } else if (viewDepth < frame.cascadeSplits.y) {
-    cascade = 1;
-  }
-
-  var lightVP: mat4x4<f32>;
-  if (cascade == 0) {
-    lightVP = frame.cascadeVP0;
-  } else if (cascade == 1) {
-    lightVP = frame.cascadeVP1;
-  } else {
-    lightVP = frame.cascadeVP2;
-  }
-
-  let lightClip = lightVP * vec4<f32>(worldPos, 1.0);
+  let lightClip = frame.shadowVP * vec4<f32>(worldPos, 1.0);
   let uv = lightClip.xy * vec2<f32>(0.5, -0.5) + 0.5;
   let depth = lightClip.z;
 
@@ -563,30 +449,7 @@ fn sampleShadow(worldPos: vec3<f32>, NdotL: f32) -> f32 {
 
   let bias = frame.constantBias + frame.slopeBias * (1.0 - NdotL);
   let ts = frame.invMapSize;
-  var shadow = pcf9(uv, cascade, depth - bias, ts);
-
-  if (cascade < 2) {
-    let splitDist = select(frame.cascadeSplits.y, frame.cascadeSplits.x, cascade == 0);
-    let blendZone = splitDist * frame.blendRange;
-    if (viewDepth > splitDist - blendZone) {
-      var nextVP: mat4x4<f32>;
-      if (cascade == 0) {
-        nextVP = frame.cascadeVP1;
-      } else {
-        nextVP = frame.cascadeVP2;
-      }
-      let nextClip = nextVP * vec4<f32>(worldPos, 1.0);
-      let nextUV = nextClip.xy * vec2<f32>(0.5, -0.5) + 0.5;
-      var nextShadow = 1.0;
-      if (nextUV.x >= 0.0 && nextUV.x <= 1.0 && nextUV.y >= 0.0 && nextUV.y <= 1.0 && nextClip.z >= 0.0 && nextClip.z <= 1.0) {
-        nextShadow = pcf9(nextUV, cascade + 1, nextClip.z - bias, ts);
-      }
-      let t = smoothstep(splitDist - blendZone, splitDist, viewDepth);
-      shadow = mix(shadow, nextShadow, t);
-    }
-  }
-
-  return shadow;
+  return pcf9(uv, depth - bias, ts);
 }
 
 struct FragmentOutput {
@@ -643,15 +506,11 @@ struct FrameUniforms {
   ambientIntensity: f32,
   ambientColor: vec3<f32>,
   shadowEnabled: f32,
-  cascadeVP0: mat4x4<f32>,
-  cascadeVP1: mat4x4<f32>,
-  cascadeVP2: mat4x4<f32>,
-  cascadeSplits: vec3<f32>,
-  _pad0: f32,
+  shadowVP: mat4x4<f32>,
   constantBias: f32,
   slopeBias: f32,
   invMapSize: f32,
-  blendRange: f32,
+  _pad0: f32,
 };
 
 struct PaletteEntry {
@@ -675,7 +534,7 @@ struct ObjectUniforms {
 };
 
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
-@group(0) @binding(1) var shadowMap: texture_depth_2d_array;
+@group(0) @binding(1) var shadowMap: texture_depth_2d;
 @group(0) @binding(2) var shadowSampler: sampler_comparison;
 @group(1) @binding(0) var<uniform> material: MaterialUniforms;
 @group(2) @binding(0) var<uniform> object: ObjectUniforms;
@@ -731,15 +590,11 @@ struct FrameUniforms {
   ambientIntensity: f32,
   ambientColor: vec3<f32>,
   shadowEnabled: f32,
-  cascadeVP0: mat4x4<f32>,
-  cascadeVP1: mat4x4<f32>,
-  cascadeVP2: mat4x4<f32>,
-  cascadeSplits: vec3<f32>,
-  _pad0: f32,
+  shadowVP: mat4x4<f32>,
   constantBias: f32,
   slopeBias: f32,
   invMapSize: f32,
-  blendRange: f32,
+  _pad0: f32,
 };
 
 struct PaletteEntry {
@@ -762,7 +617,7 @@ struct ObjectUniforms {
 };
 
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
-@group(0) @binding(1) var shadowMap: texture_depth_2d_array;
+@group(0) @binding(1) var shadowMap: texture_depth_2d;
 @group(0) @binding(2) var shadowSampler: sampler_comparison;
 @group(1) @binding(0) var<uniform> material: MaterialUniforms;
 @group(2) @binding(0) var<uniform> object: ObjectUniforms;
