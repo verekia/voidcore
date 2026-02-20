@@ -238,7 +238,9 @@ void main() {
   vec3 diffuse = u_lightColor * u_lightIntensity * NdotL * shadow;
 
   vec3 litColor = baseColor * (ambient + diffuse);
-  vec3 finalColor = litColor + emissive;
+  float brightness = dot(emissive, vec3(0.299, 0.587, 0.114));
+  vec3 screenEmissive = mix(emissive, vec3(brightness), clamp(brightness, 0.0, 1.0));
+  vec3 finalColor = litColor + screenEmissive;
 
   fragColor = vec4(finalColor, u_opacity);
   fragEmissive = vec4(emissive * u_opacity, u_opacity);
