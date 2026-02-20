@@ -195,7 +195,9 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
   let diffuse = frame.lightColor * frame.lightIntensity * NdotL * shadow;
 
   let litColor = baseColor * (ambient + diffuse);
-  let finalColor = litColor + emissive;
+  let brightness = dot(emissive, vec3<f32>(0.299, 0.587, 0.114));
+  let screenEmissive = mix(emissive, vec3<f32>(brightness), saturate(brightness));
+  let finalColor = litColor + screenEmissive;
 
   out.color = vec4<f32>(finalColor * alpha, alpha);
   out.emissive = vec4<f32>(emissive * alpha, alpha);
@@ -341,7 +343,9 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
   let diffuse = frame.lightColor * frame.lightIntensity * NdotL * shadow;
 
   let litColor = baseColor * (ambient + diffuse);
-  let finalColor = litColor + emissive;
+  let brightness = dot(emissive, vec3<f32>(0.299, 0.587, 0.114));
+  let screenEmissive = mix(emissive, vec3<f32>(brightness), saturate(brightness));
+  let finalColor = litColor + screenEmissive;
 
   out.color = vec4<f32>(finalColor * alpha, alpha);
   out.emissive = vec4<f32>(emissive * alpha, alpha);
