@@ -16,8 +16,8 @@ import { VoidContext } from './context'
 
 import type { AnimationClip } from '../animation/index'
 import type { Skeleton } from '../animation/skeleton'
-import type { Texture } from '../materials/texture'
 import type { GLTFResult, LoadOptions } from '../loaders/gltf'
+import type { Texture } from '../materials/texture'
 import type { FrameCallback } from './context'
 
 // ─── useEngine ────────────────────────────────────────────────────────────────

@@ -648,12 +648,8 @@ export class WebGPURenderer implements Renderer {
     const cached = this._texBGCache.get(material)
     if (cached) return cached
 
-    const colorView = material.colorMap
-      ? this._ensureGPUTexture(material.colorMap).view
-      : this._dummyWhiteTexView
-    const aoView = material.aoMap
-      ? this._ensureGPUTexture(material.aoMap).view
-      : this._dummyWhiteTexView
+    const colorView = material.colorMap ? this._ensureGPUTexture(material.colorMap).view : this._dummyWhiteTexView
+    const aoView = material.aoMap ? this._ensureGPUTexture(material.aoMap).view : this._dummyWhiteTexView
 
     const bg = this.device.createBindGroup({
       layout: this.textureBGL,
