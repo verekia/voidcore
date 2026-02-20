@@ -1376,13 +1376,22 @@ export class WebGPURenderer implements Renderer {
     })
     d.queue.writeBuffer(matIdxBuf, 0, matIdxData.buffer, matIdxData.byteOffset, matIdxData.byteLength)
 
-    // Index buffer
+    // Index buffer (size must be 4-byte aligned for WebGPU writeBuffer)
     const indexFormat: GPUIndexFormat = geometry.indices instanceof Uint32Array ? 'uint32' : 'uint16'
+    const indexByteLength = geometry.indices.byteLength
+    const indexAlignedSize = (indexByteLength + 3) & ~3
     const indexBuf = d.createBuffer({
-      size: geometry.indices.byteLength,
+      size: indexAlignedSize,
       usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
     })
-    d.queue.writeBuffer(indexBuf, 0, geometry.indices.buffer, geometry.indices.byteOffset, geometry.indices.byteLength)
+    if (indexByteLength === indexAlignedSize) {
+      d.queue.writeBuffer(indexBuf, 0, geometry.indices.buffer, geometry.indices.byteOffset, indexByteLength)
+    } else {
+      // Copy to a 4-byte-aligned buffer for Uint16Array with odd element count
+      const padded = new Uint8Array(indexAlignedSize)
+      padded.set(new Uint8Array(geometry.indices.buffer, geometry.indices.byteOffset, indexByteLength))
+      d.queue.writeBuffer(indexBuf, 0, padded.buffer, 0, indexAlignedSize)
+    }
 
     // Joints buffer (uint8x4 raw — WGSL reads as vec4<u32>)
     let jointsBuf: GPUBuffer | undefined
