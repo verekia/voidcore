@@ -18,7 +18,7 @@ const megaxeMaterial = new LambertMaterial({
   palette: [
     { color: [0.95, 0.93, 0.9] },
     { color: [0.08, 0.08, 0.1] },
-    { color: [1, 1, 1], emissive: [0, 1, 0.9], emissiveIntensity: 1 },
+    { color: [1, 1, 1], emissive: [0, 1, 0.9], emissiveIntensity: 1.5 },
   ],
 })
 

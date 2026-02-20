@@ -225,6 +225,7 @@ export class WebGPURenderer implements Renderer {
   private shadowResolution: number
   shadowsBaked = false
   private _shadowIsBaked = false
+  private _prevShadowsBaked = false
 
   // Shadow GPU resources
   private shadowTexture: GPUTexture | null = null
@@ -1696,7 +1697,14 @@ export class WebGPURenderer implements Renderer {
     const encoder = this.device.createCommandEncoder()
 
     // ─── Shadow baking ──────────────────────────────────────────────
-    if (!this.shadowsBaked) this._shadowIsBaked = false
+    // When shadowsBaked transitions false→true, force one final shadow render
+    // so the shadow map captures the current scene (e.g. meshes that just mounted).
+    if (!this.shadowsBaked) {
+      this._shadowIsBaked = false
+    } else if (!this._prevShadowsBaked) {
+      this._shadowIsBaked = false
+    }
+    this._prevShadowsBaked = this.shadowsBaked
 
     // ─── Shadow render pass (single depth-only pass) ──────────────
     if (shadowActive && !(this.shadowsBaked && this._shadowIsBaked)) {

@@ -513,6 +513,7 @@ export class WebGLRenderer implements Renderer {
   private shadowResolution: number
   shadowsBaked = false
   private _shadowIsBaked = false
+  private _prevShadowsBaked = false
 
   // Shadow GPU resources
   private _shadowTexture!: WebGLTexture
@@ -1174,7 +1175,14 @@ export class WebGLRenderer implements Renderer {
     gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, this._frameUBO)
 
     // ─── Shadow baking ──────────────────────────────────────────────
-    if (!this.shadowsBaked) this._shadowIsBaked = false
+    // When shadowsBaked transitions false→true, force one final shadow render
+    // so the shadow map captures the current scene (e.g. meshes that just mounted).
+    if (!this.shadowsBaked) {
+      this._shadowIsBaked = false
+    } else if (!this._prevShadowsBaked) {
+      this._shadowIsBaked = false
+    }
+    this._prevShadowsBaked = this.shadowsBaked
 
     // ─── Shadow render pass (single depth-only pass) ──────────────
     if (shadowActive && !(this.shadowsBaked && this._shadowIsBaked)) {
