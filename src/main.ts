@@ -7,8 +7,8 @@ import {
   OrbitControls,
   loadGLTF,
   AnimationMixer,
-  SphereGeometry,
   BoxGeometry,
+  Geometry,
   Mesh,
   Raycaster,
   quatFromAxisAngle,
@@ -19,6 +19,43 @@ import {
 } from './index.ts'
 
 import type { AnimationClip, AnimationAction } from './index.ts'
+
+// ─── Eden Mesh Colors (per-primitive, from v1v2-engine reference) ────────────
+
+const EDEN_COLORS: [number, number, number][] = [
+  [0.78, 0.44, 0.25],
+  [0.85, 0.68, 0.3],
+  [0.75, 0.75, 0.75],
+  [0.725, 0.38, 0.09],
+  [0.25, 0.55, 0.2],
+  [0.212, 0.212, 0.212],
+  [0.75, 0.75, 0.75],
+  [0.15, 0.15, 0.18],
+  [0.0, 0.75, 0.7],
+  [0.55, 0.5, 0.42],
+  [0.85, 0.35, 0.55],
+  [0.95, 0.95, 0.95],
+  [0.8, 0.65, 0.15],
+  [0.65, 0.65, 0.62],
+  [0.3, 0.65, 0.2],
+  [0.5, 0.32, 0.15],
+  [0.5, 0.25, 0.65],
+  [0.9, 0.8, 0.2],
+  [0.15, 0.15, 0.18],
+  [0.75, 0.75, 0.75],
+  [0.95, 0.95, 0.95],
+  [0.6, 0.4, 0.22],
+  [0.6, 0.4, 0.22],
+  [0.0, 0.75, 0.7],
+  [0.9, 0.8, 0.2],
+  [0.85, 0.35, 0.55],
+  [0.3, 0.36, 0.3],
+]
+
+const EDEN_PALETTE = EDEN_COLORS.map((color, i) => ({
+  color,
+  ...(i === 23 ? { emissive: [0.0, 0.75, 0.7] as [number, number, number], emissiveIntensity: 2.5 } : {}),
+}))
 
 // ─── Configuration ──────────────────────────────────────────────────
 const CHARACTER_COUNT = 800
@@ -192,25 +229,60 @@ export const main = async (canvas: HTMLCanvasElement) => {
     }
   }
 
-  // ─── Sphere terrain ───────────────────────────────────────────
-  // Sphere top at z=10, large enough that all characters sit on the upper part
-  const SPHERE_RADIUS = 300
-  const SPHERE_CENTER_Z = 10 - SPHERE_RADIUS // = -290
+  // ─── Eden mesh ────────────────────────────────────────────────
+  // Merge all Eden primitives from the static bundle into a single mesh with palette colors
+  const edenMeshes = megaxeGltf.meshes.filter(m => m.name.toLowerCase().includes('eden'))
 
-  const sphereGeo = new SphereGeometry({ radius: SPHERE_RADIUS, widthSegments: 64, heightSegments: 64 })
-  const sphereMat = new LambertMaterial({ color: [0.12, 0.14, 0.18] })
-  const sphere = new Mesh(sphereGeo, sphereMat)
-  sphere.castShadow = false
-  sphere.setPosition(0, 0, SPHERE_CENTER_Z)
-  scene.add(sphere)
+  let totalVertices = 0
+  let totalIndices = 0
+  let hasUVs = false
+  for (const m of edenMeshes) {
+    totalVertices += m.geometry.vertexCount
+    totalIndices += m.geometry.indexCount
+    if (m.geometry.uvs) hasUVs = true
+  }
 
-  // Update world matrices so the sphere's _worldMatrix is ready for raycasting
+  const edenPositions = new Float32Array(totalVertices * 3)
+  const edenNormals = new Float32Array(totalVertices * 3)
+  const edenIndices = totalVertices > 65535 ? new Uint32Array(totalIndices) : new Uint16Array(totalIndices)
+  const edenMatIndices = new Uint8Array(totalVertices)
+  const edenUVs = hasUVs ? new Float32Array(totalVertices * 2) : undefined
+
+  let vOff = 0
+  let iOff = 0
+  for (let i = 0; i < edenMeshes.length; i++) {
+    const geo = edenMeshes[i]!.geometry
+    edenPositions.set(geo.positions, vOff * 3)
+    edenNormals.set(geo.normals, vOff * 3)
+    if (edenUVs && geo.uvs) edenUVs.set(geo.uvs, vOff * 2)
+    edenMatIndices.fill(i, vOff, vOff + geo.vertexCount)
+    for (let j = 0; j < geo.indexCount; j++) {
+      edenIndices[iOff + j] = geo.indices[j]! + vOff
+    }
+    vOff += geo.vertexCount
+    iOff += geo.indexCount
+  }
+
+  const edenGeometry = new Geometry({
+    positions: edenPositions,
+    normals: edenNormals,
+    indices: edenIndices,
+    materialIndices: edenMatIndices,
+    uvs: edenUVs,
+  })
+  const edenMaterial = new LambertMaterial({ palette: EDEN_PALETTE })
+  const eden = new Mesh(edenGeometry, edenMaterial)
+  eden.name = 'eden'
+  eden.castShadow = false
+  scene.add(eden)
+
+  // Update world matrices so Eden's _worldMatrix is ready for raycasting
   scene.updateGraph()
 
-  // Raycast each character downward from above to land it on the sphere surface
+  // Raycast each character downward from above to land it on the Eden surface
   const raycaster = new Raycaster()
   const rayDir: [number, number, number] = [0, 0, -1]
-  const RAY_START_Z = 100 // well above sphere top (z=10)
+  const RAY_START_Z = 200
 
   const ORBIT_RADIUS = 5
   const ORBIT_SPEED = 3 // rad/s — one full circle in ~1 second
@@ -223,7 +295,7 @@ export const main = async (canvas: HTMLCanvasElement) => {
     const x = root.position[0]!
     const y = root.position[1]!
     raycaster.set(new Float32Array([x, y, RAY_START_Z]), new Float32Array(rayDir))
-    const hits = raycaster.intersectObject(sphere)
+    const hits = raycaster.intersectObject(eden)
     const z = hits.length > 0 ? hits[0]!.point[2]! : root.position[2]!
 
     // Store orbit origin and assign a random starting angle so characters spread out
