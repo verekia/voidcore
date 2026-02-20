@@ -191,7 +191,7 @@ Mobile GPUs are bandwidth-constrained. Key mitigations:
 | JavaScript heap                   | < 50MB      |
 | GPU buffers (geometry)            | < 100MB     |
 | GPU textures                      | < 200MB     |
-| Shadow map (2048)                  | ~16MB       |
+| Shadow map (2048)                 | ~16MB       |
 | Bloom chain (1080p, RGBA16F)      | ~5MB        |
 | OIT targets (1080p, RGBA16F + R8) | ~18MB       |
 | MSAA buffers (4×, 1080p)          | ~32MB       |

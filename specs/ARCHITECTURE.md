@@ -181,11 +181,11 @@ For 2000 objects, culling + radix sort completes in <0.3ms. Rebuilding is simple
 
 Three bind groups organized by update frequency:
 
-| Slot | Name         | Update Frequency                    | Contents                                                                                 |
-| ---- | ------------ | ----------------------------------- | ---------------------------------------------------------------------------------------- |
+| Slot | Name         | Update Frequency                    | Contents                                                                                      |
+| ---- | ------------ | ----------------------------------- | --------------------------------------------------------------------------------------------- |
 | 0    | Per-frame    | Once per frame                      | Camera VP matrix, directional light data, shadow VP matrix, shadow bias params, ambient light |
-| 1    | Per-material | Per material switch                 | Material UBO (palette entries, base color, opacity), textures, samplers                  |
-| 2    | Per-object   | Per draw call (dynamic offset only) | World matrix, bone matrices (skinned meshes)                                             |
+| 1    | Per-material | Per material switch                 | Material UBO (palette entries, base color, opacity), textures, samplers                       |
+| 2    | Per-object   | Per draw call (dynamic offset only) | World matrix, bone matrices (skinned meshes)                                                  |
 
 Per-object data uses **dynamic offsets** into a shared buffer. One bind group is created for slot 2; each draw call just changes the offset. This avoids per-object bind group creation.
 

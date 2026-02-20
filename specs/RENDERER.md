@@ -34,27 +34,27 @@ Every frame executes these passes in fixed order:
 
 Pre-allocated at initialization, recreated on canvas resize:
 
-| Target            | Format      | MSAA | Size       | Purpose                                |
-| ----------------- | ----------- | ---- | ---------- | -------------------------------------- |
-| Color             | RGBA8       | 4x   | Canvas     | Main scene color                       |
-| Emissive          | RGBA8       | 4x   | Canvas     | Bloom input (MRT output 1)             |
-| Depth             | Depth24Plus | 4x   | Canvas     | Z-buffer                               |
-| OIT Accumulation  | RGBA16F     | 1x   | Canvas     | WBOIT weighted color sum               |
-| OIT Revealage     | R8          | 1x   | Canvas     | WBOIT alpha product                    |
-| Shadow Map        | Depth24Plus | 1x   | Per config | Single shadow depth texture             |
-| Bloom Mips        | RGBA16F     | 1x   | Halving    | Progressive downsample/upsample chain  |
-| Resolved Color    | RGBA8       | 1x   | Canvas     | Post-MSAA resolve                      |
-| Resolved Emissive | RGBA8       | 1x   | Canvas     | Post-MSAA emissive resolve             |
+| Target            | Format      | MSAA | Size       | Purpose                               |
+| ----------------- | ----------- | ---- | ---------- | ------------------------------------- |
+| Color             | RGBA8       | 4x   | Canvas     | Main scene color                      |
+| Emissive          | RGBA8       | 4x   | Canvas     | Bloom input (MRT output 1)            |
+| Depth             | Depth24Plus | 4x   | Canvas     | Z-buffer                              |
+| OIT Accumulation  | RGBA16F     | 1x   | Canvas     | WBOIT weighted color sum              |
+| OIT Revealage     | R8          | 1x   | Canvas     | WBOIT alpha product                   |
+| Shadow Map        | Depth24Plus | 1x   | Per config | Single shadow depth texture           |
+| Bloom Mips        | RGBA16F     | 1x   | Halving    | Progressive downsample/upsample chain |
+| Resolved Color    | RGBA8       | 1x   | Canvas     | Post-MSAA resolve                     |
+| Resolved Emissive | RGBA8       | 1x   | Canvas     | Post-MSAA emissive resolve            |
 
 ## Bind Group Layout
 
 Three bind groups organized by update frequency:
 
-| Slot | Name         | Update Frequency               | Contents                                                                                                                                       |
-| ---- | ------------ | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Slot | Name         | Update Frequency               | Contents                                                                                                         |
+| ---- | ------------ | ------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
 | 0    | Per-frame    | Once per frame                 | Camera VP matrix, light direction/color/intensity, ambient color/intensity, shadow VP matrix, shadow bias params |
-| 1    | Per-material | Per material switch            | Material UBO (palette struct array, base color, opacity, flags), color/AO textures, samplers                                                   |
-| 2    | Per-object   | Per draw call (dynamic offset) | World matrix (16 floats), optional bone matrices                                                                                               |
+| 1    | Per-material | Per material switch            | Material UBO (palette struct array, base color, opacity, flags), color/AO textures, samplers                     |
+| 2    | Per-object   | Per draw call (dynamic offset) | World matrix (16 floats), optional bone matrices                                                                 |
 
 Dynamic offsets on bind group 2 allow a single bind group with different offsets per object, minimizing rebind overhead. Per-frame UBO at slot 0 is ~256-320 bytes. Per-material UBO at slot 1 varies by palette size.
 

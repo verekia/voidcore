@@ -123,11 +123,15 @@ const lightView = mat4LookAt(lightViewMatrix, center, center + lightDir, VEC3_UP
 const { minX, maxX, minY, maxY, minZ, maxZ } = computeAABBInLightSpace(frustumCorners, lightView)
 
 // Back-extend to catch casters behind camera
-const lightProj = mat4OrthoZO(  // [0,1] depth for WebGPU, [-1,1] for WebGL2
+const lightProj = mat4OrthoZO(
+  // [0,1] depth for WebGPU, [-1,1] for WebGL2
   lightProjMatrix,
-  snappedMinX, snappedMaxX,
-  snappedMinY, snappedMaxY,
-  minZ - backExtend, maxZ,
+  snappedMinX,
+  snappedMaxX,
+  snappedMinY,
+  snappedMaxY,
+  minZ - backExtend,
+  maxZ,
 )
 shadowVP = mat4Multiply(result, lightProj, lightView)
 ```
@@ -203,7 +207,7 @@ Single depth-only pass:
 ### Per-Mesh Shadow Control
 
 ```typescript
-mesh.castShadow = true    // Include in shadow pass (default false)
+mesh.castShadow = true // Include in shadow pass (default false)
 mesh.receiveShadow = true // Sample shadow map in fragment shader (default false)
 ```
 
@@ -215,10 +219,10 @@ Objects with `castShadow: false` are skipped during shadow pass rendering. Objec
 const engine = await Engine.create(canvas, {
   shadows: {
     enabled: true,
-    resolution: 2048,      // Shadow map size (default 2048)
-    backExtend: 75,        // Frustum back extension in world units
-    constantBias: 0.001,   // Constant depth bias
-    slopeBias: 0.005,      // Slope-scaled depth bias
+    resolution: 2048, // Shadow map size (default 2048)
+    backExtend: 75, // Frustum back extension in world units
+    constantBias: 0.001, // Constant depth bias
+    slopeBias: 0.005, // Slope-scaled depth bias
   },
 })
 
