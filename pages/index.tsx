@@ -44,7 +44,7 @@ const IndexPage = () => {
     <>
       <Canvas
         shadows={{ resolution: 1024 }}
-        bloom={{ intensity: 2, levels: 2 }}
+        bloom={{ levels: 3 }}
         antialias
         maxFps={60}
         backend={forceWebGL ? 'webgl2' : 'auto'}

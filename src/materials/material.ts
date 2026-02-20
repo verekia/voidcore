@@ -15,6 +15,10 @@
 // When a material has texture maps, the renderer uses a textured shader variant that samples
 // the textures using the mesh's UV coordinates.
 //
+// Emissive brightness controls how much bright emissive colors wash toward white (the "neon
+// glow" effect). At 0, the raw emissive color is used. At 1 (default), high-intensity emissive
+// areas desaturate toward white, simulating the overexposed look of real glowing surfaces.
+//
 // Transparency is supported via sorted alpha blending. Set `transparent: true` and an
 // `opacity` value (0–1) to make a material see-through. Transparent meshes are drawn
 // back-to-front after all opaque meshes, with blending enabled and depth writes off.
@@ -46,6 +50,9 @@ export class Material {
   // Lambert-specific
   receiveShadow: boolean
 
+  // Emissive
+  emissiveBrightness: number
+
   // Texture maps
   colorMap?: Texture
   aoMap?: Texture
@@ -64,6 +71,7 @@ export class Material {
     this.receiveShadow = opts.receiveShadow ?? true
     this.opacity = opts.opacity ?? 1.0
     this.transparent = opts.transparent ?? false
+    this.emissiveBrightness = opts.emissiveBrightness ?? 1.0
     this.colorMap = opts.colorMap
     this.aoMap = opts.aoMap
     this.aoIntensity = opts.aoIntensity ?? 1.0
@@ -85,6 +93,7 @@ export interface MaterialOptions {
   vertexColors?: boolean
   receiveShadow?: boolean
   palette?: PaletteEntry[]
+  emissiveBrightness?: number
   opacity?: number
   transparent?: boolean
   colorMap?: Texture

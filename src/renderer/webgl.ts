@@ -134,6 +134,7 @@ interface SceneUniformLocs {
   u_paletteEmissive: (WebGLUniformLocation | null)[]
   u_shadowMap: WebGLUniformLocation | null
   u_receiveShadow: WebGLUniformLocation | null
+  u_emissiveBrightness: WebGLUniformLocation | null
   u_colorMap: WebGLUniformLocation | null
   u_aoMap: WebGLUniformLocation | null
   u_aoIntensity: WebGLUniformLocation | null
@@ -166,6 +167,7 @@ const cacheSceneLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): Scen
     u_paletteEmissive: paletteEmissive,
     u_shadowMap: gl.getUniformLocation(program, 'u_shadowMap'),
     u_receiveShadow: gl.getUniformLocation(program, 'u_receiveShadow'),
+    u_emissiveBrightness: gl.getUniformLocation(program, 'u_emissiveBrightness'),
     u_colorMap: gl.getUniformLocation(program, 'u_colorMap'),
     u_aoMap: gl.getUniformLocation(program, 'u_aoMap'),
     u_aoIntensity: gl.getUniformLocation(program, 'u_aoIntensity'),
@@ -1315,6 +1317,7 @@ export class WebGLRenderer implements Renderer {
           const hasPalette = !!mesh.material.palette && mesh.geometry.hasAttribute('materialIndex')
           gl.uniform1i(locs.u_hasPalette, hasPalette ? 1 : 0)
           gl.uniform1i(locs.u_receiveShadow, mesh.material.receiveShadow ? 1 : 0)
+          gl.uniform1f(locs.u_emissiveBrightness, mesh.material.emissiveBrightness)
           if (hasPalette && mesh.material.palette) {
             for (let i = 0; i < 32; i++) {
               const entry: PaletteEntry = mesh.material.palette[i] ?? { color: [1, 1, 1] }

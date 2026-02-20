@@ -136,6 +136,7 @@ export interface MaterialProps extends BaseProps {
   args?: [MaterialOptions?]
   color?: [number, number, number]
   vertexColors?: boolean
+  emissiveBrightness?: number
   opacity?: number
   transparent?: boolean
 }

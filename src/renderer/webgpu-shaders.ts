@@ -96,6 +96,7 @@ struct MaterialUniforms {
   hasPalette: f32,
   receiveShadow: f32,
   aoIntensity: f32,
+  emissiveBrightness: f32,
   palette: array<PaletteEntry, 32>,
 };
 
@@ -196,7 +197,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 
   let litColor = baseColor * (ambient + diffuse);
   let brightness = dot(emissive, vec3<f32>(0.299, 0.587, 0.114));
-  let screenEmissive = mix(emissive, vec3<f32>(brightness), saturate(brightness));
+  let screenEmissive = mix(emissive, vec3<f32>(brightness), saturate(brightness) * material.emissiveBrightness);
   let finalColor = litColor + screenEmissive;
 
   out.color = vec4<f32>(finalColor * alpha, alpha);
@@ -232,6 +233,7 @@ struct MaterialUniforms {
   hasPalette: f32,
   receiveShadow: f32,
   aoIntensity: f32,
+  emissiveBrightness: f32,
   palette: array<PaletteEntry, 32>,
 };
 
@@ -344,7 +346,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 
   let litColor = baseColor * (ambient + diffuse);
   let brightness = dot(emissive, vec3<f32>(0.299, 0.587, 0.114));
-  let screenEmissive = mix(emissive, vec3<f32>(brightness), saturate(brightness));
+  let screenEmissive = mix(emissive, vec3<f32>(brightness), saturate(brightness) * material.emissiveBrightness);
   let finalColor = litColor + screenEmissive;
 
   out.color = vec4<f32>(finalColor * alpha, alpha);
@@ -382,6 +384,7 @@ struct MaterialUniforms {
   hasPalette: f32,
   receiveShadow: f32,
   aoIntensity: f32,
+  emissiveBrightness: f32,
   palette: array<PaletteEntry, 32>,
 };
 
@@ -491,7 +494,9 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
   let diffuse = frame.lightColor * frame.lightIntensity * NdotL * shadow;
 
   let litColor = baseColor * (ambient + diffuse);
-  let finalColor = litColor + emissive;
+  let brightness = dot(emissive, vec3<f32>(0.299, 0.587, 0.114));
+  let screenEmissive = mix(emissive, vec3<f32>(brightness), saturate(brightness) * material.emissiveBrightness);
+  let finalColor = litColor + screenEmissive;
 
   out.color = vec4<f32>(finalColor * alpha, alpha);
   out.emissive = vec4<f32>(emissive * alpha, alpha);
@@ -528,6 +533,7 @@ struct MaterialUniforms {
   hasPalette: f32,
   receiveShadow: f32,
   aoIntensity: f32,
+  emissiveBrightness: f32,
   palette: array<PaletteEntry, 32>,
 };
 
@@ -612,6 +618,7 @@ struct MaterialUniforms {
   hasPalette: f32,
   receiveShadow: f32,
   aoIntensity: f32,
+  emissiveBrightness: f32,
   palette: array<PaletteEntry, 32>,
 };
 

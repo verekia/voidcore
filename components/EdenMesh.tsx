@@ -36,7 +36,7 @@ const EDEN_COLORS: [number, number, number][] = [
 
 const EDEN_PALETTE = EDEN_COLORS.map((color, i) => ({
   color,
-  ...(i === 23 ? { emissive: [0.0, 0.75, 0.7] as [number, number, number], emissiveIntensity: 2.5 } : {}),
+  ...(i === 23 ? { emissive: [0.0, 0.75, 0.7] as [number, number, number], emissiveIntensity: 1.5 } : {}),
 }))
 
 const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
@@ -50,7 +50,12 @@ const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
     onReady?.()
     return {
       geometry: mergeGeometries(edenMeshes.map(m => m.geometry)),
-      material: new LambertMaterial({ palette: EDEN_PALETTE, aoMap: aoTexture, aoIntensity: 2 }),
+      material: new LambertMaterial({
+        palette: EDEN_PALETTE,
+        aoMap: aoTexture,
+        aoIntensity: 2,
+        emissiveBrightness: 0.5,
+      }),
     }
   }, [gltf, aoTexture, onReady])
 

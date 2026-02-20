@@ -14,6 +14,7 @@ const ORBIT_SPEED = 3
 const GRID_SPACING = 5
 
 const megaxeMaterial = new LambertMaterial({
+  emissiveBrightness: 0.5,
   palette: [
     { color: [0.95, 0.93, 0.9] },
     { color: [0.08, 0.08, 0.1] },
