@@ -102,6 +102,7 @@ export interface MeshProps extends NodeProps {
   material?: Material
   skeleton?: Skeleton
   outline?: MeshOutline | number
+  maxDistance?: number
 }
 
 export interface GroupProps extends NodeProps {}
