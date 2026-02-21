@@ -32,7 +32,7 @@ import type {
   CapsuleGeometryOptions,
   CircleGeometryOptions,
 } from '../geometry/primitives'
-import type { Material, MaterialOptions, MaterialSide } from '../materials/material'
+import type { Material, MaterialOptions, MaterialSide, PaletteEntry } from '../materials/material'
 import type { CameraOptions } from '../scene/camera'
 import type { AmbientLightOptions, DirectionalLightOptions } from '../scene/light'
 import type { MeshOutline } from '../scene/mesh'
@@ -138,6 +138,7 @@ export interface GeometryProps extends BaseProps {
 export interface MaterialProps extends BaseProps {
   args?: [MaterialOptions?]
   color?: [number, number, number]
+  palette?: PaletteEntry[]
   vertexColors?: boolean
   emissiveBrightness?: number
   opacity?: number
