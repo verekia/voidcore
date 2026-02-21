@@ -32,9 +32,10 @@ import type {
   CapsuleGeometryOptions,
   CircleGeometryOptions,
 } from '../geometry/primitives'
-import type { Material, MaterialOptions } from '../materials/material'
+import type { Material, MaterialOptions, MaterialSide } from '../materials/material'
 import type { CameraOptions } from '../scene/camera'
 import type { AmbientLightOptions, DirectionalLightOptions } from '../scene/light'
+import type { MeshOutline } from '../scene/mesh'
 
 // ─── Catalogue ────────────────────────────────────────────────────────────────
 
@@ -101,6 +102,8 @@ export interface MeshProps extends NodeProps {
   geometry?: Geometry
   material?: Material
   skeleton?: Skeleton
+  outline?: MeshOutline | number
+  maxDistance?: number
 }
 
 export interface GroupProps extends NodeProps {}
@@ -140,6 +143,7 @@ export interface MaterialProps extends BaseProps {
   emissiveBrightness?: number
   opacity?: number
   transparent?: boolean
+  side?: MaterialSide
 }
 
 export interface PrimitiveProps extends NodeProps {

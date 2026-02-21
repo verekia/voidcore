@@ -18,6 +18,10 @@
 //   Shadow Depth         – Writes depth from light's perspective (static meshes).
 //   Shadow Depth Skinned – Same but with skeletal deformation.
 //
+// Plus outline shaders (inverted hull technique):
+//   Outline              – Inflates vertices along normals, outputs solid color.
+//   Outline Skinned      – Same but with skeletal deformation applied before inflation.
+//
 // Plus three post-processing shaders (fullscreen triangle, no vertex buffer needed):
 //   Bloom Downsample – 13-tap filter that progressively shrinks the emissive image.
 //                      First pass uses Karis average to prevent "firefly" artifacts.
@@ -409,6 +413,70 @@ layout(location = 1) out vec4 fragEmissive;
 void main() {
   fragColor = vec4(u_baseColor, u_opacity);
   fragEmissive = vec4(0.0, 0.0, 0.0, u_opacity);
+}
+`
+
+// ─── Outline shaders (inverted hull, smooth-normal inflation) ────────────
+// Smooth normals are bound at location 1 instead of regular normals during the outline pass,
+// so vertices sharing the same position inflate in the same direction — eliminating gaps.
+
+export const OUTLINE_VERT = `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec3 a_normal;
+
+${OBJECT_BLOCK}
+
+uniform float u_outlineThickness;
+uniform mat4 u_viewProjection;
+
+void main() {
+  vec3 inflated = a_position + normalize(a_normal) * u_outlineThickness;
+  gl_Position = u_viewProjection * u_worldMatrix * vec4(inflated, 1.0);
+}
+`
+
+export const OUTLINE_SKINNED_VERT = `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec3 a_normal;
+layout(location = 2) in vec2 a_uv;
+layout(location = 3) in float a_materialIndex;
+layout(location = 4) in vec4 a_joints;
+layout(location = 5) in vec4 a_weights;
+
+${SKINNED_OBJECT_BLOCK}
+
+uniform float u_outlineThickness;
+uniform mat4 u_viewProjection;
+
+void main() {
+  mat4 skinMatrix =
+    a_weights.x * u_boneMatrices[int(a_joints.x)] +
+    a_weights.y * u_boneMatrices[int(a_joints.y)] +
+    a_weights.z * u_boneMatrices[int(a_joints.z)] +
+    a_weights.w * u_boneMatrices[int(a_joints.w)];
+
+  vec4 skinnedPos = skinMatrix * vec4(a_position, 1.0);
+  vec3 skinnedNorm = normalize((skinMatrix * vec4(a_normal, 0.0)).xyz);
+  vec3 inflated = skinnedPos.xyz + skinnedNorm * u_outlineThickness;
+  gl_Position = u_viewProjection * vec4(inflated, 1.0);
+}
+`
+
+export const OUTLINE_FRAG = `#version 300 es
+precision mediump float;
+
+uniform vec3 u_outlineColor;
+
+layout(location = 0) out vec4 fragColor;
+layout(location = 1) out vec4 fragEmissive;
+
+void main() {
+  fragColor = vec4(u_outlineColor, 1.0);
+  fragEmissive = vec4(0.0, 0.0, 0.0, 1.0);
 }
 `
 

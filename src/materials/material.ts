@@ -23,6 +23,11 @@
 // `opacity` value (0–1) to make a material see-through. Transparent meshes are drawn
 // back-to-front after all opaque meshes, with blending enabled and depth writes off.
 //
+// Face culling is controlled by the `side` property:
+//   - "front"  – Only front faces are visible (back faces culled). This is the default.
+//   - "back"   – Only back faces are visible (front faces culled).
+//   - "double" – Both faces are visible (no culling).
+//
 // new BasicMaterial()   – Unlit material (ignores lights).
 // new LambertMaterial() – Diffuse-lit material (reacts to lights).
 
@@ -35,6 +40,7 @@ export interface PaletteEntry {
 }
 
 export type MaterialType = 'basic' | 'lambert'
+export type MaterialSide = 'front' | 'back' | 'double'
 
 let _nextMaterialId = 0
 
@@ -46,6 +52,7 @@ export class Material {
   palette?: PaletteEntry[]
   opacity: number
   transparent: boolean
+  side: MaterialSide
 
   // Lambert-specific
   receiveShadow: boolean
@@ -71,6 +78,7 @@ export class Material {
     this.receiveShadow = opts.receiveShadow ?? true
     this.opacity = opts.opacity ?? 1.0
     this.transparent = opts.transparent ?? false
+    this.side = opts.side ?? (opts.transparent ? 'double' : 'front')
     this.emissiveBrightness = opts.emissiveBrightness ?? 1.0
     this.colorMap = opts.colorMap
     this.aoMap = opts.aoMap
@@ -96,6 +104,7 @@ export interface MaterialOptions {
   emissiveBrightness?: number
   opacity?: number
   transparent?: boolean
+  side?: MaterialSide
   colorMap?: Texture
   aoMap?: Texture
   aoIntensity?: number

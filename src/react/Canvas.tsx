@@ -16,6 +16,7 @@ import { setupEvents } from './events'
 import { reconciler, type VoidInstance } from './reconciler'
 import { createTunnel, type Tunnel } from './tunnel'
 
+import type { FloatPrecision } from '../float'
 import type { ShadowConfig } from '../renderer/renderer'
 
 export interface CanvasProps {
@@ -26,6 +27,8 @@ export interface CanvasProps {
   shadows?: boolean | ShadowConfig
   maxFps?: number
   maxDpr?: number
+  /** Float precision for math types: 'auto' tries Float16Array, falls back to Float32Array. */
+  floatPrecision?: FloatPrecision | 'auto'
   camera?: {
     fov?: number
     near?: number
@@ -56,6 +59,7 @@ export const Canvas = ({
   shadows,
   maxFps,
   maxDpr,
+  floatPrecision,
   camera: cameraProps,
   onCreated,
   style,
@@ -82,6 +86,7 @@ export const Canvas = ({
         antialias,
         bloom,
         shadows,
+        floatPrecision,
       })
       if (disposed) {
         engine.dispose()

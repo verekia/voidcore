@@ -6,6 +6,7 @@ import CameraControls from '../components/CameraControls'
 import Characters from '../components/Characters'
 import ColoredCubes from '../components/ColoredCubes'
 import EdenMesh from '../components/EdenMesh'
+import FloatSwitch from '../components/FloatSwitch'
 import Lighting from '../components/Lighting'
 import RotatingCube from '../components/RotatingCube'
 import StatsOverlay from '../components/StatsOverlay'
@@ -20,7 +21,7 @@ useGLTF.preload(playerBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
-const CHARACTER_COUNT = 800
+const CHARACTER_COUNT = 400
 
 // ─── Page ───────────────────────────────────────────────────────────────────
 
@@ -39,6 +40,7 @@ const IndexPage = () => {
 
   const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
   const forceWebGL = params?.has('webgl')
+  const forceF32 = params?.has('f32')
 
   return (
     <>
@@ -48,10 +50,15 @@ const IndexPage = () => {
         antialias
         maxFps={60}
         backend={forceWebGL ? 'webgl2' : 'auto'}
+        floatPrecision={forceF32 ? 'float32' : 'auto'}
         camera={{ fov: 55, near: 0.1, far: 500, position: [0, -230, 60] }}
         onCreated={({ engine }) => setEngine(engine)}
         className="fixed top-0 left-0 h-screen w-screen"
       >
+        <mesh>
+          <sphereGeometry args={[{ radius: 400 }]} />
+          <basicMaterial color={[0.2, 0.5, 1]} side="back" />
+        </mesh>
         <Lighting />
         <CameraControls />
         <RotatingCube />
@@ -66,6 +73,7 @@ const IndexPage = () => {
         )}
       </Canvas>
       <StatsOverlay engine={engine} />
+      <FloatSwitch engine={engine} />
       <BackendSwitch engine={engine} />
     </>
   )

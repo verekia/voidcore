@@ -4,20 +4,23 @@
 export { Engine, type EngineConfig } from './engine'
 export { type Renderer, type RendererConfig, type FrameStats, type ShadowConfig } from './renderer/renderer'
 
+// Float precision
+export { type FloatPrecision, type FloatArray, isFloat16Supported, setFloatPrecision, getFloatPrecision } from './float'
+
 // Scheduler
 export { Scheduler, type SchedulerState, type SchedulerCallback, type SchedulerCallbackOptions } from './scheduler'
 
 // Scene
 export { Scene } from './scene/scene'
 export { Node } from './scene/node'
-export { Mesh } from './scene/mesh'
+export { Mesh, type MeshOutline } from './scene/mesh'
 export { Group } from './scene/group'
 export { PerspectiveCamera, type CameraOptions } from './scene/camera'
 export { AmbientLight, type AmbientLightOptions, DirectionalLight, type DirectionalLightOptions } from './scene/light'
 export { cloneScene, type CloneOptions, type CloneResult } from './scene/clone'
 
 // Geometry
-export { Geometry, mergeGeometries } from './geometry/geometry'
+export { Geometry, mergeGeometries, computeSmoothNormals } from './geometry/geometry'
 export {
   PlaneGeometry,
   BoxGeometry,
@@ -29,8 +32,8 @@ export {
 } from './geometry/primitives'
 
 // Materials
-export { BasicMaterial, LambertMaterial, Material } from './materials/material'
-export { Texture } from './materials/texture'
+export { BasicMaterial, LambertMaterial, Material, type MaterialSide } from './materials/material'
+export { Texture, type CompressedTextureFormat, type TextureFormat } from './materials/texture'
 
 // Controls
 export { OrbitControls } from './controls/orbit'

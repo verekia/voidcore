@@ -10,6 +10,10 @@
 // Dynamic geometry is supported via geometry.needsUpdate — position and normal buffers are
 // re-uploaded with DYNAMIC_DRAW when the flag is set (used by helpers and procedural meshes).
 //
+// Inverted hull outlines are supported per-mesh: a front-face-culled inflated copy of the mesh
+// is drawn before the main mesh to create a silhouette effect. The material `side` property
+// (front/back/double) controls per-material face culling.
+//
 // A GL state cache (_set* helpers) eliminates redundant state calls between consecutive draws.
 // The radix sort groups meshes by pipeline > material > depth, so the cache yields significant
 // savings — especially in the shadow pass (N draws with only 2 programs).
@@ -30,7 +34,10 @@
 // WebGLRenderer.render()  – Draws one frame.
 // WebGLRenderer.dispose() – Releases all GPU resources.
 
+import { createFloatArray } from '../float'
+import { computeSmoothNormals } from '../geometry/geometry'
 import {
+  aabbCreate,
   aabbTransform,
   frustumFromViewProjection,
   mat4Create,
@@ -64,6 +71,9 @@ import {
   SHADOW_DEPTH_VERT,
   SHADOW_DEPTH_SKINNED_VERT,
   SHADOW_DEPTH_FRAG,
+  OUTLINE_VERT,
+  OUTLINE_SKINNED_VERT,
+  OUTLINE_FRAG,
   OCCLUSION_BOX_VERT,
   OCCLUSION_BOX_FRAG,
   FULLSCREEN_VERT,
@@ -74,7 +84,7 @@ import {
 
 import type { Geometry } from '../geometry/geometry'
 import type { Material, PaletteEntry } from '../materials/material'
-import type { Texture } from '../materials/texture'
+import type { CompressedTextureFormat, Texture, TextureFormat } from '../materials/texture'
 import type { AABB, Mat4, Vec3 } from '../math/index'
 import type { PerspectiveCamera } from '../scene/camera'
 import type { DirectionalLight } from '../scene/light'
@@ -94,6 +104,8 @@ interface GPUBuffers {
   joints?: WebGLBuffer
   weights?: WebGLBuffer
   vao?: WebGLVertexArrayObject
+  smoothNormal?: WebGLBuffer
+  outlineVao?: WebGLVertexArrayObject
 }
 
 const MAX_OCCLUSION_QUERIES = 64
@@ -151,6 +163,12 @@ interface PostUniformLocs {
   u_useKarisAverage: WebGLUniformLocation | null
 }
 
+interface OutlineUniformLocs {
+  u_outlineThickness: WebGLUniformLocation | null
+  u_outlineColor: WebGLUniformLocation | null
+  u_viewProjection: WebGLUniformLocation | null
+}
+
 interface BlitUniformLocs {
   u_sceneTexture: WebGLUniformLocation | null
   u_bloomTexture: WebGLUniformLocation | null
@@ -204,6 +222,16 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
     const packedNormals = packNormalsSnorm8(geometry.normals, geometry.vertexCount)
     gl.bindBuffer(gl.ARRAY_BUFFER, bufs.normal)
     gl.bufferData(gl.ARRAY_BUFFER, packedNormals, gl.DYNAMIC_DRAW)
+    // Invalidate smooth normals / outline VAO so they get rebuilt
+    if (bufs.smoothNormal) {
+      gl.deleteBuffer(bufs.smoothNormal)
+      bufs.smoothNormal = undefined
+    }
+    if (bufs.outlineVao) {
+      gl.deleteVertexArray(bufs.outlineVao)
+      bufs.outlineVao = undefined
+    }
+    geometry._smoothNormals = undefined
     geometry.needsUpdate = false
     return
   }
@@ -322,6 +350,75 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
     vao,
   }
   geometry.needsUpdate = false
+}
+
+// ─── Outline buffers (smooth normals + dedicated VAO) ─────────────────
+
+const ensureOutlineBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
+  const bufs = geometry._gpuBuffers as GPUBuffers
+  if (bufs.outlineVao) return
+
+  if (!geometry._smoothNormals) computeSmoothNormals(geometry)
+  const packedSmooth = packNormalsSnorm8(geometry._smoothNormals!, geometry.vertexCount)
+
+  const smoothBuf = gl.createBuffer()!
+  gl.bindBuffer(gl.ARRAY_BUFFER, smoothBuf)
+  gl.bufferData(gl.ARRAY_BUFFER, packedSmooth, gl.STATIC_DRAW)
+  bufs.smoothNormal = smoothBuf
+
+  // Create outline VAO: same as main VAO but with smooth normals at location 1
+  const outlineVao = gl.createVertexArray()!
+  gl.bindVertexArray(outlineVao)
+
+  // Position (location 0)
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufs.position)
+  gl.enableVertexAttribArray(0)
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0)
+
+  // Smooth normal (location 1) — snorm8x4
+  gl.bindBuffer(gl.ARRAY_BUFFER, smoothBuf)
+  gl.enableVertexAttribArray(1)
+  gl.vertexAttribPointer(1, 4, gl.BYTE, true, 0, 0)
+
+  // UV (location 2)
+  if (bufs.uv) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufs.uv)
+    gl.enableVertexAttribArray(2)
+    gl.vertexAttribPointer(2, 2, gl.HALF_FLOAT, false, 0, 0)
+  }
+
+  // Material index (location 3)
+  if (bufs.materialIndex) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufs.materialIndex)
+    gl.enableVertexAttribArray(3)
+    gl.vertexAttribPointer(3, 1, gl.UNSIGNED_BYTE, false, 1, 0)
+  } else {
+    gl.disableVertexAttribArray(3)
+    gl.vertexAttrib1f(3, 0.0)
+  }
+
+  // Joints (location 4)
+  if (bufs.joints) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufs.joints)
+    gl.enableVertexAttribArray(4)
+    gl.vertexAttribPointer(4, 4, gl.UNSIGNED_BYTE, false, 0, 0)
+  } else {
+    gl.disableVertexAttribArray(4)
+  }
+
+  // Weights (location 5)
+  if (bufs.weights) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufs.weights)
+    gl.enableVertexAttribArray(5)
+    gl.vertexAttribPointer(5, 4, gl.UNSIGNED_BYTE, true, 0, 0)
+  } else {
+    gl.disableVertexAttribArray(5)
+  }
+
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bufs.index)
+  gl.bindVertexArray(null)
+
+  bufs.outlineVao = outlineVao
 }
 
 // ─── Render targets ───────────────────────────────────────────────────
@@ -455,8 +552,30 @@ const createRenderTargets = (
 
 export { type RendererConfig, type FrameStats } from './renderer'
 
+// WebGL2 internal format constants for compressed textures
+const GL_COMPRESSED_RGBA_ASTC_4x4_KHR = 0x93b0
+const GL_COMPRESSED_RGBA_BPTC_UNORM_EXT = 0x8e8c
+const GL_COMPRESSED_RGBA_S3TC_DXT5_EXT = 0x83f3
+const GL_COMPRESSED_RGBA8_ETC2_EAC = 0x9278
+
+const _toGLInternalFormat = (fmt: TextureFormat): number => {
+  switch (fmt) {
+    case 'astc-4x4':
+      return GL_COMPRESSED_RGBA_ASTC_4x4_KHR
+    case 'bc7':
+      return GL_COMPRESSED_RGBA_BPTC_UNORM_EXT
+    case 'bc3':
+      return GL_COMPRESSED_RGBA_S3TC_DXT5_EXT
+    case 'etc2-rgba8':
+      return GL_COMPRESSED_RGBA8_ETC2_EAC
+    default:
+      return 0
+  }
+}
+
 export class WebGLRenderer implements Renderer {
   readonly backend = 'webgl2' as const
+  readonly compressedTextureFormats: readonly CompressedTextureFormat[]
   gl: WebGL2RenderingContext
   canvas: HTMLCanvasElement
 
@@ -475,6 +594,8 @@ export class WebGLRenderer implements Renderer {
   private basicSkinnedProgram: WebGLProgram
   private shadowDepthProgram: WebGLProgram
   private shadowDepthSkinnedProgram: WebGLProgram
+  private outlineProgram: WebGLProgram
+  private outlineSkinnedProgram: WebGLProgram
   private bloomDownsampleProgram: WebGLProgram
   private bloomUpsampleProgram: WebGLProgram
   private blitProgram: WebGLProgram
@@ -485,6 +606,10 @@ export class WebGLRenderer implements Renderer {
   private _basicLocs!: SceneUniformLocs
   private _lambertSkinnedLocs!: SceneUniformLocs
   private _basicSkinnedLocs!: SceneUniformLocs
+
+  // Outline uniform locations
+  private _outlineLocs!: OutlineUniformLocs
+  private _outlineSkinnedLocs!: OutlineUniformLocs
 
   // Texture map cache
   private _glTexCache = new WeakMap<Texture, WebGLTexture>()
@@ -570,11 +695,11 @@ export class WebGLRenderer implements Renderer {
   private _vpMatrix: Mat4 = mat4Create()
   private _invWorldMatrix: Mat4 = mat4Create()
   private _normalMatrix: Mat4 = mat4Create()
-  private _frustumPlanes = new Float32Array(24)
-  private _shadowFrustumPlanes = new Float32Array(24)
-  private _worldAABB: AABB = new Float32Array(6)
+  private _frustumPlanes = createFloatArray(24)
+  private _shadowFrustumPlanes = createFloatArray(24)
+  private _worldAABB: AABB = aabbCreate()
   private _lightDir = vec3Create()
-  private _tempVec3 = new Float32Array(3)
+  private _tempVec3 = vec3Create()
   private _meshes: Mesh[] = []
   private _sortState: SortState = createSortState(4096)
 
@@ -611,6 +736,15 @@ export class WebGLRenderer implements Renderer {
 
     // Check for required extensions
     gl.getExtension('EXT_color_buffer_float')
+
+    // Detect compressed texture support (priority: ASTC > BC7 > ETC2 > BC3)
+    const compressedFormats: CompressedTextureFormat[] = []
+    if (gl.getExtension('WEBGL_compressed_texture_astc')) compressedFormats.push('astc-4x4')
+    if (gl.getExtension('EXT_texture_compression_bptc')) compressedFormats.push('bc7')
+    // ETC2 is mandatory in WebGL2 — always available
+    compressedFormats.push('etc2-rgba8')
+    if (gl.getExtension('WEBGL_compressed_texture_s3tc')) compressedFormats.push('bc3')
+    this.compressedTextureFormats = compressedFormats
 
     this.gl = gl
     this.canvas = canvas
@@ -653,6 +787,8 @@ export class WebGLRenderer implements Renderer {
     this.basicSkinnedProgram = createProgram(gl, BASIC_SKINNED_VERT, BASIC_FRAG)
     this.shadowDepthProgram = createProgram(gl, SHADOW_DEPTH_VERT, SHADOW_DEPTH_FRAG)
     this.shadowDepthSkinnedProgram = createProgram(gl, SHADOW_DEPTH_SKINNED_VERT, SHADOW_DEPTH_FRAG)
+    this.outlineProgram = createProgram(gl, OUTLINE_VERT, OUTLINE_FRAG)
+    this.outlineSkinnedProgram = createProgram(gl, OUTLINE_SKINNED_VERT, OUTLINE_FRAG)
     this.bloomDownsampleProgram = createProgram(gl, FULLSCREEN_VERT, BLOOM_DOWNSAMPLE_FRAG)
     this.bloomUpsampleProgram = createProgram(gl, FULLSCREEN_VERT, BLOOM_UPSAMPLE_FRAG)
     this.blitProgram = createProgram(gl, FULLSCREEN_VERT, BLIT_FRAG)
@@ -663,6 +799,16 @@ export class WebGLRenderer implements Renderer {
     this._basicLocs = cacheSceneLocs(gl, this.basicProgram)
     this._lambertSkinnedLocs = cacheSceneLocs(gl, this.lambertSkinnedProgram)
     this._basicSkinnedLocs = cacheSceneLocs(gl, this.basicSkinnedProgram)
+    this._outlineLocs = {
+      u_outlineThickness: gl.getUniformLocation(this.outlineProgram, 'u_outlineThickness'),
+      u_outlineColor: gl.getUniformLocation(this.outlineProgram, 'u_outlineColor'),
+      u_viewProjection: gl.getUniformLocation(this.outlineProgram, 'u_viewProjection'),
+    }
+    this._outlineSkinnedLocs = {
+      u_outlineThickness: gl.getUniformLocation(this.outlineSkinnedProgram, 'u_outlineThickness'),
+      u_outlineColor: gl.getUniformLocation(this.outlineSkinnedProgram, 'u_outlineColor'),
+      u_viewProjection: gl.getUniformLocation(this.outlineSkinnedProgram, 'u_viewProjection'),
+    }
     this._bloomDownLocs = cachePostLocs(gl, this.bloomDownsampleProgram)
     this._bloomUpLocs = cachePostLocs(gl, this.bloomUpsampleProgram)
     this._blitLocs = cacheBlitLocs(gl, this.blitProgram)
@@ -692,6 +838,8 @@ export class WebGLRenderer implements Renderer {
     this._bindUBOBlocks(this.basicProgram, false)
     this._bindUBOBlocks(this.lambertSkinnedProgram, true)
     this._bindUBOBlocks(this.basicSkinnedProgram, true)
+    this._bindUBOBlocks(this.outlineProgram, false)
+    this._bindUBOBlocks(this.outlineSkinnedProgram, true)
     // Shadow UBO (binding 2, 64 bytes = mat4)
     this._shadowUBO = gl.createBuffer()!
     gl.bindBuffer(gl.UNIFORM_BUFFER, this._shadowUBO)
@@ -757,7 +905,15 @@ export class WebGLRenderer implements Renderer {
     const gl = this.gl
     const glTex = gl.createTexture()!
     gl.bindTexture(gl.TEXTURE_2D, glTex)
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, tex.width, tex.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, tex.data)
+
+    if (tex.format !== 'rgba8') {
+      // Compressed texture: use compressedTexImage2D
+      const internalFormat = _toGLInternalFormat(tex.format)
+      gl.compressedTexImage2D(gl.TEXTURE_2D, 0, internalFormat, tex.width, tex.height, 0, tex.data)
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, tex.width, tex.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, tex.data)
+    }
+
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
@@ -1054,7 +1210,7 @@ export class WebGLRenderer implements Renderer {
     // ─── Shadow computation ────────────────────────────────────────
     // Compute shadow matrix BEFORE traversal so we can collect shadow-only
     // casters in the same pass as camera-visible meshes.
-    let shadowFrustum: Float32Array | null = null
+    let shadowFrustum: import('../float').FloatArray | null = null
     if (shadowActive) {
       this._computeShadowMatrix(dirLight!, lightDir)
       frustumFromViewProjection(this._shadowFrustumPlanes, this._shadowVP)
@@ -1084,6 +1240,7 @@ export class WebGLRenderer implements Renderer {
       shadowMeshes,
       occludees,
       this._traversalStack,
+      camera.position,
     )
 
     // Radix sort meshes by layer > pipeline > material > depth
@@ -1388,9 +1545,72 @@ export class WebGLRenderer implements Renderer {
       triangles += mesh.geometry.indexCount / 3
     }
 
+    // ─── Outline draw helper ──────────────────────────────────────
+    const drawOutline = (mesh: Mesh) => {
+      const thickness = mesh._outlineThickness
+      if (thickness <= 0) return
+
+      const maxDist = mesh._outlineMaxDistance
+      if (maxDist > 0) {
+        const dx = mesh._worldMatrix[12]! - camera.position[0]!
+        const dy = mesh._worldMatrix[13]! - camera.position[1]!
+        const dz = mesh._worldMatrix[14]! - camera.position[2]!
+        if (dx * dx + dy * dy + dz * dz > maxDist * maxDist) return
+      }
+
+      const color = mesh._outlineColor
+
+      // Outline uses front-face culling (show back faces only)
+      this._setCullFace(true)
+      this._setCullMode(gl.FRONT)
+
+      const program = mesh._isSkinned ? this.outlineSkinnedProgram : this.outlineProgram
+      const locs = mesh._isSkinned ? this._outlineSkinnedLocs : this._outlineLocs
+      this._setProgram(program)
+      gl.uniform1f(locs.u_outlineThickness, thickness)
+      gl.uniform3f(locs.u_outlineColor, color[0], color[1], color[2])
+      gl.uniformMatrix4fv(locs.u_viewProjection, false, this._vpMatrix)
+
+      ensureGPUBuffers(gl, mesh.geometry)
+      ensureOutlineBuffers(gl, mesh.geometry)
+      this._setVAO((mesh.geometry._gpuBuffers as GPUBuffers).outlineVao!)
+
+      if (mesh._isSkinned) {
+        gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._skinnedDynBuf, mesh._batchIndex * this._alignedSkinnedSize, 2176)
+      } else {
+        gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 128)
+      }
+
+      const idxType = mesh.geometry.indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT
+      gl.drawElements(gl.TRIANGLES, mesh.geometry.indexCount, idxType, 0)
+      drawCalls++
+      triangles += mesh.geometry.indexCount / 3
+    }
+
+    // ─── Side (cull mode) helper ────────────────────────────────────
+    const applySide = (side: string, _isTransparent: boolean) => {
+      if (side === 'double') {
+        this._setCullFace(false)
+      } else if (side === 'back') {
+        this._setCullFace(true)
+        this._setCullMode(gl.FRONT)
+      } else {
+        // 'front' — default
+        this._setCullFace(true)
+        this._setCullMode(gl.BACK)
+      }
+    }
+
     // ─── Opaque draw loop ────────────────────────────────────────
     for (let si = 0; si < transparentStart; si++) {
       const mesh = meshes[sortedIndices[si]!]!
+
+      // Draw outline first (behind the main mesh)
+      drawOutline(mesh)
+
+      // Apply material side (cull mode)
+      applySide(mesh.material.side, false)
+
       let program: WebGLProgram
       let locs: SceneUniformLocs
       if (mesh._isSkinned) {
@@ -1425,15 +1645,25 @@ export class WebGLRenderer implements Renderer {
       drawMesh(si, locs, programChanged, mesh)
     }
 
+    // Restore default cull state after opaque pass
+    this._setCullFace(true)
+    this._setCullMode(gl.BACK)
+
     // ─── Transparent draw loop (back-to-front, blend on, depth write off) ──
     if (transparentStart < meshes.length) {
       this._setBlend(true)
       gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
       this._setDepthMask(false)
-      this._setCullFace(false)
 
       for (let si = transparentStart; si < meshes.length; si++) {
         const mesh = meshes[sortedIndices[si]!]!
+
+        // Draw outline first
+        drawOutline(mesh)
+
+        // Apply material side
+        applySide(mesh.material.side, true)
+
         let program: WebGLProgram
         let locs: SceneUniformLocs
         if (mesh._isSkinned) {
@@ -1472,6 +1702,7 @@ export class WebGLRenderer implements Renderer {
       this._setBlend(false)
       this._setDepthMask(true)
       this._setCullFace(true)
+      this._setCullMode(gl.BACK)
     }
 
     // ─── Occlusion query pass (test AABB boxes against scene depth) ──
@@ -1655,6 +1886,8 @@ export class WebGLRenderer implements Renderer {
     gl.deleteProgram(this.basicSkinnedProgram)
     gl.deleteProgram(this.shadowDepthProgram)
     gl.deleteProgram(this.shadowDepthSkinnedProgram)
+    gl.deleteProgram(this.outlineProgram)
+    gl.deleteProgram(this.outlineSkinnedProgram)
     gl.deleteProgram(this._occlusionProgram)
     gl.deleteBuffer(this._occlusionUBO)
     for (const q of this._occlusionQueries) gl.deleteQuery(q)

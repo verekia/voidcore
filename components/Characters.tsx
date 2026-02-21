@@ -10,11 +10,10 @@ import type { GLTFResult } from '../src/loaders/gltf'
 const CLIP_DURATION = 2
 const CROSSFADE_DURATION = 0.3
 const ORBIT_RADIUS = 5
-const ORBIT_SPEED = 3
 const GRID_SPACING = 5
 
 const megaxeMaterial = new LambertMaterial({
-  emissiveBrightness: 0.5,
+  emissiveBrightness: 0.3,
   palette: [
     { color: [0.95, 0.93, 0.9] },
     { color: [0.08, 0.08, 0.1] },
@@ -47,10 +46,17 @@ const Character = memo(
         const handBone = skeleton.getBone('Hand.R')
         if (handBone) {
           const axe = new Mesh(megaxeGeometry, megaxeMaterial)
+          axe.outline = { thickness: 0.05, maxDistance: 100 }
           axe.setRotation(0, 0, 1, 0)
           handBone.add(axe)
         }
       }
+
+      root.traverse(node => {
+        if (node instanceof Mesh) {
+          node.outline = { thickness: 0.05, maxDistance: 100 }
+        }
+      })
 
       return { root, skeleton }
     }, [playerGltf, megaxeGeometry])
@@ -67,7 +73,7 @@ const Character = memo(
       nextSwitch: CLIP_DURATION - startTimeIntoClip,
     })
 
-    useFrame(({ dt, elapsed }) => {
+    useFrame(({ elapsed }) => {
       const s = stateRef.current
 
       if (!s.initialized) {
@@ -90,7 +96,7 @@ const Character = memo(
         }
       }
 
-      s.angle += ORBIT_SPEED * dt
+      // s.angle += ORBIT_SPEED * dt
       root.setPosition(x + Math.cos(s.angle) * ORBIT_RADIUS, y + Math.sin(s.angle) * ORBIT_RADIUS, s.z)
 
       if (elapsed >= s.nextSwitch && actionList.length > 1) {

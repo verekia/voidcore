@@ -8,11 +8,13 @@
 //   found. Used to determine ambient color and intensity for the frame uniforms.
 //
 // collectMeshes() – Walks the scene graph in a single pass to:
-//   1. Collect camera-visible Mesh nodes (frustum culled against the camera frustum)
-//   2. Collect shadow-only casters (meshes outside camera frustum but inside the shadow
+//   1. Distance-cull meshes beyond their maxDistance from the camera (squared distance,
+//      no sqrt). Distance-culled meshes are excluded from both rendering and shadow casting.
+//   2. Collect camera-visible Mesh nodes (frustum culled against the camera frustum)
+//   3. Collect shadow-only casters (meshes outside camera frustum but inside the shadow
 //      frustum). This merges what used to be two separate traversals into one.
-//   3. Skip invisible nodes and meshes outside both frustums
-//   4. Track meshes with occlusionCulled for GPU occlusion query testing, and skip
+//   4. Skip invisible nodes and meshes outside both frustums
+//   5. Track meshes with occlusionCulled for GPU occlusion query testing, and skip
 //      meshes that were occluded in the previous frame's query results.
 //   All arrays use index-based writes instead of push/pop to minimize GC pressure.
 //
@@ -36,6 +38,7 @@ import {
   frustumContainsAABB,
   mat4LookAt,
   mat4Multiply,
+  vec3Create,
   vec3Normalize,
   vec3Set,
   vec3TransformMat4,
@@ -44,6 +47,7 @@ import {
 } from '../math/index'
 import { Mesh } from '../scene/mesh'
 
+import type { FloatArray } from '../float'
 import type { AABB, Mat4, Vec3 } from '../math/index'
 import type { AmbientLight, DirectionalLight } from '../scene/light'
 import type { Node } from '../scene/node'
@@ -108,18 +112,20 @@ export const findAmbientLight = (root: Node, stack: Node[]): AmbientLight | null
  * Collect camera-visible meshes and shadow-only casters in a single traversal.
  * Also tracks meshes with occlusionCulled for GPU occlusion query testing.
  * Uses index-based array writes to avoid push/pop GC overhead.
+ * Meshes with maxDistance > 0 are distance-culled using squared distance (no sqrt).
  * Returns the number of fully culled meshes (outside both camera and shadow frustums,
  * or occluded by previous frame's occlusion query results).
  */
 export const collectMeshes = (
   root: Node,
-  cameraFrustum: Float32Array,
-  shadowFrustum: Float32Array | null,
+  cameraFrustum: FloatArray,
+  shadowFrustum: FloatArray | null,
   worldAABB: AABB,
   meshes: Mesh[],
   shadowMeshes: Mesh[],
   occludees: Mesh[],
   stack: Node[],
+  cameraPosition: Vec3,
 ): number => {
   let meshCount = 0
   let shadowCount = 0
@@ -132,6 +138,23 @@ export const collectMeshes = (
     if (!node.visible) continue
     if (node.type === 'mesh') {
       const mesh = node as Mesh
+
+      // Distance culling: skip mesh entirely if beyond maxDistance
+      if (mesh.maxDistance > 0) {
+        const dx = mesh._worldMatrix[12]! - cameraPosition[0]!
+        const dy = mesh._worldMatrix[13]! - cameraPosition[1]!
+        const dz = mesh._worldMatrix[14]! - cameraPosition[2]!
+        if (dx * dx + dy * dy + dz * dz > mesh.maxDistance * mesh.maxDistance) {
+          culledCount++
+          // Still process children below — distance culling is per-mesh
+          const children = node.children
+          for (let i = children.length - 1; i >= 0; i--) {
+            stack[stackTop++] = children[i]!
+          }
+          continue
+        }
+      }
+
       if (mesh.frustumCulled) {
         aabbTransform(worldAABB, mesh.geometry.aabb, mesh._worldMatrix)
         if (frustumContainsAABB(cameraFrustum, worldAABB)) {
@@ -164,11 +187,7 @@ export const collectMeshes = (
 }
 
 /** Compute normalized light direction from a directional light's world position. */
-export const computeLightDir = (
-  lightDir: Float32Array,
-  tempVec3: Float32Array,
-  dirLight: DirectionalLight | null,
-): void => {
+export const computeLightDir = (lightDir: Vec3, tempVec3: Vec3, dirLight: DirectionalLight | null): void => {
   lightDir[0] = 0
   lightDir[1] = 0
   lightDir[2] = 0
@@ -182,9 +201,9 @@ export const computeLightDir = (
 }
 
 /** Scratch buffers for shadow computation — avoids per-call allocation. */
-const _csCenter: Vec3 = new Float32Array(3) as unknown as Vec3
-const _csEye: Vec3 = new Float32Array(3) as unknown as Vec3
-const _csSnap: Vec3 = new Float32Array(3) as unknown as Vec3
+const _csCenter: Vec3 = vec3Create()
+const _csEye: Vec3 = vec3Create()
+const _csSnap: Vec3 = vec3Create()
 
 /** Build the light-space view-projection matrix for the shadow map. */
 export const computeShadowMatrix = (
