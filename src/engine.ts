@@ -110,7 +110,7 @@ export class Engine {
   }
 
   static async create(canvas: HTMLCanvasElement, config: EngineConfig = {}): Promise<Engine> {
-    const resolvedPrecision = setFloatPrecision(config.floatPrecision ?? 'float32')
+    const resolvedPrecision = setFloatPrecision(config.floatPrecision ?? 'auto')
     console.log(`[voidcore] Float precision: ${resolvedPrecision === 'float16' ? 'F16' : 'F32'}`)
     const renderer = await createRenderer(canvas, config)
     return new Engine(canvas, renderer, resolvedPrecision)
