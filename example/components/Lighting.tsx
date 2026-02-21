@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 
-import type { DirectionalLight } from '../src/index'
+import type { DirectionalLight } from 'voidcore'
 
 const Lighting = () => {
   const lightRef = useRef<DirectionalLight>(null)

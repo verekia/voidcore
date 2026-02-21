@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 
-import { OrbitControls, useEngine, useFrame } from '../src/index'
+import { OrbitControls, useEngine, useFrame } from 'voidcore'
 
 const CameraControls = () => {
   const { camera, canvas } = useEngine()

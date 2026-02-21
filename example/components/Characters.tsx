@@ -1,10 +1,10 @@
 import { memo, useRef, useMemo } from 'react'
 
-import { Raycaster, cloneScene, LambertMaterial, Mesh, useEngine, useFrame, useGLTF, useAnimations } from '../src/index'
+import { Raycaster, cloneScene, LambertMaterial, Mesh, useEngine, useFrame, useGLTF, useAnimations } from 'voidcore'
+
 import { staticBundleSrc, playerBundleSrc } from './assets'
 
-import type { AnimationClip, Geometry } from '../src/index'
-import type { GLTFResult } from '../src/loaders/gltf'
+import type { AnimationClip, Geometry, GLTFResult } from 'voidcore'
 
 const CLIP_DURATION = 2
 const CROSSFADE_DURATION = 0.3

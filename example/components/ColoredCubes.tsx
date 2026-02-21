@@ -1,6 +1,6 @@
 import { useMemo, useRef } from 'react'
 
-import { quatFromAxisAngle, useFrame } from '../src/index'
+import { quatFromAxisAngle, useFrame } from 'voidcore'
 
 const CUBE_COLORS: [number, number, number][] = [
   [1.0, 0.2, 0.2],

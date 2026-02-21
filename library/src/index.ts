@@ -45,7 +45,7 @@ export { Skeleton, type AnimationClip, type KeyframeTrack, AnimationMixer, Anima
 export { Raycaster, buildMeshBVH, prebuildBVH, type RaycastHit } from './raycasting/index'
 
 // Loaders
-export { loadGLTF } from './loaders/gltf'
+export { loadGLTF, type GLTFResult } from './loaders/gltf'
 export { loadKTX2 } from './loaders/ktx2'
 
 // Helpers

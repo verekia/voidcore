@@ -334,6 +334,7 @@ export const reconciler = Reconciler({
 
 // Enable concurrent features
 reconciler.injectIntoDevTools({
+  // @ts-ignore
   bundleType: process.env.NODE_ENV === 'production' ? 0 : 1,
   rendererPackageName: 'voidcore',
   version: '0.0.0',

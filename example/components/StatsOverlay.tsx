@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-import type { Engine } from '../src/index'
+import type { Engine } from 'voidcore'
 
 const StatsOverlay = ({ engine }: { engine: Engine | null }) => {
   const [statsText, setStatsText] = useState('')

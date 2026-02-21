@@ -16,53 +16,71 @@ VoidCore is a performant 3D graphics engine written in TypeScript. It supports b
 
 ## Project Structure
 
+Monorepo with bun workspaces. Linting (oxlint) and formatting (oxfmt) are configured at the root.
+
 ```
-src/
-  engine.ts              – Main entry point, owns the scheduler and renderer
-  float.ts               – Configurable float precision (Float32Array/Float16Array)
-  scheduler.ts           – Priority-based rAF loop with FPS throttling
-  index.ts               – Public API barrel export
-  animation/             – Skeletal animation (clips, mixer, skeleton)
-  controls/              – Camera controls (orbit)
-  geometry/              – Geometry data and procedural primitives
-  loaders/               – Asset loaders (glTF/GLB, KTX2/Basis Universal)
-  materials/             – Material definitions (basic, lambert) and textures
-  math/                  – Linear algebra (vec3, mat4, quat, AABB, frustum)
-  helpers/               – Visual debug helpers (DirectionalLightHelper)
-  raycasting/            – Ray-mesh intersection with BVH acceleration
-  renderer/              – Rendering backends and shaders
-    renderer.ts          – Interface + factory
-    webgpu.ts            – WebGPU backend
-    webgl.ts             – WebGL2 backend
-    webgl-shaders.ts     – GLSL shaders
-    webgpu-shaders.ts    – WGSL shaders
-    shared.ts            – Shared traversal/culling utilities
-    pack.ts              – Vertex attribute packing (snorm8, float16, unorm8)
-    sort.ts              – Radix sort for draw order
-  overlay.ts             – HTML overlay manager (DOM elements tracking 3D positions)
-  scene/                 – Scene graph nodes (Node, Scene, Mesh, Group, Camera, Light)
-  react/                 – React declarative bindings (exported from voidcore top-level)
-    BakeShadows.tsx      – Freezes shadow map for static scenes
-    Canvas.tsx           – Root component (engine init, reconciler mount, rAF loop)
-    reconciler.ts        – Custom react-reconciler host config
-    types.ts             – JSX catalogue, prop types, IntrinsicElements
-    hooks.ts             – useFrame, useEngine, useLoader, useGLTF, useKTX2, useAnimations
-    events.ts            – Pointer event system (raycast-based)
-    context.ts           – React context for engine state
-    Html.tsx             – DOM overlay projected to 3D coordinates
-    index.ts             – Internal barrel (not a public entry point)
-pages/                   – Next.js example app (uses React bindings)
+packages/voidcore/       – The library package (published to npm as "voidcore")
+  src/
+    engine.ts            – Main entry point, owns the scheduler and renderer
+    float.ts             – Configurable float precision (Float32Array/Float16Array)
+    scheduler.ts         – Priority-based rAF loop with FPS throttling
+    index.ts             – Public API barrel export
+    animation/           – Skeletal animation (clips, mixer, skeleton)
+    controls/            – Camera controls (orbit)
+    geometry/            – Geometry data and procedural primitives
+    loaders/             – Asset loaders (glTF/GLB, KTX2/Basis Universal)
+    materials/           – Material definitions (basic, lambert) and textures
+    math/                – Linear algebra (vec3, mat4, quat, AABB, frustum)
+    helpers/             – Visual debug helpers (DirectionalLightHelper)
+    raycasting/          – Ray-mesh intersection with BVH acceleration
+    renderer/            – Rendering backends and shaders
+      renderer.ts        – Interface + factory
+      webgpu.ts          – WebGPU backend
+      webgl.ts           – WebGL2 backend
+      webgl-shaders.ts   – GLSL shaders
+      webgpu-shaders.ts  – WGSL shaders
+      shared.ts          – Shared traversal/culling utilities
+      pack.ts            – Vertex attribute packing (snorm8, float16, unorm8)
+      sort.ts            – Radix sort for draw order
+    overlay.ts           – HTML overlay manager (DOM elements tracking 3D positions)
+    scene/               – Scene graph nodes (Node, Scene, Mesh, Group, Camera, Light)
+    react/               – React declarative bindings (exported from voidcore top-level)
+      BakeShadows.tsx    – Freezes shadow map for static scenes
+      Canvas.tsx         – Root component (engine init, reconciler mount, rAF loop)
+      reconciler.ts      – Custom react-reconciler host config
+      types.ts           – JSX catalogue, prop types, IntrinsicElements
+      hooks.ts           – useFrame, useEngine, useLoader, useGLTF, useKTX2, useAnimations
+      events.ts          – Pointer event system (raycast-based)
+      context.ts         – React context for engine state
+      Html.tsx           – DOM overlay projected to 3D coordinates
+      index.ts           – Internal barrel (not a public entry point)
+  package.json           – Library package (exports src/index.ts; tsup builds dist/ for npm)
+  tsconfig.json          – Library tsconfig (jsx: react-jsx, noEmit: true)
+  tsup.config.js         – tsup build config for npm publishing
+
+examples/nextjs/         – Next.js demo app (imports voidcore from workspace)
+  pages/                 – Next.js pages
+  components/            – Example-specific React components
+  public/                – Static assets (draco, basis, ktx2, glb files)
+  package.json           – Example package (depends on workspace:voidcore)
+  tsconfig.json          – Next.js tsconfig (jsx: preserve, plugins: [next])
+  next.config.mjs        – Next.js config (transpilePackages: ['voidcore'])
+  postcss.config.mjs     – PostCSS / Tailwind config
+  tailwind.css           – Tailwind CSS entry
 ```
 
 ## Commands
 
-- `bun run dev` – Start dev server (Next.js example)
-- `bun run build` – Build
+All commands run from the monorepo root unless noted.
+
+- `bun run dev` – Start the Next.js example dev server
+- `bun run build` – Build all packages (library via tsup, example via next build)
 - `bun run lint` – Lint with oxlint
 - `bun run format` – Format with oxfmt
 - `bun run buntest` – Run tests with bun
-- `bun run typecheck` – Typecheck with tsgo
+- `bun run typecheck` – Typecheck all packages with tsgo
 - `bun run all` – Lint + format check + test + typecheck
+- `bun run pub` – Build the library and publish to npm
 
 ## Conventions
 

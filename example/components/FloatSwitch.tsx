@@ -1,4 +1,4 @@
-import type { Engine } from '../src/index'
+import type { Engine } from 'voidcore'
 
 const FloatSwitch = ({ engine }: { engine: Engine | null }) => {
   if (!engine) return null

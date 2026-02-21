@@ -1,5 +1,7 @@
 import { Suspense, useCallback, useEffect, useState } from 'react'
 
+import { Canvas, useGLTF } from 'voidcore'
+
 import { staticBundleSrc, playerBundleSrc } from '../components/assets'
 import BackendSwitch from '../components/BackendSwitch'
 import CameraControls from '../components/CameraControls'
@@ -10,9 +12,8 @@ import FloatSwitch from '../components/FloatSwitch'
 import Lighting from '../components/Lighting'
 import RotatingCube from '../components/RotatingCube'
 import StatsOverlay from '../components/StatsOverlay'
-import { Canvas, useGLTF } from '../src/index'
 
-import type { Engine } from '../src/index'
+import type { Engine } from 'voidcore'
 
 // ─── Preload GLBs in parallel (avoids Suspense waterfall) ────────────────────
 

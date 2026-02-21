@@ -1,6 +1,6 @@
 import { useMemo, useRef } from 'react'
 
-import { quatFromAxisAngle, Html, useFrame } from '../src/index'
+import { quatFromAxisAngle, Html, useFrame } from 'voidcore'
 
 const RotatingCube = () => {
   const meshRef = useRef<any>(null)
