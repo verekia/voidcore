@@ -18,6 +18,8 @@
 //   Bind group    – A set of GPU resources (buffers, textures) bound to shader slots.
 //   Uniform buffer – CPU-to-GPU data (matrices, colors) uploaded once and read by shaders.
 //   MSAA          – Multi-sample anti-aliasing (4x) to smooth jagged edges.
+//   Outline       – Inverted hull outlines (front-face culled inflated mesh) per-mesh.
+//   Side          – Per-material face culling control (front/back/double).
 //   Premul alpha  – Transparent pipelines use premultiplied alpha blend (src=one, dst=
 //                    one-minus-src-alpha). This avoids the 'src-alpha' blend factor which
 //                    triggers VK_ERROR_UNKNOWN on some Android Vulkan drivers when combined
@@ -62,6 +64,8 @@ import {
   BASIC_SKINNED_WGSL,
   SHADOW_DEPTH_WGSL,
   SHADOW_DEPTH_SKINNED_WGSL,
+  OUTLINE_WGSL,
+  OUTLINE_SKINNED_WGSL,
   BLOOM_DOWN_WGSL,
   BLOOM_UP_WGSL,
   BLIT_WGSL,
@@ -202,6 +206,14 @@ export class WebGPURenderer implements Renderer {
   private lambertTexturedPipeline!: GPURenderPipeline
   private lambertTexturedTransparentPipeline!: GPURenderPipeline
 
+  // Outline pipelines (front-face culling, inflate along normals)
+  private outlinePipeline!: GPURenderPipeline
+  private outlineSkinnedPipeline!: GPURenderPipeline
+
+  // Pipeline cache for per-material side (cull mode) variants
+  // Key: basePipelineId << 2 | cullModeId (0=back, 1=front, 2=none)
+  private _pipelineCache = new Map<number, GPURenderPipeline>()
+
   // Bind group layouts
   private frameBGL: GPUBindGroupLayout
   private materialBGL: GPUBindGroupLayout
@@ -210,6 +222,7 @@ export class WebGPURenderer implements Renderer {
   private postProcessBGL: GPUBindGroupLayout
   private blitBGL: GPUBindGroupLayout
   private textureBGL!: GPUBindGroupLayout
+  private outlineMaterialBGL!: GPUBindGroupLayout
 
   // Per-frame resources
   private frameUB: GPUBuffer
@@ -256,6 +269,9 @@ export class WebGPURenderer implements Renderer {
   // 1x1 black texture for blit when bloom is disabled
   private dummyTexture: GPUTexture
   private dummyTextureView: GPUTextureView
+
+  // Outline material cache (keyed by thickness + color hash)
+  private _outlineMatCache = new Map<string, MatCache>()
 
   // Cached GPU resources
   private _geoCache = new WeakMap<Geometry, GeoBufs>()
@@ -527,6 +543,9 @@ export class WebGPURenderer implements Renderer {
 
     // Initialize textured pipeline resources
     this._initTexturedPipelines()
+
+    // Initialize outline pipelines
+    this._initOutlinePipelines()
   }
 
   private _initTexturedPipelines() {
@@ -601,6 +620,123 @@ export class WebGPURenderer implements Renderer {
       addressModeU: 'clamp-to-edge',
       addressModeV: 'clamp-to-edge',
     })
+  }
+
+  private _initOutlinePipelines() {
+    const device = this.device
+    const opaqueTargets: GPUColorTargetState[] = [{ format: 'rgba8unorm' }, { format: 'rgba16float' }]
+
+    // Outline shaders read material uniforms in the vertex stage (for thickness),
+    // so we need a separate BGL with VERTEX | FRAGMENT visibility.
+    this.outlineMaterialBGL = device.createBindGroupLayout({
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          buffer: { type: 'uniform' },
+        },
+      ],
+    })
+
+    // Standard (non-skinned) outline pipeline layout: frame + material + object
+    const opaquePipelineLayout = device.createPipelineLayout({
+      bindGroupLayouts: [this.frameBGL, this.outlineMaterialBGL, this.objectBGL],
+    })
+    const skinnedPipelineLayout = device.createPipelineLayout({
+      bindGroupLayouts: [this.frameBGL, this.outlineMaterialBGL, this.skinnedObjectBGL],
+    })
+
+    const outlineModule = device.createShaderModule({ code: OUTLINE_WGSL })
+    const outlineSkinnedModule = device.createShaderModule({ code: OUTLINE_SKINNED_WGSL })
+
+    this.outlinePipeline = device.createRenderPipeline({
+      layout: opaquePipelineLayout,
+      vertex: { module: outlineModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
+      fragment: { module: outlineModule, entryPoint: 'fs_main', targets: opaqueTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'front', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
+      multisample: { count: this.samples },
+    })
+
+    this.outlineSkinnedPipeline = device.createRenderPipeline({
+      layout: skinnedPipelineLayout,
+      vertex: { module: outlineSkinnedModule, entryPoint: 'vs_main', buffers: SKINNED_VERTEX_BUFFER_LAYOUT },
+      fragment: { module: outlineSkinnedModule, entryPoint: 'fs_main', targets: opaqueTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'front', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
+      multisample: { count: this.samples },
+    })
+  }
+
+  /**
+   * Get or create a pipeline variant with a specific cull mode.
+   * Pipeline types:
+   *   0=lambert, 1=basic, 2=lambertSkinned, 3=basicSkinned, 4=lambertTextured,
+   *   5=lambertTransparent, 6=basicTransparent, 7=lambertSkinnedTransparent,
+   *   8=basicSkinnedTransparent, 9=lambertTexturedTransparent
+   * Cull modes: 0=back, 1=front, 2=none
+   */
+  private _getSidePipeline(pipelineType: number, cullMode: GPUCullMode): GPURenderPipeline {
+    const cullId = cullMode === 'back' ? 0 : cullMode === 'front' ? 1 : 2
+    const key = pipelineType * 3 + cullId
+    let cached = this._pipelineCache.get(key)
+    if (cached) return cached
+
+    const device = this.device
+    const isTransparent = pipelineType >= 5
+    const isSkinned = pipelineType === 2 || pipelineType === 3 || pipelineType === 7 || pipelineType === 8
+    const isTextured = pipelineType === 4 || pipelineType === 9
+
+    // Determine shader code
+    let shaderCode: string
+    if (isTextured) {
+      shaderCode = LAMBERT_TEXTURED_WGSL
+    } else {
+      const isLambert = pipelineType === 0 || pipelineType === 2 || pipelineType === 5 || pipelineType === 7
+      if (isSkinned) {
+        shaderCode = isLambert ? LAMBERT_SKINNED_WGSL : BASIC_SKINNED_WGSL
+      } else {
+        shaderCode = isLambert ? LAMBERT_WGSL : BASIC_WGSL
+      }
+    }
+
+    // Pipeline layout
+    const bindGroupLayouts = isTextured
+      ? [this.frameBGL, this.materialBGL, this.objectBGL, this.textureBGL]
+      : [this.frameBGL, this.materialBGL, isSkinned ? this.skinnedObjectBGL : this.objectBGL]
+    const layout = device.createPipelineLayout({ bindGroupLayouts })
+
+    // Vertex buffers
+    const buffers = isSkinned ? SKINNED_VERTEX_BUFFER_LAYOUT : VERTEX_BUFFER_LAYOUT
+
+    // Fragment targets
+    let targets: GPUColorTargetState[]
+    if (isTransparent) {
+      const blend: GPUBlendState = {
+        color: { operation: 'add', srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+        alpha: { operation: 'add', srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+      }
+      targets = [{ format: 'rgba8unorm', blend }, { format: 'rgba16float', blend }]
+    } else {
+      targets = [{ format: 'rgba8unorm' }, { format: 'rgba16float' }]
+    }
+
+    const module = device.createShaderModule({ code: shaderCode })
+    cached = device.createRenderPipeline({
+      layout,
+      vertex: { module, entryPoint: 'vs_main', buffers },
+      fragment: { module, entryPoint: 'fs_main', targets },
+      primitive: { topology: 'triangle-list', cullMode, frontFace: 'ccw' },
+      depthStencil: {
+        format: 'depth24plus',
+        depthWriteEnabled: !isTransparent,
+        depthCompare: 'less-equal',
+      },
+      multisample: { count: this.samples },
+    })
+
+    this._pipelineCache.set(key, cached)
+    return cached
   }
 
   private _ensureGPUTexture(tex: Texture): { texture: GPUTexture; view: GPUTextureView } {
@@ -1376,6 +1512,39 @@ export class WebGPURenderer implements Renderer {
     return cache
   }
 
+  private _ensureOutlineMaterialCache(thickness: number, color: [number, number, number]): MatCache {
+    const key = `${thickness}_${color[0]}_${color[1]}_${color[2]}`
+    let cached = this._outlineMatCache.get(key)
+    if (cached) return cached
+
+    const d = this.device
+    const buffer = d.createBuffer({
+      size: MATERIAL_UB_SIZE,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
+    const bindGroup = d.createBindGroup({
+      layout: this.outlineMaterialBGL,
+      entries: [{ binding: 0, resource: { buffer } }],
+    })
+
+    // Write outline params: baseColor=outlineColor, emissiveBrightness=thickness
+    const data = this._materialData
+    data.fill(0)
+    data[0] = color[0]
+    data[1] = color[1]
+    data[2] = color[2]
+    data[3] = 1.0 // opacity
+    // data[4] = 0 (hasPalette)
+    // data[5] = 0 (receiveShadow)
+    // data[6] = 0 (aoIntensity)
+    data[7] = thickness // emissiveBrightness slot → used as outline thickness in outline shader
+    d.queue.writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength)
+
+    cached = { buffer, bindGroup }
+    this._outlineMatCache.set(key, cached)
+    return cached
+  }
+
   private writeMaterialBuffer(material: Material, cache: MatCache) {
     const data = this._materialData
     data.fill(0)
@@ -1830,17 +1999,75 @@ export class WebGPURenderer implements Renderer {
       triangles += geoBufs.indexCount / 3
     }
 
+    // ─── Outline draw helper ─────────────────────────────────────
+    const drawOutlineGPU = (pass: GPURenderPassEncoder, mesh: Mesh) => {
+      const thickness = mesh._outlineThickness
+      if (thickness <= 0) return
+
+      const color = mesh._outlineColor
+      const outlineMatCache = this._ensureOutlineMaterialCache(thickness, color)
+
+      const pipeline = mesh._isSkinned ? this.outlineSkinnedPipeline : this.outlinePipeline
+      pass.setPipeline(pipeline)
+
+      const geoBufs = this.ensureGeometryBuffers(mesh.geometry)
+      pass.setVertexBuffer(0, geoBufs.position)
+      pass.setVertexBuffer(1, geoBufs.normal)
+      pass.setVertexBuffer(2, geoBufs.uv)
+      pass.setVertexBuffer(3, geoBufs.materialIndex)
+      if (mesh._isSkinned && geoBufs.joints && geoBufs.weights) {
+        pass.setVertexBuffer(4, geoBufs.joints)
+        pass.setVertexBuffer(5, geoBufs.weights)
+      }
+      pass.setIndexBuffer(geoBufs.index, geoBufs.indexFormat)
+
+      if (mesh._isSkinned) {
+        pass.setBindGroup(2, this._skinnedDynBG, [mesh._batchIndex * this._alignedSkinnedSize])
+      } else {
+        pass.setBindGroup(2, this._objectDynBG, [mesh._batchIndex * this._alignedObjectSize])
+      }
+
+      pass.setBindGroup(0, this.frameBG)
+      pass.setBindGroup(1, outlineMatCache.bindGroup)
+
+      pass.drawIndexed(geoBufs.indexCount)
+      drawCalls++
+      triangles += geoBufs.indexCount / 3
+    }
+
     // ─── Opaque draw loop ────────────────────────────────────────
     this._lastMaterial = null
     for (let si = 0; si < transparentStart; si++) {
       const mesh = meshes[sortedIndices[si]!]!
+
+      // Draw outline first (behind the main mesh)
+      drawOutlineGPU(scenePass, mesh)
+
+      // Determine cull mode from material side
+      const side = mesh.material.side
+      const cullMode: GPUCullMode = side === 'back' ? 'front' : side === 'double' ? 'none' : 'back'
+
       let pipeline: GPURenderPipeline
-      if (mesh._isSkinned) {
-        pipeline = mesh.material.type === 'lambert' ? this.lambertSkinnedPipeline : this.basicSkinnedPipeline
-      } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
-        pipeline = this.lambertTexturedPipeline
+      if (cullMode !== 'back') {
+        // Non-default cull mode: use lazy pipeline cache
+        let pipelineType: number
+        if (mesh._isSkinned) {
+          pipelineType = mesh.material.type === 'lambert' ? 2 : 3
+        } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
+          pipelineType = 4
+        } else {
+          pipelineType = mesh.material.type === 'lambert' ? 0 : 1
+        }
+        pipeline = this._getSidePipeline(pipelineType, cullMode)
       } else {
-        pipeline = mesh.material.type === 'lambert' ? this.lambertPipeline : this.basicPipeline
+        // Default cull mode: use existing pipelines (fast path)
+        if (mesh._isSkinned) {
+          pipeline = mesh.material.type === 'lambert' ? this.lambertSkinnedPipeline : this.basicSkinnedPipeline
+        } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
+          pipeline = this.lambertTexturedPipeline
+        } else {
+          pipeline = mesh.material.type === 'lambert' ? this.lambertPipeline : this.basicPipeline
+        }
       }
       if (mesh.material._hasTextures && !mesh._isSkinned) {
         scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))
@@ -1848,19 +2075,41 @@ export class WebGPURenderer implements Renderer {
       drawMeshGPU(scenePass, mesh, pipeline)
     }
 
-    // ─── Transparent draw loop (back-to-front, blend + no depth write + no cull) ──
+    // ─── Transparent draw loop (back-to-front, blend + no depth write) ──
     for (let si = transparentStart; si < meshes.length; si++) {
       const mesh = meshes[sortedIndices[si]!]!
+
+      // Draw outline first
+      drawOutlineGPU(scenePass, mesh)
+
+      // Determine cull mode from material side
+      const side = mesh.material.side
+      const cullMode: GPUCullMode = side === 'back' ? 'front' : side === 'double' ? 'none' : 'back'
+
       let pipeline: GPURenderPipeline
-      if (mesh._isSkinned) {
-        pipeline =
-          mesh.material.type === 'lambert'
-            ? this.lambertSkinnedTransparentPipeline
-            : this.basicSkinnedTransparentPipeline
-      } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
-        pipeline = this.lambertTexturedTransparentPipeline
+      if (cullMode !== 'none') {
+        // Non-default cull mode for transparent: use lazy pipeline cache
+        let pipelineType: number
+        if (mesh._isSkinned) {
+          pipelineType = mesh.material.type === 'lambert' ? 7 : 8
+        } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
+          pipelineType = 9
+        } else {
+          pipelineType = mesh.material.type === 'lambert' ? 5 : 6
+        }
+        pipeline = this._getSidePipeline(pipelineType, cullMode)
       } else {
-        pipeline = mesh.material.type === 'lambert' ? this.lambertTransparentPipeline : this.basicTransparentPipeline
+        // Default cull mode for transparent: use existing pipelines (fast path)
+        if (mesh._isSkinned) {
+          pipeline =
+            mesh.material.type === 'lambert'
+              ? this.lambertSkinnedTransparentPipeline
+              : this.basicSkinnedTransparentPipeline
+        } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
+          pipeline = this.lambertTexturedTransparentPipeline
+        } else {
+          pipeline = mesh.material.type === 'lambert' ? this.lambertTransparentPipeline : this.basicTransparentPipeline
+        }
       }
       if (mesh.material._hasTextures && !mesh._isSkinned) {
         scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))

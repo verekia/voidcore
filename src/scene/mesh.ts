@@ -4,6 +4,12 @@
 // by binding its geometry buffers and material uniforms, then issuing a draw call. A mesh
 // can optionally have a Skeleton for skeletal animation (skinned meshes).
 //
+// Outlines use the inverted hull technique: a copy of the mesh is rendered with vertices
+// inflated along their normals and front-face culling, so only the back faces peek out
+// behind the original mesh, creating a silhouette effect. Set `outline` to a number
+// (thickness) or an object with `thickness` and `color` to enable. Outlines work with
+// both static and skinned meshes.
+//
 // new Mesh(geometry, material) – Creates a mesh from a geometry and material.
 // Both parameters are optional to support deferred attachment (e.g. React reconciler).
 
@@ -13,10 +19,16 @@ import type { Skeleton } from '../animation/skeleton'
 import type { Geometry } from '../geometry/geometry'
 import type { Material } from '../materials/material'
 
+export interface MeshOutline {
+  thickness: number
+  color?: [number, number, number]
+}
+
 export class Mesh extends Node {
   geometry!: Geometry
   material!: Material
   skeleton?: Skeleton
+  outline?: MeshOutline | number
   _batchIndex = 0
   _batchFrame = -1
   _isSkinned = false
@@ -26,5 +38,17 @@ export class Mesh extends Node {
     this.type = 'mesh'
     if (geometry) this.geometry = geometry
     if (material) this.material = material
+  }
+
+  /** Resolved outline thickness (0 if no outline). */
+  get _outlineThickness(): number {
+    if (this.outline == null) return 0
+    return typeof this.outline === 'number' ? this.outline : this.outline.thickness
+  }
+
+  /** Resolved outline color (default black). */
+  get _outlineColor(): [number, number, number] {
+    if (this.outline == null || typeof this.outline === 'number') return [0, 0, 0]
+    return this.outline.color ?? [0, 0, 0]
   }
 }

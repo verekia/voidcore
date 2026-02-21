@@ -13,7 +13,7 @@ export { Scheduler, type SchedulerState, type SchedulerCallback, type SchedulerC
 // Scene
 export { Scene } from './scene/scene'
 export { Node } from './scene/node'
-export { Mesh } from './scene/mesh'
+export { Mesh, type MeshOutline } from './scene/mesh'
 export { Group } from './scene/group'
 export { PerspectiveCamera, type CameraOptions } from './scene/camera'
 export { AmbientLight, type AmbientLightOptions, DirectionalLight, type DirectionalLightOptions } from './scene/light'
@@ -32,7 +32,7 @@ export {
 } from './geometry/primitives'
 
 // Materials
-export { BasicMaterial, LambertMaterial, Material } from './materials/material'
+export { BasicMaterial, LambertMaterial, Material, type MaterialSide } from './materials/material'
 export { Texture } from './materials/texture'
 
 // Controls
