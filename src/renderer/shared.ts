@@ -34,6 +34,7 @@ import {
   frustumContainsAABB,
   mat4LookAt,
   mat4Multiply,
+  vec3Create,
   vec3Normalize,
   vec3Set,
   vec3TransformMat4,
@@ -42,6 +43,7 @@ import {
 } from '../math/index'
 import { Mesh } from '../scene/mesh'
 
+import type { FloatArray } from '../float'
 import type { AABB, Mat4, Vec3 } from '../math/index'
 import type { AmbientLight, DirectionalLight } from '../scene/light'
 import type { Node } from '../scene/node'
@@ -109,8 +111,8 @@ export const findAmbientLight = (root: Node, stack: Node[]): AmbientLight | null
  */
 export const collectMeshes = (
   root: Node,
-  cameraFrustum: Float32Array,
-  shadowFrustum: Float32Array | null,
+  cameraFrustum: FloatArray,
+  shadowFrustum: FloatArray | null,
   worldAABB: AABB,
   meshes: Mesh[],
   shadowMeshes: Mesh[],
@@ -150,11 +152,7 @@ export const collectMeshes = (
 }
 
 /** Compute normalized light direction from a directional light's world position. */
-export const computeLightDir = (
-  lightDir: Float32Array,
-  tempVec3: Float32Array,
-  dirLight: DirectionalLight | null,
-): void => {
+export const computeLightDir = (lightDir: Vec3, tempVec3: Vec3, dirLight: DirectionalLight | null): void => {
   lightDir[0] = 0
   lightDir[1] = 0
   lightDir[2] = 0
@@ -168,9 +166,9 @@ export const computeLightDir = (
 }
 
 /** Scratch buffers for shadow computation — avoids per-call allocation. */
-const _csCenter: Vec3 = new Float32Array(3) as unknown as Vec3
-const _csEye: Vec3 = new Float32Array(3) as unknown as Vec3
-const _csSnap: Vec3 = new Float32Array(3) as unknown as Vec3
+const _csCenter: Vec3 = vec3Create()
+const _csEye: Vec3 = vec3Create()
+const _csSnap: Vec3 = vec3Create()
 
 /** Build the light-space view-projection matrix for the shadow map. */
 export const computeShadowMatrix = (
