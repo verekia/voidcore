@@ -222,6 +222,7 @@ export class WebGPURenderer implements Renderer {
   private postProcessBGL: GPUBindGroupLayout
   private blitBGL: GPUBindGroupLayout
   private textureBGL!: GPUBindGroupLayout
+  private outlineMaterialBGL!: GPUBindGroupLayout
 
   // Per-frame resources
   private frameUB: GPUBuffer
@@ -625,12 +626,24 @@ export class WebGPURenderer implements Renderer {
     const device = this.device
     const opaqueTargets: GPUColorTargetState[] = [{ format: 'rgba8unorm' }, { format: 'rgba16float' }]
 
+    // Outline shaders read material uniforms in the vertex stage (for thickness),
+    // so we need a separate BGL with VERTEX | FRAGMENT visibility.
+    this.outlineMaterialBGL = device.createBindGroupLayout({
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          buffer: { type: 'uniform' },
+        },
+      ],
+    })
+
     // Standard (non-skinned) outline pipeline layout: frame + material + object
     const opaquePipelineLayout = device.createPipelineLayout({
-      bindGroupLayouts: [this.frameBGL, this.materialBGL, this.objectBGL],
+      bindGroupLayouts: [this.frameBGL, this.outlineMaterialBGL, this.objectBGL],
     })
     const skinnedPipelineLayout = device.createPipelineLayout({
-      bindGroupLayouts: [this.frameBGL, this.materialBGL, this.skinnedObjectBGL],
+      bindGroupLayouts: [this.frameBGL, this.outlineMaterialBGL, this.skinnedObjectBGL],
     })
 
     const outlineModule = device.createShaderModule({ code: OUTLINE_WGSL })
@@ -1510,7 +1523,7 @@ export class WebGPURenderer implements Renderer {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
     const bindGroup = d.createBindGroup({
-      layout: this.materialBGL,
+      layout: this.outlineMaterialBGL,
       entries: [{ binding: 0, resource: { buffer } }],
     })
 
