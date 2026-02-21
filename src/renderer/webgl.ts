@@ -35,6 +35,7 @@
 // WebGLRenderer.dispose() – Releases all GPU resources.
 
 import { createFloatArray } from '../float'
+import { computeSmoothNormals } from '../geometry/geometry'
 import {
   aabbCreate,
   frustumFromViewProjection,
@@ -100,6 +101,8 @@ interface GPUBuffers {
   joints?: WebGLBuffer
   weights?: WebGLBuffer
   vao?: WebGLVertexArrayObject
+  smoothNormal?: WebGLBuffer
+  outlineVao?: WebGLVertexArrayObject
 }
 
 // ─── Shader compilation ───────────────────────────────────────────────
@@ -158,6 +161,7 @@ interface PostUniformLocs {
 interface OutlineUniformLocs {
   u_outlineThickness: WebGLUniformLocation | null
   u_outlineColor: WebGLUniformLocation | null
+  u_viewProjection: WebGLUniformLocation | null
 }
 
 interface BlitUniformLocs {
@@ -213,6 +217,16 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
     const packedNormals = packNormalsSnorm8(geometry.normals, geometry.vertexCount)
     gl.bindBuffer(gl.ARRAY_BUFFER, bufs.normal)
     gl.bufferData(gl.ARRAY_BUFFER, packedNormals, gl.DYNAMIC_DRAW)
+    // Invalidate smooth normals / outline VAO so they get rebuilt
+    if (bufs.smoothNormal) {
+      gl.deleteBuffer(bufs.smoothNormal)
+      bufs.smoothNormal = undefined
+    }
+    if (bufs.outlineVao) {
+      gl.deleteVertexArray(bufs.outlineVao)
+      bufs.outlineVao = undefined
+    }
+    geometry._smoothNormals = undefined
     geometry.needsUpdate = false
     return
   }
@@ -331,6 +345,75 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
     vao,
   }
   geometry.needsUpdate = false
+}
+
+// ─── Outline buffers (smooth normals + dedicated VAO) ─────────────────
+
+const ensureOutlineBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
+  const bufs = geometry._gpuBuffers as GPUBuffers
+  if (bufs.outlineVao) return
+
+  if (!geometry._smoothNormals) computeSmoothNormals(geometry)
+  const packedSmooth = packNormalsSnorm8(geometry._smoothNormals!, geometry.vertexCount)
+
+  const smoothBuf = gl.createBuffer()!
+  gl.bindBuffer(gl.ARRAY_BUFFER, smoothBuf)
+  gl.bufferData(gl.ARRAY_BUFFER, packedSmooth, gl.STATIC_DRAW)
+  bufs.smoothNormal = smoothBuf
+
+  // Create outline VAO: same as main VAO but with smooth normals at location 1
+  const outlineVao = gl.createVertexArray()!
+  gl.bindVertexArray(outlineVao)
+
+  // Position (location 0)
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufs.position)
+  gl.enableVertexAttribArray(0)
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0)
+
+  // Smooth normal (location 1) — snorm8x4
+  gl.bindBuffer(gl.ARRAY_BUFFER, smoothBuf)
+  gl.enableVertexAttribArray(1)
+  gl.vertexAttribPointer(1, 4, gl.BYTE, true, 0, 0)
+
+  // UV (location 2)
+  if (bufs.uv) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufs.uv)
+    gl.enableVertexAttribArray(2)
+    gl.vertexAttribPointer(2, 2, gl.HALF_FLOAT, false, 0, 0)
+  }
+
+  // Material index (location 3)
+  if (bufs.materialIndex) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufs.materialIndex)
+    gl.enableVertexAttribArray(3)
+    gl.vertexAttribPointer(3, 1, gl.UNSIGNED_BYTE, false, 1, 0)
+  } else {
+    gl.disableVertexAttribArray(3)
+    gl.vertexAttrib1f(3, 0.0)
+  }
+
+  // Joints (location 4)
+  if (bufs.joints) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufs.joints)
+    gl.enableVertexAttribArray(4)
+    gl.vertexAttribPointer(4, 4, gl.UNSIGNED_BYTE, false, 0, 0)
+  } else {
+    gl.disableVertexAttribArray(4)
+  }
+
+  // Weights (location 5)
+  if (bufs.weights) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufs.weights)
+    gl.enableVertexAttribArray(5)
+    gl.vertexAttribPointer(5, 4, gl.UNSIGNED_BYTE, true, 0, 0)
+  } else {
+    gl.disableVertexAttribArray(5)
+  }
+
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bufs.index)
+  gl.bindVertexArray(null)
+
+  bufs.outlineVao = outlineVao
 }
 
 // ─── Render targets ───────────────────────────────────────────────────
@@ -702,10 +785,12 @@ export class WebGLRenderer implements Renderer {
     this._outlineLocs = {
       u_outlineThickness: gl.getUniformLocation(this.outlineProgram, 'u_outlineThickness'),
       u_outlineColor: gl.getUniformLocation(this.outlineProgram, 'u_outlineColor'),
+      u_viewProjection: gl.getUniformLocation(this.outlineProgram, 'u_viewProjection'),
     }
     this._outlineSkinnedLocs = {
       u_outlineThickness: gl.getUniformLocation(this.outlineSkinnedProgram, 'u_outlineThickness'),
       u_outlineColor: gl.getUniformLocation(this.outlineSkinnedProgram, 'u_outlineColor'),
+      u_viewProjection: gl.getUniformLocation(this.outlineSkinnedProgram, 'u_viewProjection'),
     }
     this._bloomDownLocs = cachePostLocs(gl, this.bloomDownsampleProgram)
     this._bloomUpLocs = cachePostLocs(gl, this.bloomUpsampleProgram)
@@ -1435,9 +1520,11 @@ export class WebGLRenderer implements Renderer {
       this._setProgram(program)
       gl.uniform1f(locs.u_outlineThickness, thickness)
       gl.uniform3f(locs.u_outlineColor, color[0], color[1], color[2])
+      gl.uniformMatrix4fv(locs.u_viewProjection, false, this._vpMatrix)
 
       ensureGPUBuffers(gl, mesh.geometry)
-      this._setVAO((mesh.geometry._gpuBuffers as GPUBuffers).vao!)
+      ensureOutlineBuffers(gl, mesh.geometry)
+      this._setVAO((mesh.geometry._gpuBuffers as GPUBuffers).outlineVao!)
 
       if (mesh._isSkinned) {
         gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._skinnedDynBuf, mesh._batchIndex * this._alignedSkinnedSize, 2176)

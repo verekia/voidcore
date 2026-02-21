@@ -8,10 +8,11 @@
 // Geometry also computes an axis-aligned bounding box (AABB) used for frustum culling
 // (skipping objects that are off-screen) and raycasting (click detection).
 //
-// new Geometry(data)       – Wraps raw arrays into a Geometry object.
-// mergeGeometries(geos)    – Merges multiple geometries into one with per-geometry material indices.
-// geometry.hasAttribute()  – Checks if optional attributes (UVs, colors, joints, etc.) exist.
-// geometry.dispose()       – Releases GPU buffer references.
+// new Geometry(data)             – Wraps raw arrays into a Geometry object.
+// mergeGeometries(geos)          – Merges multiple geometries into one with per-geometry material indices.
+// computeSmoothNormals(geometry) – Computes position-averaged normals for gap-free inverted hull outlines.
+// geometry.hasAttribute()        – Checks if optional attributes (UVs, colors, joints, etc.) exist.
+// geometry.dispose()             – Releases GPU buffer references.
 
 import { aabbFromPoints } from '../math/index'
 
@@ -42,6 +43,7 @@ export class Geometry {
   indexCount: number
   aabb: AABB
 
+  _smoothNormals?: Float32Array
   _gpuBuffers: unknown = null
   needsUpdate = false
 
@@ -77,6 +79,7 @@ export class Geometry {
   }
 
   dispose() {
+    this._smoothNormals = undefined
     this._gpuBuffers = null
   }
 }
@@ -117,4 +120,58 @@ export const mergeGeometries = (geometries: Geometry[]): Geometry => {
   }
 
   return new Geometry({ positions, normals, indices, materialIndices, uvs })
+}
+
+/**
+ * Computes position-averaged smooth normals for gap-free inverted hull outlines.
+ * Vertices sharing the same position get the same averaged normal so the outline
+ * inflates uniformly at hard edges, eliminating visible gaps.
+ */
+export const computeSmoothNormals = (geometry: Geometry): Float32Array => {
+  const positions = geometry.positions
+  const normals = geometry.normals
+  const count = geometry.vertexCount
+  const smooth = new Float32Array(count * 3)
+
+  // Accumulate normals per unique position
+  const accum = new Map<string, { x: number; y: number; z: number }>()
+  const PRECISION = 1e4
+
+  for (let i = 0; i < count; i++) {
+    const px = Math.round(positions[i * 3]! * PRECISION)
+    const py = Math.round(positions[i * 3 + 1]! * PRECISION)
+    const pz = Math.round(positions[i * 3 + 2]! * PRECISION)
+    const key = `${px},${py},${pz}`
+
+    const nx = normals[i * 3]!
+    const ny = normals[i * 3 + 1]!
+    const nz = normals[i * 3 + 2]!
+
+    const entry = accum.get(key)
+    if (entry) {
+      entry.x += nx
+      entry.y += ny
+      entry.z += nz
+    } else {
+      accum.set(key, { x: nx, y: ny, z: nz })
+    }
+  }
+
+  // Write normalized results
+  for (let i = 0; i < count; i++) {
+    const px = Math.round(positions[i * 3]! * PRECISION)
+    const py = Math.round(positions[i * 3 + 1]! * PRECISION)
+    const pz = Math.round(positions[i * 3 + 2]! * PRECISION)
+    const key = `${px},${py},${pz}`
+
+    const entry = accum.get(key)!
+    let len = Math.sqrt(entry.x * entry.x + entry.y * entry.y + entry.z * entry.z)
+    if (len < 1e-8) len = 1
+    smooth[i * 3] = entry.x / len
+    smooth[i * 3 + 1] = entry.y / len
+    smooth[i * 3 + 2] = entry.z / len
+  }
+
+  geometry._smoothNormals = smooth
+  return smooth
 }

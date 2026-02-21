@@ -414,7 +414,9 @@ void main() {
 }
 `
 
-// ─── Outline shaders (inverted hull technique) ───────────────────────
+// ─── Outline shaders (inverted hull, smooth-normal inflation) ────────────
+// Smooth normals are bound at location 1 instead of regular normals during the outline pass,
+// so vertices sharing the same position inflate in the same direction — eliminating gaps.
 
 export const OUTLINE_VERT = `#version 300 es
 precision highp float;
@@ -422,10 +424,10 @@ precision highp float;
 layout(location = 0) in vec3 a_position;
 layout(location = 1) in vec3 a_normal;
 
-${FRAME_BLOCK}
 ${OBJECT_BLOCK}
 
 uniform float u_outlineThickness;
+uniform mat4 u_viewProjection;
 
 void main() {
   vec3 inflated = a_position + normalize(a_normal) * u_outlineThickness;
@@ -443,10 +445,10 @@ layout(location = 3) in float a_materialIndex;
 layout(location = 4) in vec4 a_joints;
 layout(location = 5) in vec4 a_weights;
 
-${FRAME_BLOCK}
 ${SKINNED_OBJECT_BLOCK}
 
 uniform float u_outlineThickness;
+uniform mat4 u_viewProjection;
 
 void main() {
   mat4 skinMatrix =

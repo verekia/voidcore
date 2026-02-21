@@ -20,7 +20,7 @@ export { AmbientLight, type AmbientLightOptions, DirectionalLight, type Directio
 export { cloneScene, type CloneOptions, type CloneResult } from './scene/clone'
 
 // Geometry
-export { Geometry, mergeGeometries } from './geometry/geometry'
+export { Geometry, mergeGeometries, computeSmoothNormals } from './geometry/geometry'
 export {
   PlaneGeometry,
   BoxGeometry,

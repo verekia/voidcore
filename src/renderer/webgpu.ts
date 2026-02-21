@@ -33,6 +33,7 @@
 // WebGPURenderer.dispose() – Releases all GPU resources.
 
 import { createFloatArray } from '../float'
+import { computeSmoothNormals } from '../geometry/geometry'
 import {
   aabbCreate,
   frustumFromViewProjection,
@@ -110,6 +111,7 @@ interface GeoBufs {
   indexCount: number
   joints?: GPUBuffer
   weights?: GPUBuffer
+  smoothNormal?: GPUBuffer
 }
 
 interface MatCache {
@@ -1527,6 +1529,8 @@ export class WebGPURenderer implements Renderer {
       cached.index.destroy()
       if (cached.joints) cached.joints.destroy()
       if (cached.weights) cached.weights.destroy()
+      if (cached.smoothNormal) cached.smoothNormal.destroy()
+      geometry._smoothNormals = undefined
     }
 
     const bufs: GeoBufs = {
@@ -1543,6 +1547,19 @@ export class WebGPURenderer implements Renderer {
     this._geoCache.set(geometry, bufs)
     geometry.needsUpdate = false
     return bufs
+  }
+
+  private ensureSmoothNormalBuffer(geometry: Geometry, geoBufs: GeoBufs): GPUBuffer {
+    if (geoBufs.smoothNormal) return geoBufs.smoothNormal
+    if (!geometry._smoothNormals) computeSmoothNormals(geometry)
+    const packed = packNormalsSnorm8(geometry._smoothNormals!, geometry.vertexCount)
+    const buf = this.device.createBuffer({
+      size: packed.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    })
+    this.device.queue.writeBuffer(buf, 0, packed.buffer, packed.byteOffset, packed.byteLength)
+    geoBufs.smoothNormal = buf
+    return buf
   }
 
   private ensureMaterialCache(material: Material): MatCache {
@@ -2063,8 +2080,9 @@ export class WebGPURenderer implements Renderer {
       pass.setPipeline(pipeline)
 
       const geoBufs = this.ensureGeometryBuffers(mesh.geometry)
+      const smoothBuf = this.ensureSmoothNormalBuffer(mesh.geometry, geoBufs)
       pass.setVertexBuffer(0, geoBufs.position)
-      pass.setVertexBuffer(1, geoBufs.normal)
+      pass.setVertexBuffer(1, smoothBuf)
       pass.setVertexBuffer(2, geoBufs.uv)
       pass.setVertexBuffer(3, geoBufs.materialIndex)
       if (mesh._isSkinned && geoBufs.joints && geoBufs.weights) {

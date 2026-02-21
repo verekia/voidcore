@@ -10,7 +10,6 @@ import type { GLTFResult } from '../src/loaders/gltf'
 const CLIP_DURATION = 2
 const CROSSFADE_DURATION = 0.3
 const ORBIT_RADIUS = 5
-const ORBIT_SPEED = 3
 const GRID_SPACING = 5
 
 const megaxeMaterial = new LambertMaterial({
@@ -72,7 +71,7 @@ const Character = memo(
       nextSwitch: CLIP_DURATION - startTimeIntoClip,
     })
 
-    useFrame(({ dt, elapsed }) => {
+    useFrame(({ elapsed }) => {
       const s = stateRef.current
 
       if (!s.initialized) {
@@ -95,7 +94,7 @@ const Character = memo(
         }
       }
 
-      s.angle += ORBIT_SPEED * dt
+      // s.angle += ORBIT_SPEED * dt
       root.setPosition(x + Math.cos(s.angle) * ORBIT_RADIUS, y + Math.sin(s.angle) * ORBIT_RADIUS, s.z)
 
       if (elapsed >= s.nextSwitch && actionList.length > 1) {

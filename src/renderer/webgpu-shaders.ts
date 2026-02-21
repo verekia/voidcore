@@ -669,7 +669,9 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 }
 `
 
-// ─── Outline shaders (inverted hull technique) ───────────────────────
+// ─── Outline shaders (inverted hull, smooth-normal inflation) ────────────
+// Smooth normals are bound at slot 1 instead of regular normals during the outline pass,
+// so vertices sharing the same position inflate in the same direction — eliminating gaps.
 
 export const OUTLINE_WGSL = /* wgsl */ `
 struct FrameUniforms {
@@ -714,7 +716,8 @@ fn vs_main(
   @location(2) a_uv: vec2<f32>,
   @location(3) a_materialIndex: f32,
 ) -> @builtin(position) vec4<f32> {
-  let inflated = a_position + normalize(a_normal) * material.emissiveBrightness;
+  let t = material.emissiveBrightness;
+  let inflated = a_position + normalize(a_normal) * t;
   return frame.viewProjection * object.worldMatrix * vec4<f32>(inflated, 1.0);
 }
 
@@ -786,7 +789,8 @@ fn vs_main(
 
   let skinnedPos = skinMatrix * vec4<f32>(a_position, 1.0);
   let skinnedNorm = normalize((skinMatrix * vec4<f32>(a_normal, 0.0)).xyz);
-  let inflated = skinnedPos.xyz + skinnedNorm * material.emissiveBrightness;
+  let t = material.emissiveBrightness;
+  let inflated = skinnedPos.xyz + skinnedNorm * t;
   return frame.viewProjection * vec4<f32>(inflated, 1.0);
 }
 
