@@ -3,6 +3,8 @@ FROM oven/bun:1.3.9-alpine AS builder
 WORKDIR /app
 
 COPY package.json bun.lock .
+COPY example/package.json example/package.json
+COPY library/package.json library/package.json
 
 # COPY patches patches/
 
@@ -21,6 +23,6 @@ FROM fholzer/nginx-brotli:v1.26.2
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-COPY --from=builder /app/out /usr/share/nginx/html
+COPY --from=builder /app/example/out /usr/share/nginx/html
 
 EXPOSE 80
