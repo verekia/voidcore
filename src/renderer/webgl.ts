@@ -1413,7 +1413,7 @@ export class WebGLRenderer implements Renderer {
     }
 
     // ─── Side (cull mode) helper ────────────────────────────────────
-    const applySide = (side: string, isTransparent: boolean) => {
+    const applySide = (side: string, _isTransparent: boolean) => {
       if (side === 'double') {
         this._setCullFace(false)
       } else if (side === 'back') {

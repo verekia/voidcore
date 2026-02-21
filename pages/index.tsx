@@ -21,7 +21,7 @@ useGLTF.preload(playerBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
-const CHARACTER_COUNT = 800
+const CHARACTER_COUNT = 400
 
 // ─── Page ───────────────────────────────────────────────────────────────────
 
@@ -55,6 +55,10 @@ const IndexPage = () => {
         onCreated={({ engine }) => setEngine(engine)}
         className="fixed top-0 left-0 h-screen w-screen"
       >
+        <mesh>
+          <sphereGeometry args={[{ radius: 400 }]} />
+          <basicMaterial color={[0.2, 0.5, 1]} side="back" />
+        </mesh>
         <Lighting />
         <CameraControls />
         <RotatingCube />
