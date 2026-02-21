@@ -5,12 +5,15 @@
 // The `createRenderer` factory tries WebGPU first, falls back to WebGL2 if unavailable.
 //
 // Both backends implement the same Renderer interface so the rest of the engine doesn't
-// need to know which one is active.
+// need to know which one is active. Each backend also reports which GPU-compressed texture
+// formats it supports (ASTC, BC7, BC3, ETC2), so asset loaders like loadKTX2 can transcode
+// to the optimal format instead of always falling back to uncompressed RGBA8.
 //
 // createRenderer() – Async factory: tries WebGPU, falls back to WebGL2.
 // renderer.render() – Draws a single frame.
 // renderer.dispose() – Releases GPU resources.
 
+import type { CompressedTextureFormat } from '../materials/texture'
 import type { PerspectiveCamera } from '../scene/camera'
 import type { Scene } from '../scene/scene'
 
@@ -38,6 +41,8 @@ export interface FrameStats {
 
 export interface Renderer {
   readonly backend: 'webgpu' | 'webgl2'
+  /** GPU-compressed texture formats supported by this device, in priority order. */
+  readonly compressedTextureFormats: readonly CompressedTextureFormat[]
   maxDpr: number
   shadowsBaked: boolean
   render(scene: Scene, camera: PerspectiveCamera): void

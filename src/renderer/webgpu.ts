@@ -74,7 +74,7 @@ import {
 import type { Geometry } from '../geometry/geometry'
 import type { PaletteEntry } from '../materials/material'
 import type { Material } from '../materials/material'
-import type { Texture } from '../materials/texture'
+import type { CompressedTextureFormat, Texture, TextureFormat } from '../materials/texture'
 import type { AABB, Mat4, Vec3 } from '../math/index'
 import type { PerspectiveCamera } from '../scene/camera'
 import type { DirectionalLight } from '../scene/light'
@@ -83,6 +83,22 @@ import type { Renderer, RendererConfig, FrameStats } from './renderer'
 import type { SortState } from './sort'
 
 // ─── Types ───────────────────────────────────────────────────────────
+
+// Maps our TextureFormat enum to WebGPU GPUTextureFormat strings
+const _toGPUTextureFormat = (fmt: TextureFormat): GPUTextureFormat => {
+  switch (fmt) {
+    case 'astc-4x4':
+      return 'astc-4x4-unorm'
+    case 'bc7':
+      return 'bc7-rgba-unorm'
+    case 'bc3':
+      return 'bc3-rgba-unorm'
+    case 'etc2-rgba8':
+      return 'etc2-rgba8unorm'
+    default:
+      return 'rgba8unorm'
+  }
+}
 
 interface GeoBufs {
   position: GPUBuffer
@@ -172,6 +188,7 @@ const SHADOW_SKINNED_VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
 
 export class WebGPURenderer implements Renderer {
   readonly backend = 'webgpu' as const
+  readonly compressedTextureFormats: readonly CompressedTextureFormat[]
 
   // DPR limiting
   private _maxDpr: number = 1.5
@@ -395,7 +412,9 @@ export class WebGPURenderer implements Renderer {
     shadowSampler: GPUSampler,
     dummyShadowTexture: GPUTexture,
     shadowTexture: GPUTexture | null,
+    compressedFormats: readonly CompressedTextureFormat[],
   ) {
+    this.compressedTextureFormats = compressedFormats
     this.device = device
     this.context = context
     this.format = format
@@ -746,17 +765,33 @@ export class WebGPURenderer implements Renderer {
     const cached = this._gpuTexCache.get(tex)
     if (cached) return cached
 
+    const gpuFormat = _toGPUTextureFormat(tex.format)
+    const isCompressed = tex.format !== 'rgba8'
+
     const gpuTex = this.device.createTexture({
       size: [tex.width, tex.height],
-      format: 'rgba8unorm',
+      format: gpuFormat,
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     })
-    this.device.queue.writeTexture(
-      { texture: gpuTex },
-      tex.data.buffer as ArrayBuffer,
-      { bytesPerRow: tex.width * 4, rowsPerImage: tex.height },
-      [tex.width, tex.height],
-    )
+
+    if (isCompressed) {
+      // Compressed: 4×4 blocks, 16 bytes per block for all supported formats
+      const blocksX = Math.ceil(tex.width / 4)
+      this.device.queue.writeTexture(
+        { texture: gpuTex },
+        tex.data.buffer as ArrayBuffer,
+        { bytesPerRow: blocksX * 16, rowsPerImage: tex.height },
+        [tex.width, tex.height],
+      )
+    } else {
+      this.device.queue.writeTexture(
+        { texture: gpuTex },
+        tex.data.buffer as ArrayBuffer,
+        { bytesPerRow: tex.width * 4, rowsPerImage: tex.height },
+        [tex.width, tex.height],
+      )
+    }
+
     const entry = { texture: gpuTex, view: gpuTex.createView() }
     this._gpuTexCache.set(tex, entry)
     return entry
@@ -787,7 +822,13 @@ export class WebGPURenderer implements Renderer {
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' })
     if (!adapter) throw new Error('No WebGPU adapter found')
 
-    const device = await adapter.requestDevice()
+    // Request compressed texture features if available on this device
+    const requiredFeatures: GPUFeatureName[] = []
+    if (adapter.features.has('texture-compression-astc')) requiredFeatures.push('texture-compression-astc')
+    if (adapter.features.has('texture-compression-bc')) requiredFeatures.push('texture-compression-bc')
+    if (adapter.features.has('texture-compression-etc2')) requiredFeatures.push('texture-compression-etc2')
+
+    const device = await adapter.requestDevice({ requiredFeatures })
 
     // Surface hidden GPU errors (critical for Android debugging)
     device.onuncapturederror = event => {
@@ -1150,6 +1191,13 @@ export class WebGPURenderer implements Renderer {
       })
     }
 
+    // Build supported compressed texture format list (priority order for loader selection)
+    const compressedFormats: CompressedTextureFormat[] = []
+    if (device.features.has('texture-compression-astc')) compressedFormats.push('astc-4x4')
+    if (device.features.has('texture-compression-bc')) compressedFormats.push('bc7')
+    if (device.features.has('texture-compression-etc2')) compressedFormats.push('etc2-rgba8')
+    if (device.features.has('texture-compression-bc')) compressedFormats.push('bc3')
+
     const renderer = new WebGPURenderer(
       device,
       context,
@@ -1190,6 +1238,7 @@ export class WebGPURenderer implements Renderer {
       shadowSampler,
       dummyShadowTexture,
       shadowTexture,
+      compressedFormats,
     )
     renderer.maxDpr = config.maxDpr === false ? Infinity : (config.maxDpr ?? defaultMaxDpr())
     return renderer
