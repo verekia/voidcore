@@ -24,6 +24,7 @@ const megaxeMaterial = new LambertMaterial({
 interface CharacterProps {
   x: number
   y: number
+  initialZ: number
   megaxeGeometry: Geometry | null
   playerGltf: GLTFResult
   clips: AnimationClip[]
@@ -33,7 +34,17 @@ interface CharacterProps {
 }
 
 const Character = memo(
-  ({ x, y, megaxeGeometry, playerGltf, clips, startAngle, startClipIndex, startTimeIntoClip }: CharacterProps) => {
+  ({
+    x,
+    y,
+    initialZ,
+    megaxeGeometry,
+    playerGltf,
+    clips,
+    startAngle,
+    startClipIndex,
+    startTimeIntoClip,
+  }: CharacterProps) => {
     const { scene } = useEngine()
 
     const { root, skeleton } = useMemo(() => {
@@ -64,11 +75,14 @@ const Character = memo(
     const { actions } = useAnimations(clips, skeleton)
     const actionList = useMemo(() => clips.map(c => actions[c.name]!), [clips, actions])
 
+    const raycaster = useMemo(() => new Raycaster(), [])
+    const rayOrigin = useMemo(() => new Float32Array([x, y, 200]), [x, y])
+    const rayDir = useMemo(() => new Float32Array([0, 0, -1]), [])
+
     const stateRef = useRef({
       initialized: false,
       angle: startAngle,
-      z: -50,
-      zResolved: false,
+      z: initialZ,
       currentClip: startClipIndex,
       nextSwitch: CLIP_DURATION - startTimeIntoClip,
     })
@@ -85,15 +99,12 @@ const Character = memo(
         }
       }
 
-      if (!s.zResolved) {
-        s.zResolved = true
-        const edenMesh = scene.getByName('eden') as Mesh | undefined
-        if (edenMesh) {
-          const raycaster = new Raycaster()
-          raycaster.set(new Float32Array([x, y, 200]), new Float32Array([0, 0, -1]))
-          const hits = raycaster.intersectObject(edenMesh)
-          if (hits.length > 0) s.z = hits[0]!.point[2]!
-        }
+      // Raycast every frame for benchmarking, even though the character doesn't move
+      const edenMesh = scene.getByName('eden') as Mesh | undefined
+      if (edenMesh) {
+        raycaster.set(rayOrigin, rayDir)
+        const hits = raycaster.intersectObject(edenMesh)
+        if (hits.length > 0) s.z = hits[0]!.point[2]!
       }
 
       // s.angle += ORBIT_SPEED * dt
@@ -113,6 +124,7 @@ const Character = memo(
 )
 
 const Characters = ({ count }: { count: number }) => {
+  const { scene } = useEngine()
   const megaxeGltf = useGLTF(staticBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
   const playerGltf = useGLTF(playerBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
 
@@ -133,24 +145,43 @@ const Characters = ({ count }: { count: number }) => {
     return result
   }, [playerGltf])
 
+  // Generate grid positions, raycast against Eden, and only keep positions that hit
   const characters = useMemo(() => {
+    const edenMesh = scene.getByName('eden') as Mesh | undefined
+    if (!edenMesh) return []
+
     const cols = Math.ceil(Math.sqrt(count))
     const totalCycle = clips.length * CLIP_DURATION
+    const raycaster = new Raycaster()
+    const origin = new Float32Array(3)
+    const dir = new Float32Array([0, 0, -1])
     const result = []
+
     for (let i = 0; i < count; i++) {
       const col = i % cols
       const row = Math.floor(i / cols)
+      const x = (col - (cols - 1) / 2) * GRID_SPACING
+      const y = (row - (cols - 1) / 2) * GRID_SPACING
+
+      origin[0] = x
+      origin[1] = y
+      origin[2] = 200
+      raycaster.set(origin, dir)
+      const hits = raycaster.intersectObject(edenMesh)
+      if (hits.length === 0) continue
+
       const offset = Math.random() * totalCycle
       result.push({
-        x: (col - (cols - 1) / 2) * GRID_SPACING,
-        y: (row - (cols - 1) / 2) * GRID_SPACING,
+        x,
+        y,
+        initialZ: hits[0]!.point[2]!,
         startAngle: Math.random() * Math.PI * 2,
         startClipIndex: Math.floor(offset / CLIP_DURATION) % Math.max(clips.length, 1),
         startTimeIntoClip: offset % CLIP_DURATION,
       })
     }
     return result
-  }, [count, clips])
+  }, [count, clips, scene])
 
   return (
     <group>
@@ -159,6 +190,7 @@ const Characters = ({ count }: { count: number }) => {
           key={i}
           x={c.x}
           y={c.y}
+          initialZ={c.initialZ}
           megaxeGeometry={megaxeGeometry}
           playerGltf={playerGltf}
           clips={clips}
