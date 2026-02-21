@@ -17,6 +17,7 @@ import { VoidContext } from './context'
 import type { AnimationClip } from '../animation/index'
 import type { Skeleton } from '../animation/skeleton'
 import type { GLTFResult, LoadOptions } from '../loaders/gltf'
+import type { CompressedTextureFormat } from '../materials/texture'
 import type { Texture } from '../materials/texture'
 import type { FrameCallback } from './context'
 
@@ -106,7 +107,15 @@ useGLTF.preload = (url: string, options?: LoadOptions) => {
 // ─── useKTX2 ─────────────────────────────────────────────────────────────────
 
 export const useKTX2 = (url: string, transcoderPath: string): Texture => {
-  return useLoader((u: string, tp: string) => loadKTX2(u, tp), url, transcoderPath)
+  const store = useContext(VoidContext)
+  if (!store) throw new Error('useKTX2 must be used inside <Canvas>')
+  const formats = store.engine.compressedTextureFormats
+  return useLoader(
+    (u: string, tp: string, fmts: readonly CompressedTextureFormat[]) => loadKTX2(u, tp, fmts),
+    url,
+    transcoderPath,
+    formats,
+  )
 }
 
 // ─── useAnimations ────────────────────────────────────────────────────────────

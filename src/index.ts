@@ -33,7 +33,7 @@ export {
 
 // Materials
 export { BasicMaterial, LambertMaterial, Material, type MaterialSide } from './materials/material'
-export { Texture } from './materials/texture'
+export { Texture, type CompressedTextureFormat, type TextureFormat } from './materials/texture'
 
 // Controls
 export { OrbitControls } from './controls/orbit'
