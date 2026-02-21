@@ -46,14 +46,16 @@ const Character = memo(
         const handBone = skeleton.getBone('Hand.R')
         if (handBone) {
           const axe = new Mesh(megaxeGeometry, megaxeMaterial)
-          axe.outline = 0.05
+          axe.outline = { thickness: 0.05, maxDistance: 100 }
           axe.setRotation(0, 0, 1, 0)
           handBone.add(axe)
         }
       }
 
       root.traverse(node => {
-        if (node instanceof Mesh) node.outline = 0.05
+        if (node instanceof Mesh) {
+          node.outline = { thickness: 0.05, maxDistance: 100 }
+        }
       })
 
       return { root, skeleton }

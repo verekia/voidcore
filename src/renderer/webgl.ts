@@ -1510,6 +1510,14 @@ export class WebGLRenderer implements Renderer {
       const thickness = mesh._outlineThickness
       if (thickness <= 0) return
 
+      const maxDist = mesh._outlineMaxDistance
+      if (maxDist > 0) {
+        const dx = mesh._worldMatrix[12]! - camera.position[0]!
+        const dy = mesh._worldMatrix[13]! - camera.position[1]!
+        const dz = mesh._worldMatrix[14]! - camera.position[2]!
+        if (dx * dx + dy * dy + dz * dz > maxDist * maxDist) return
+      }
+
       const color = mesh._outlineColor
 
       // Outline uses front-face culling (show back faces only)

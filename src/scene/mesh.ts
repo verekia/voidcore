@@ -13,8 +13,10 @@
 // Outlines use the inverted hull technique: a copy of the mesh is rendered with vertices
 // inflated along their normals and front-face culling, so only the back faces peek out
 // behind the original mesh, creating a silhouette effect. Set `outline` to a number
-// (thickness) or an object with `thickness` and `color` to enable. Outlines work with
-// both static and skinned meshes.
+// (thickness) or an object with `thickness`, `color`, and `maxDistance` to enable. Outlines
+// work with both static and skinned meshes. The optional `maxDistance` on the outline object
+// skips the outline draw call when the camera is farther than that distance (squared distance
+// comparison, zero allocation).
 //
 // new Mesh(geometry, material) – Creates a mesh from a geometry and material.
 // Both parameters are optional to support deferred attachment (e.g. React reconciler).
@@ -28,6 +30,7 @@ import type { Material } from '../materials/material'
 export interface MeshOutline {
   thickness: number
   color?: [number, number, number]
+  maxDistance?: number
 }
 
 export class Mesh extends Node {
@@ -57,5 +60,11 @@ export class Mesh extends Node {
   get _outlineColor(): [number, number, number] {
     if (this.outline == null || typeof this.outline === 'number') return [0, 0, 0]
     return this.outline.color ?? [0, 0, 0]
+  }
+
+  /** Resolved outline max distance (0 = no distance culling). */
+  get _outlineMaxDistance(): number {
+    if (this.outline == null || typeof this.outline === 'number') return 0
+    return this.outline.maxDistance ?? 0
   }
 }
