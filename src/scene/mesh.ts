@@ -4,6 +4,12 @@
 // by binding its geometry buffers and material uniforms, then issuing a draw call. A mesh
 // can optionally have a Skeleton for skeletal animation (skinned meshes).
 //
+// Distance culling: set `maxDistance` to a positive number to automatically hide the mesh
+// when the camera is farther than that distance from the mesh's world position. Uses squared
+// distance comparison (no sqrt) for zero-allocation performance. A value of 0 (default)
+// disables distance culling. Distance-culled meshes are excluded from both camera rendering
+// and shadow casting.
+//
 // Outlines use the inverted hull technique: a copy of the mesh is rendered with vertices
 // inflated along their normals and front-face culling, so only the back faces peek out
 // behind the original mesh, creating a silhouette effect. Set `outline` to a number
@@ -29,6 +35,7 @@ export class Mesh extends Node {
   material!: Material
   skeleton?: Skeleton
   outline?: MeshOutline | number
+  maxDistance = 0
   _batchIndex = 0
   _batchFrame = -1
   _isSkinned = false

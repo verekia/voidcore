@@ -1115,6 +1115,7 @@ export class WebGLRenderer implements Renderer {
       meshes,
       shadowMeshes,
       this._traversalStack,
+      camera.position,
     )
 
     // Radix sort meshes by layer > pipeline > material > depth
