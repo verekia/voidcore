@@ -4,20 +4,28 @@
 // These packing functions convert from the engine's internal Float32Array representation to
 // smaller GPU formats, reducing vertex buffer size and memory bandwidth:
 //
-//   packNormalsSnorm8()  – Float32 normals (12 bytes/vertex) → Snorm8x4 (4 bytes/vertex).
-//                          Unit-length normals only need [-1,1] range; 8-bit snorm gives
-//                          1/127 precision (~0.008), imperceptible for lighting.
+//   packNormalsSnorm8()    – Float32 normals (12 bytes/vertex) → Snorm8x4 (4 bytes/vertex).
+//                            Unit-length normals only need [-1,1] range; 8-bit snorm gives
+//                            1/127 precision (~0.008), imperceptible for lighting.
 //
-//   packUVsFloat16()     – Float32 UVs (8 bytes/vertex) → Float16x2 (4 bytes/vertex).
-//                          Texture coordinates rarely need more than ~3 decimal digits of
-//                          precision. Float16 covers [0,1] UVs with ~0.001 accuracy.
+//   packUVsFloat16()       – Float32 UVs (8 bytes/vertex) → Float16x2 (4 bytes/vertex).
+//                            Texture coordinates rarely need more than ~3 decimal digits of
+//                            precision. Float16 covers [0,1] UVs with ~0.001 accuracy.
 //
-//   packWeightsUnorm8()  – Float32 bone weights (16 bytes/vertex) → Unorm8x4 (4 bytes/vertex).
-//                          Blend weights are in [0,1] and sum to 1.0; 8-bit unorm (1/255
-//                          precision) is sufficient for smooth skeletal deformation. The four
-//                          quantized values are normalized to sum to exactly 255 — without this,
-//                          rounding errors cause the skin matrix to be slightly non-unit-sum,
-//                          and the resulting vertex offset grows with distance from origin.
+//   packWeightsUnorm8()    – Float32 bone weights (16 bytes/vertex) → Unorm8x4 (4 bytes/vertex).
+//                            Blend weights are in [0,1] and sum to 1.0; 8-bit unorm (1/255
+//                            precision) is sufficient for smooth skeletal deformation. The four
+//                            quantized values are normalized to sum to exactly 255 — without this,
+//                            rounding errors cause the skin matrix to be slightly non-unit-sum,
+//                            and the resulting vertex offset grows with distance from origin.
+//
+//   packColorsUnorm8()     – Float32 RGBA colors (16 bytes/vertex) → Unorm8x4 (4 bytes/vertex).
+//                            Vertex colors are in [0,1] range; 8-bit unorm is sufficient for
+//                            palette-baked colors.
+//
+//   packEmissiveFloat16()  – Float32 RGBA emissive (16 bytes/vertex) → Float16x4 (8 bytes/vertex).
+//                            Emissive values can exceed 1.0 (HDR), so half-float precision is
+//                            needed to preserve intensity information.
 
 // ─── Float32-to-Float16 conversion ──────────────────────────────────
 
@@ -102,6 +110,30 @@ export const packWeightsUnorm8 = (weights: Float32Array): Uint8Array => {
     packed[i + 1] = b
     packed[i + 2] = c
     packed[i + 3] = d
+  }
+  return packed
+}
+
+/**
+ * Pack float32 RGBA vertex colors into unorm8 (1 byte per component).
+ * Each component is clamped to [0,1] and mapped to [0,255] as Uint8.
+ */
+export const packColorsUnorm8 = (colors: Float32Array, vertexCount: number): Uint8Array => {
+  const packed = new Uint8Array(vertexCount * 4)
+  for (let i = 0; i < vertexCount * 4; i++) {
+    packed[i] = Math.round(Math.max(0, Math.min(1, colors[i]!)) * 255)
+  }
+  return packed
+}
+
+/**
+ * Pack float32 RGBA emissive colors into float16 (stored as Uint16Array).
+ * Uses half-float to preserve HDR values above 1.0.
+ */
+export const packEmissiveFloat16 = (emissiveColors: Float32Array, vertexCount: number): Uint16Array => {
+  const packed = new Uint16Array(vertexCount * 4)
+  for (let i = 0; i < vertexCount * 4; i++) {
+    packed[i] = floatToHalf(emissiveColors[i]!)
   }
   return packed
 }

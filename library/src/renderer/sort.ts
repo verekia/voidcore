@@ -75,8 +75,9 @@ export const sortMeshes = (state: SortState, meshes: Mesh[], meshCount: number, 
     // Layer: bits 31-30 (0 = opaque, 1 = transparent)
     const layer = material.transparent ? 1 : 0
 
-    // Pipeline ID
-    const pipelineId = (material.type === 'lambert' ? 1 : 0) | (mesh._isSkinned ? 2 : 0)
+    // Pipeline ID (add VC bit so vertex-color meshes batch separately)
+    const hasVC = !!mesh.geometry.colors && material.type === 'lambert'
+    const pipelineId = (material.type === 'lambert' ? 1 : 0) | (mesh._isSkinned ? 2 : 0) | (hasVC ? 4 : 0)
 
     // Material ID (masked to 12 bits)
     const materialId = material._id & 0xfff

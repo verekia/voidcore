@@ -4,9 +4,9 @@
 //   - "basic"   – Unlit flat color (ignores lights, good for UI or debug).
 //   - "lambert" – Diffuse shading that reacts to directional and ambient light.
 //
-// Materials can also use a palette: an array of up to 32 color entries. Each vertex in the
-// geometry can reference a palette index, allowing a single mesh to display multiple colors
-// without needing textures. Palette entries can also specify emissive colors (self-glowing).
+// Materials can define a palette: an array of color entries used with bakePalette() to bake
+// per-vertex colors into the geometry. The palette is data only — the renderer reads vertex
+// colors directly from geometry attributes, not from material uniforms.
 //
 // Texture maps add per-pixel detail from images:
 //   - colorMap – Multiplies the base color by a texture sample (diffuse/albedo map).
@@ -87,11 +87,6 @@ export class Material {
 
     if (opts.palette) {
       this.palette = opts.palette
-      for (const entry of opts.palette) {
-        if (!this._hasEmissive && entry.emissive && entry.emissiveIntensity && entry.emissiveIntensity > 0) {
-          this._hasEmissive = true
-        }
-      }
     }
   }
 }

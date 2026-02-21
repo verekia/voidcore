@@ -1,24 +1,36 @@
 import { memo, useRef, useMemo } from 'react'
 
-import { Raycaster, cloneScene, LambertMaterial, Mesh, useEngine, useFrame, useGLTF, useAnimations } from 'voidcore'
+import {
+  Raycaster,
+  cloneScene,
+  LambertMaterial,
+  Mesh,
+  useEngine,
+  useFrame,
+  useGLTF,
+  useAnimations,
+  bakePalette,
+  mergeStaticIntoSkinned,
+  mat4Create,
+  mat4Compose,
+  VEC3_ZERO,
+  VEC3_ONE,
+} from 'voidcore'
 
 import { staticBundleSrc, playerBundleSrc } from './assets'
 
-import type { AnimationClip, Geometry, GLTFResult, MeshOutline } from 'voidcore'
+import type { AnimationClip, Geometry, GLTFResult, MeshOutline, PaletteEntry } from 'voidcore'
 
 const CLIP_DURATION = 2
 const CROSSFADE_DURATION = 0.3
 const ORBIT_RADIUS = 5
 const GRID_SPACING = 3
 
-const megaxeMaterial = new LambertMaterial({
-  emissiveBrightness: 0.3,
-  palette: [
-    { color: [0.95, 0.93, 0.9] },
-    { color: [0.08, 0.08, 0.1] },
-    { color: [1, 1, 1], emissive: [0, 1, 0.9], emissiveIntensity: 1.5 },
-  ],
-})
+const megaxePalette: PaletteEntry[] = [
+  { color: [0.95, 0.93, 0.9] },
+  { color: [0.08, 0.08, 0.1] },
+  { color: [1, 1, 1], emissive: [0, 1, 0.9], emissiveIntensity: 1.5 },
+]
 
 interface CharacterProps {
   x: number
@@ -42,23 +54,31 @@ const Character = memo(
       const skeleton = skeletons[0]!
       const meshes: Mesh[] = []
 
-      if (megaxeGeometry) {
-        const handBone = skeleton.getBone('Hand.R')
-        if (handBone) {
-          const axe = new Mesh(megaxeGeometry, megaxeMaterial)
-          axe.outline = { thickness: 0.03, color: [0, 0, 0] }
-          axe.setRotation(0, 0, 1, 0)
-          handBone.add(axe)
-          meshes.push(axe)
-        }
-      }
-
       root.traverse(node => {
         if (node instanceof Mesh) {
           node.outline = { thickness: 0.03, color: [0, 0, 0] }
           meshes.push(node)
         }
       })
+
+      if (megaxeGeometry && meshes.length > 0) {
+        const bodyMesh = meshes[0]!
+        const bodyPalette = bodyMesh.material.palette
+        if (bodyPalette) {
+          bodyMesh.geometry = bakePalette(bodyMesh.geometry, bodyPalette)
+        }
+        const bakedAxe = bakePalette(megaxeGeometry, megaxePalette)
+        const handBone = skeleton.getBone('Hand.R')
+        if (handBone) {
+          const handBoneIndex = skeleton.bones.indexOf(handBone)
+          if (handBoneIndex >= 0) {
+            const ibm = skeleton.boneInverseBindMatrices[handBoneIndex]!
+            const axeLocal = mat4Compose(mat4Create(), VEC3_ZERO, new Float32Array([0, 0, 1, 0]), VEC3_ONE)
+            bodyMesh.geometry = mergeStaticIntoSkinned(bodyMesh.geometry, bakedAxe, handBoneIndex, ibm, axeLocal)
+            bodyMesh.material = new LambertMaterial({ emissiveBrightness: 0.3 })
+          }
+        }
+      }
 
       return { root, skeleton, meshes }
     }, [playerGltf, megaxeGeometry])

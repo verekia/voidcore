@@ -23,6 +23,97 @@
 // outline fragments. Outline vertices are inflated along their normal by the thickness stored
 // in object.outlineColorAndThickness.w, and the fragment shader uses front_facing to discard
 // front-facing outline triangles (keeping only back-facing silhouette fragments).
+//
+// Vertex-color (VC) variants read per-vertex color (unorm8x4) and emissive (float16x4)
+// attributes, replacing the old palette uniform system. Non-VC shaders use material.baseColor
+// directly with no emissive. The bakePalette() utility resolves palette entries into vertex
+// attributes before rendering.
+
+// ─── Shared WGSL blocks ──────────────────────────────────────────────
+
+const FRAME_UNIFORMS = `
+struct FrameUniforms {
+  viewProjection: mat4x4<f32>,
+  lightDir: vec3<f32>,
+  lightIntensity: f32,
+  lightColor: vec3<f32>,
+  ambientIntensity: f32,
+  ambientColor: vec3<f32>,
+  shadowEnabled: f32,
+  shadowVP: mat4x4<f32>,
+  constantBias: f32,
+  slopeBias: f32,
+  invMapSize: f32,
+  _pad0: f32,
+};`
+
+const MATERIAL_UNIFORMS = `
+struct MaterialUniforms {
+  baseColor: vec3<f32>,
+  opacity: f32,
+  receiveShadow: f32,
+  aoIntensity: f32,
+  emissiveBrightness: f32,
+  _pad0: f32,
+};`
+
+const OBJECT_UNIFORMS = `
+struct ObjectUniforms {
+  worldMatrix: mat4x4<f32>,
+  normalMatrix: mat4x4<f32>,
+  outlineColorAndThickness: vec4<f32>,
+};`
+
+const SKINNED_OBJECT_UNIFORMS = `
+struct ObjectUniforms {
+  worldMatrix: mat4x4<f32>,
+  normalMatrix: mat4x4<f32>,
+  outlineColorAndThickness: vec4<f32>,
+  boneMatrices: array<mat4x4<f32>, 32>,
+};`
+
+const FRAME_BINDINGS = `
+@group(0) @binding(0) var<uniform> frame: FrameUniforms;
+@group(0) @binding(1) var shadowMap: texture_depth_2d;
+@group(0) @binding(2) var shadowSampler: sampler_comparison;`
+
+const MATERIAL_BINDING = `
+@group(1) @binding(0) var<uniform> material: MaterialUniforms;`
+
+const OBJECT_BINDING = `
+@group(2) @binding(0) var<uniform> object: ObjectUniforms;`
+
+const PCF_AND_SHADOW = `
+fn pcf9(uv: vec2<f32>, d: f32, ts: f32) -> f32 {
+  var s = 0.0;
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, -ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, -ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, -ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, 0.0), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv, d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, 0.0), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, ts), d);
+  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, ts), d);
+  return s / 9.0;
+}
+
+fn sampleShadow(worldPos: vec3<f32>, NdotL: f32) -> f32 {
+  if (frame.shadowEnabled < 0.5) {
+    return 1.0;
+  }
+
+  let lightClip = frame.shadowVP * vec4<f32>(worldPos, 1.0);
+  let uv = lightClip.xy * vec2<f32>(0.5, -0.5) + 0.5;
+  let depth = lightClip.z;
+
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || depth < 0.0 || depth > 1.0) {
+    return 1.0;
+  }
+
+  let bias = frame.constantBias + frame.slopeBias * (1.0 - NdotL);
+  return pcf9(uv, depth - bias, frame.invMapSize);
+}`
 
 // ─── Shadow depth shaders (vertex-only, no fragment) ─────────────────
 
@@ -30,12 +121,7 @@ export const SHADOW_DEPTH_WGSL = /* wgsl */ `
 struct ShadowUniforms {
   lightVP: mat4x4<f32>,
 };
-
-struct ObjectUniforms {
-  worldMatrix: mat4x4<f32>,
-  normalMatrix: mat4x4<f32>,
-  outlineColorAndThickness: vec4<f32>,
-};
+${OBJECT_UNIFORMS}
 
 @group(0) @binding(0) var<uniform> shadow: ShadowUniforms;
 @group(1) @binding(0) var<uniform> object: ObjectUniforms;
@@ -50,13 +136,7 @@ export const SHADOW_DEPTH_SKINNED_WGSL = /* wgsl */ `
 struct ShadowUniforms {
   lightVP: mat4x4<f32>,
 };
-
-struct ObjectUniforms {
-  worldMatrix: mat4x4<f32>,
-  normalMatrix: mat4x4<f32>,
-  outlineColorAndThickness: vec4<f32>,
-  boneMatrices: array<mat4x4<f32>, 32>,
-};
+${SKINNED_OBJECT_UNIFORMS}
 
 @group(0) @binding(0) var<uniform> shadow: ShadowUniforms;
 @group(1) @binding(0) var<uniform> object: ObjectUniforms;
@@ -79,55 +159,20 @@ fn vs_main(
 // ─── Lambert shaders (with shadow sampling) ──────────────────────────
 
 export const LAMBERT_WGSL = /* wgsl */ `
-struct FrameUniforms {
-  viewProjection: mat4x4<f32>,
-  lightDir: vec3<f32>,
-  lightIntensity: f32,
-  lightColor: vec3<f32>,
-  ambientIntensity: f32,
-  ambientColor: vec3<f32>,
-  shadowEnabled: f32,
-  shadowVP: mat4x4<f32>,
-  constantBias: f32,
-  slopeBias: f32,
-  invMapSize: f32,
-  _pad0: f32,
-};
+${FRAME_UNIFORMS}
+${MATERIAL_UNIFORMS}
+${OBJECT_UNIFORMS}
 
-struct PaletteEntry {
-  color: vec4<f32>,
-  emissive: vec4<f32>,
-};
-
-struct MaterialUniforms {
-  baseColor: vec3<f32>,
-  opacity: f32,
-  hasPalette: f32,
-  receiveShadow: f32,
-  aoIntensity: f32,
-  emissiveBrightness: f32,
-  palette: array<PaletteEntry, 32>,
-};
-
-struct ObjectUniforms {
-  worldMatrix: mat4x4<f32>,
-  normalMatrix: mat4x4<f32>,
-  outlineColorAndThickness: vec4<f32>,
-};
-
-@group(0) @binding(0) var<uniform> frame: FrameUniforms;
-@group(0) @binding(1) var shadowMap: texture_depth_2d;
-@group(0) @binding(2) var shadowSampler: sampler_comparison;
-@group(1) @binding(0) var<uniform> material: MaterialUniforms;
-@group(2) @binding(0) var<uniform> object: ObjectUniforms;
+${FRAME_BINDINGS}
+${MATERIAL_BINDING}
+${OBJECT_BINDING}
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
   @location(0) worldPos: vec3<f32>,
   @location(1) normal: vec3<f32>,
   @location(2) uv: vec2<f32>,
-  @location(3) @interpolate(flat) materialIndex: i32,
-  @location(4) @interpolate(flat) outlineFlag: f32,
+  @location(3) @interpolate(flat) outlineFlag: f32,
 };
 
 @vertex
@@ -135,7 +180,6 @@ fn vs_main(
   @location(0) a_position: vec3<f32>,
   @location(1) a_normal: vec4<f32>,
   @location(2) a_uv: vec2<f32>,
-  @location(3) a_materialIndex: f32,
 ) -> VertexOutput {
   var out: VertexOutput;
   let flag = a_normal.w;
@@ -148,41 +192,11 @@ fn vs_main(
   out.worldPos = worldPos.xyz;
   out.normal = normalize((object.normalMatrix * vec4<f32>(a_normal.xyz, 0.0)).xyz);
   out.uv = a_uv;
-  out.materialIndex = i32(a_materialIndex);
   out.position = frame.viewProjection * worldPos;
   return out;
 }
 
-fn pcf9(uv: vec2<f32>, d: f32, ts: f32) -> f32 {
-  var s = 0.0;
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, -ts), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, -ts), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, -ts), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, 0.0), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, 0.0), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, ts), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, ts), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, ts), d);
-  return s / 9.0;
-}
-
-fn sampleShadow(worldPos: vec3<f32>, NdotL: f32) -> f32 {
-  if (frame.shadowEnabled < 0.5) {
-    return 1.0;
-  }
-
-  let lightClip = frame.shadowVP * vec4<f32>(worldPos, 1.0);
-  let uv = lightClip.xy * vec2<f32>(0.5, -0.5) + 0.5;
-  let depth = lightClip.z;
-
-  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || depth < 0.0 || depth > 1.0) {
-    return 1.0;
-  }
-
-  let bias = frame.constantBias + frame.slopeBias * (1.0 - NdotL);
-  return pcf9(uv, depth - bias, frame.invMapSize);
-}
+${PCF_AND_SHADOW}
 
 struct FragmentOutput {
   @location(0) color: vec4<f32>,
@@ -201,16 +215,8 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   }
 
   let normal = normalize(in.normal);
-  var baseColor = material.baseColor;
-  var alpha = material.opacity;
-  var emissive = vec3<f32>(0.0, 0.0, 0.0);
-
-  if (material.hasPalette > 0.5) {
-    let idx = clamp(in.materialIndex, 0, 31);
-    baseColor = material.palette[idx].color.rgb;
-    alpha = material.palette[idx].color.a;
-    emissive = material.palette[idx].emissive.rgb * material.palette[idx].emissive.a;
-  }
+  let baseColor = material.baseColor;
+  let alpha = material.opacity;
 
   let ambient = frame.ambientColor * frame.ambientIntensity;
   let NdotL = max(dot(normal, frame.lightDir), 0.0);
@@ -220,68 +226,29 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   }
   let diffuse = frame.lightColor * frame.lightIntensity * NdotL * shadow;
 
-  let litColor = baseColor * (ambient + diffuse);
-  let brightness = dot(emissive, vec3<f32>(0.299, 0.587, 0.114));
-  let screenEmissive = mix(emissive, vec3<f32>(brightness), saturate(brightness) * material.emissiveBrightness);
-  let finalColor = litColor + screenEmissive;
+  let finalColor = baseColor * (ambient + diffuse);
 
   out.color = vec4<f32>(finalColor * alpha, alpha);
-  out.emissive = vec4<f32>(emissive * alpha, alpha);
+  out.emissive = vec4<f32>(0.0, 0.0, 0.0, alpha);
   return out;
 }
 `
 
 export const LAMBERT_SKINNED_WGSL = /* wgsl */ `
-struct FrameUniforms {
-  viewProjection: mat4x4<f32>,
-  lightDir: vec3<f32>,
-  lightIntensity: f32,
-  lightColor: vec3<f32>,
-  ambientIntensity: f32,
-  ambientColor: vec3<f32>,
-  shadowEnabled: f32,
-  shadowVP: mat4x4<f32>,
-  constantBias: f32,
-  slopeBias: f32,
-  invMapSize: f32,
-  _pad0: f32,
-};
+${FRAME_UNIFORMS}
+${MATERIAL_UNIFORMS}
+${SKINNED_OBJECT_UNIFORMS}
 
-struct PaletteEntry {
-  color: vec4<f32>,
-  emissive: vec4<f32>,
-};
-
-struct MaterialUniforms {
-  baseColor: vec3<f32>,
-  opacity: f32,
-  hasPalette: f32,
-  receiveShadow: f32,
-  aoIntensity: f32,
-  emissiveBrightness: f32,
-  palette: array<PaletteEntry, 32>,
-};
-
-struct ObjectUniforms {
-  worldMatrix: mat4x4<f32>,
-  normalMatrix: mat4x4<f32>,
-  outlineColorAndThickness: vec4<f32>,
-  boneMatrices: array<mat4x4<f32>, 32>,
-};
-
-@group(0) @binding(0) var<uniform> frame: FrameUniforms;
-@group(0) @binding(1) var shadowMap: texture_depth_2d;
-@group(0) @binding(2) var shadowSampler: sampler_comparison;
-@group(1) @binding(0) var<uniform> material: MaterialUniforms;
-@group(2) @binding(0) var<uniform> object: ObjectUniforms;
+${FRAME_BINDINGS}
+${MATERIAL_BINDING}
+${OBJECT_BINDING}
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
   @location(0) worldPos: vec3<f32>,
   @location(1) normal: vec3<f32>,
   @location(2) uv: vec2<f32>,
-  @location(3) @interpolate(flat) materialIndex: i32,
-  @location(4) @interpolate(flat) outlineFlag: f32,
+  @location(3) @interpolate(flat) outlineFlag: f32,
 };
 
 @vertex
@@ -289,9 +256,8 @@ fn vs_main(
   @location(0) a_position: vec3<f32>,
   @location(1) a_normal: vec4<f32>,
   @location(2) a_uv: vec2<f32>,
-  @location(3) a_materialIndex: f32,
-  @location(4) a_joints: vec4<u32>,
-  @location(5) a_weights: vec4<f32>,
+  @location(3) a_joints: vec4<u32>,
+  @location(4) a_weights: vec4<f32>,
 ) -> VertexOutput {
   var out: VertexOutput;
   let flag = a_normal.w;
@@ -313,41 +279,11 @@ fn vs_main(
   out.worldPos = worldPos;
   out.normal = skinnedNorm;
   out.uv = a_uv;
-  out.materialIndex = i32(a_materialIndex);
   out.position = frame.viewProjection * vec4<f32>(worldPos, 1.0);
   return out;
 }
 
-fn pcf9(uv: vec2<f32>, d: f32, ts: f32) -> f32 {
-  var s = 0.0;
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, -ts), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, -ts), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, -ts), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, 0.0), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, 0.0), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, ts), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, ts), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, ts), d);
-  return s / 9.0;
-}
-
-fn sampleShadow(worldPos: vec3<f32>, NdotL: f32) -> f32 {
-  if (frame.shadowEnabled < 0.5) {
-    return 1.0;
-  }
-
-  let lightClip = frame.shadowVP * vec4<f32>(worldPos, 1.0);
-  let uv = lightClip.xy * vec2<f32>(0.5, -0.5) + 0.5;
-  let depth = lightClip.z;
-
-  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || depth < 0.0 || depth > 1.0) {
-    return 1.0;
-  }
-
-  let bias = frame.constantBias + frame.slopeBias * (1.0 - NdotL);
-  return pcf9(uv, depth - bias, frame.invMapSize);
-}
+${PCF_AND_SHADOW}
 
 struct FragmentOutput {
   @location(0) color: vec4<f32>,
@@ -366,16 +302,190 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   }
 
   let normal = normalize(in.normal);
-  var baseColor = material.baseColor;
-  var alpha = material.opacity;
-  var emissive = vec3<f32>(0.0, 0.0, 0.0);
+  let baseColor = material.baseColor;
+  let alpha = material.opacity;
 
-  if (material.hasPalette > 0.5) {
-    let idx = clamp(in.materialIndex, 0, 31);
-    baseColor = material.palette[idx].color.rgb;
-    alpha = material.palette[idx].color.a;
-    emissive = material.palette[idx].emissive.rgb * material.palette[idx].emissive.a;
+  let ambient = frame.ambientColor * frame.ambientIntensity;
+  let NdotL = max(dot(normal, frame.lightDir), 0.0);
+  var shadow = 1.0;
+  if (material.receiveShadow > 0.5) {
+    shadow = sampleShadow(in.worldPos, NdotL);
   }
+  let diffuse = frame.lightColor * frame.lightIntensity * NdotL * shadow;
+
+  let finalColor = baseColor * (ambient + diffuse);
+
+  out.color = vec4<f32>(finalColor * alpha, alpha);
+  out.emissive = vec4<f32>(0.0, 0.0, 0.0, alpha);
+  return out;
+}
+`
+
+// ─── Vertex-color Lambert shaders ────────────────────────────────────
+
+export const LAMBERT_VC_WGSL = /* wgsl */ `
+${FRAME_UNIFORMS}
+${MATERIAL_UNIFORMS}
+${OBJECT_UNIFORMS}
+
+${FRAME_BINDINGS}
+${MATERIAL_BINDING}
+${OBJECT_BINDING}
+
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldPos: vec3<f32>,
+  @location(1) normal: vec3<f32>,
+  @location(2) uv: vec2<f32>,
+  @location(3) @interpolate(flat) outlineFlag: f32,
+  @location(4) color: vec4<f32>,
+  @location(5) vcEmissive: vec4<f32>,
+};
+
+@vertex
+fn vs_main(
+  @location(0) a_position: vec3<f32>,
+  @location(1) a_normal: vec4<f32>,
+  @location(2) a_uv: vec2<f32>,
+  @location(3) a_color: vec4<f32>,
+  @location(6) a_emissive: vec4<f32>,
+) -> VertexOutput {
+  var out: VertexOutput;
+  let flag = a_normal.w;
+  out.outlineFlag = flag;
+  var pos = a_position;
+  if (flag > 0.5) {
+    pos = pos + normalize(a_normal.xyz) * object.outlineColorAndThickness.w;
+  }
+  let worldPos = object.worldMatrix * vec4<f32>(pos, 1.0);
+  out.worldPos = worldPos.xyz;
+  out.normal = normalize((object.normalMatrix * vec4<f32>(a_normal.xyz, 0.0)).xyz);
+  out.uv = a_uv;
+  out.color = a_color;
+  out.vcEmissive = a_emissive;
+  out.position = frame.viewProjection * worldPos;
+  return out;
+}
+
+${PCF_AND_SHADOW}
+
+struct FragmentOutput {
+  @location(0) color: vec4<f32>,
+  @location(1) emissive: vec4<f32>,
+};
+
+@fragment
+fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
+  var out: FragmentOutput;
+
+  if (in.outlineFlag > 0.5) {
+    if (front_facing || object.outlineColorAndThickness.w <= 0.0) { discard; }
+    out.color = vec4<f32>(object.outlineColorAndThickness.xyz, 1.0);
+    out.emissive = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    return out;
+  }
+
+  let normal = normalize(in.normal);
+  let baseColor = material.baseColor * in.color.rgb;
+  let alpha = material.opacity;
+  let emissive = in.vcEmissive.rgb;
+
+  let ambient = frame.ambientColor * frame.ambientIntensity;
+  let NdotL = max(dot(normal, frame.lightDir), 0.0);
+  var shadow = 1.0;
+  if (material.receiveShadow > 0.5) {
+    shadow = sampleShadow(in.worldPos, NdotL);
+  }
+  let diffuse = frame.lightColor * frame.lightIntensity * NdotL * shadow;
+
+  let litColor = baseColor * (ambient + diffuse);
+  let brightness = dot(emissive, vec3<f32>(0.299, 0.587, 0.114));
+  let screenEmissive = mix(emissive, vec3<f32>(brightness), saturate(brightness) * material.emissiveBrightness);
+  let finalColor = litColor + screenEmissive;
+
+  out.color = vec4<f32>(finalColor * alpha, alpha);
+  out.emissive = vec4<f32>(emissive * alpha, alpha);
+  return out;
+}
+`
+
+export const LAMBERT_SKINNED_VC_WGSL = /* wgsl */ `
+${FRAME_UNIFORMS}
+${MATERIAL_UNIFORMS}
+${SKINNED_OBJECT_UNIFORMS}
+
+${FRAME_BINDINGS}
+${MATERIAL_BINDING}
+${OBJECT_BINDING}
+
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldPos: vec3<f32>,
+  @location(1) normal: vec3<f32>,
+  @location(2) uv: vec2<f32>,
+  @location(3) @interpolate(flat) outlineFlag: f32,
+  @location(4) color: vec4<f32>,
+  @location(5) vcEmissive: vec4<f32>,
+};
+
+@vertex
+fn vs_main(
+  @location(0) a_position: vec3<f32>,
+  @location(1) a_normal: vec4<f32>,
+  @location(2) a_uv: vec2<f32>,
+  @location(3) a_color: vec4<f32>,
+  @location(4) a_joints: vec4<u32>,
+  @location(5) a_weights: vec4<f32>,
+  @location(6) a_emissive: vec4<f32>,
+) -> VertexOutput {
+  var out: VertexOutput;
+  let flag = a_normal.w;
+  out.outlineFlag = flag;
+
+  let skinMatrix =
+    a_weights.x * object.boneMatrices[a_joints.x] +
+    a_weights.y * object.boneMatrices[a_joints.y] +
+    a_weights.z * object.boneMatrices[a_joints.z] +
+    a_weights.w * object.boneMatrices[a_joints.w];
+
+  let skinnedPos = skinMatrix * vec4<f32>(a_position, 1.0);
+  let skinnedNorm = normalize((skinMatrix * vec4<f32>(a_normal.xyz, 0.0)).xyz);
+
+  var worldPos = skinnedPos.xyz;
+  if (flag > 0.5) {
+    worldPos = worldPos + skinnedNorm * object.outlineColorAndThickness.w;
+  }
+  out.worldPos = worldPos;
+  out.normal = skinnedNorm;
+  out.uv = a_uv;
+  out.color = a_color;
+  out.vcEmissive = a_emissive;
+  out.position = frame.viewProjection * vec4<f32>(worldPos, 1.0);
+  return out;
+}
+
+${PCF_AND_SHADOW}
+
+struct FragmentOutput {
+  @location(0) color: vec4<f32>,
+  @location(1) emissive: vec4<f32>,
+};
+
+@fragment
+fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
+  var out: FragmentOutput;
+
+  if (in.outlineFlag > 0.5) {
+    if (front_facing || object.outlineColorAndThickness.w <= 0.0) { discard; }
+    out.color = vec4<f32>(object.outlineColorAndThickness.xyz, 1.0);
+    out.emissive = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    return out;
+  }
+
+  let normal = normalize(in.normal);
+  let baseColor = material.baseColor * in.color.rgb;
+  let alpha = material.opacity;
+  let emissive = in.vcEmissive.rgb;
 
   let ambient = frame.ambientColor * frame.ambientIntensity;
   let NdotL = max(dot(normal, frame.lightDir), 0.0);
@@ -399,47 +509,13 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
 // ─── Textured Lambert shaders (with color map + AO map sampling) ─────
 
 export const LAMBERT_TEXTURED_WGSL = /* wgsl */ `
-struct FrameUniforms {
-  viewProjection: mat4x4<f32>,
-  lightDir: vec3<f32>,
-  lightIntensity: f32,
-  lightColor: vec3<f32>,
-  ambientIntensity: f32,
-  ambientColor: vec3<f32>,
-  shadowEnabled: f32,
-  shadowVP: mat4x4<f32>,
-  constantBias: f32,
-  slopeBias: f32,
-  invMapSize: f32,
-  _pad0: f32,
-};
+${FRAME_UNIFORMS}
+${MATERIAL_UNIFORMS}
+${OBJECT_UNIFORMS}
 
-struct PaletteEntry {
-  color: vec4<f32>,
-  emissive: vec4<f32>,
-};
-
-struct MaterialUniforms {
-  baseColor: vec3<f32>,
-  opacity: f32,
-  hasPalette: f32,
-  receiveShadow: f32,
-  aoIntensity: f32,
-  emissiveBrightness: f32,
-  palette: array<PaletteEntry, 32>,
-};
-
-struct ObjectUniforms {
-  worldMatrix: mat4x4<f32>,
-  normalMatrix: mat4x4<f32>,
-  outlineColorAndThickness: vec4<f32>,
-};
-
-@group(0) @binding(0) var<uniform> frame: FrameUniforms;
-@group(0) @binding(1) var shadowMap: texture_depth_2d;
-@group(0) @binding(2) var shadowSampler: sampler_comparison;
-@group(1) @binding(0) var<uniform> material: MaterialUniforms;
-@group(2) @binding(0) var<uniform> object: ObjectUniforms;
+${FRAME_BINDINGS}
+${MATERIAL_BINDING}
+${OBJECT_BINDING}
 @group(3) @binding(0) var colorMapTexture: texture_2d<f32>;
 @group(3) @binding(1) var aoMapTexture: texture_2d<f32>;
 @group(3) @binding(2) var mapSampler: sampler;
@@ -449,8 +525,7 @@ struct VertexOutput {
   @location(0) worldPos: vec3<f32>,
   @location(1) normal: vec3<f32>,
   @location(2) uv: vec2<f32>,
-  @location(3) @interpolate(flat) materialIndex: i32,
-  @location(4) @interpolate(flat) outlineFlag: f32,
+  @location(3) @interpolate(flat) outlineFlag: f32,
 };
 
 @vertex
@@ -458,7 +533,6 @@ fn vs_main(
   @location(0) a_position: vec3<f32>,
   @location(1) a_normal: vec4<f32>,
   @location(2) a_uv: vec2<f32>,
-  @location(3) a_materialIndex: f32,
 ) -> VertexOutput {
   var out: VertexOutput;
   let flag = a_normal.w;
@@ -471,42 +545,11 @@ fn vs_main(
   out.worldPos = worldPos.xyz;
   out.normal = normalize((object.normalMatrix * vec4<f32>(a_normal.xyz, 0.0)).xyz);
   out.uv = a_uv;
-  out.materialIndex = i32(a_materialIndex);
   out.position = frame.viewProjection * worldPos;
   return out;
 }
 
-fn pcf9(uv: vec2<f32>, d: f32, ts: f32) -> f32 {
-  var s = 0.0;
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, -ts), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, -ts), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, -ts), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, 0.0), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv, d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, 0.0), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(-ts, ts), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(0.0, ts), d);
-  s += textureSampleCompareLevel(shadowMap, shadowSampler, uv + vec2<f32>(ts, ts), d);
-  return s / 9.0;
-}
-
-fn sampleShadow(worldPos: vec3<f32>, NdotL: f32) -> f32 {
-  if (frame.shadowEnabled < 0.5) {
-    return 1.0;
-  }
-
-  let lightClip = frame.shadowVP * vec4<f32>(worldPos, 1.0);
-  let uv = lightClip.xy * vec2<f32>(0.5, -0.5) + 0.5;
-  let depth = lightClip.z;
-
-  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || depth < 0.0 || depth > 1.0) {
-    return 1.0;
-  }
-
-  let bias = frame.constantBias + frame.slopeBias * (1.0 - NdotL);
-  let ts = frame.invMapSize;
-  return pcf9(uv, depth - bias, ts);
-}
+${PCF_AND_SHADOW}
 
 struct FragmentOutput {
   @location(0) color: vec4<f32>,
@@ -529,18 +572,8 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   }
 
   let normal = normalize(in.normal);
-  var baseColor = material.baseColor;
-  var alpha = material.opacity;
-  var emissive = vec3<f32>(0.0, 0.0, 0.0);
-
-  if (material.hasPalette > 0.5) {
-    let idx = clamp(in.materialIndex, 0, 31);
-    baseColor = material.palette[idx].color.rgb;
-    alpha = material.palette[idx].color.a;
-    emissive = material.palette[idx].emissive.rgb * material.palette[idx].emissive.a;
-  }
-
-  baseColor = baseColor * texColor;
+  var baseColor = material.baseColor * texColor;
+  let alpha = material.opacity;
 
   let ao = mix(1.0, aoSample, material.aoIntensity);
   let ambient = frame.ambientColor * frame.ambientIntensity * ao;
@@ -552,13 +585,10 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   }
   let diffuse = frame.lightColor * frame.lightIntensity * NdotL * shadow;
 
-  let litColor = baseColor * (ambient + diffuse);
-  let brightness = dot(emissive, vec3<f32>(0.299, 0.587, 0.114));
-  let screenEmissive = mix(emissive, vec3<f32>(brightness), saturate(brightness) * material.emissiveBrightness);
-  let finalColor = litColor + screenEmissive;
+  let finalColor = baseColor * (ambient + diffuse);
 
   out.color = vec4<f32>(finalColor * alpha, alpha);
-  out.emissive = vec4<f32>(emissive * alpha, alpha);
+  out.emissive = vec4<f32>(0.0, 0.0, 0.0, alpha);
   return out;
 }
 `
@@ -566,48 +596,13 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
 // ─── Basic shaders (unlit, shadow bindings declared for shared BGL) ──
 
 export const BASIC_SKINNED_WGSL = /* wgsl */ `
-struct FrameUniforms {
-  viewProjection: mat4x4<f32>,
-  lightDir: vec3<f32>,
-  lightIntensity: f32,
-  lightColor: vec3<f32>,
-  ambientIntensity: f32,
-  ambientColor: vec3<f32>,
-  shadowEnabled: f32,
-  shadowVP: mat4x4<f32>,
-  constantBias: f32,
-  slopeBias: f32,
-  invMapSize: f32,
-  _pad0: f32,
-};
+${FRAME_UNIFORMS}
+${MATERIAL_UNIFORMS}
+${SKINNED_OBJECT_UNIFORMS}
 
-struct PaletteEntry {
-  color: vec4<f32>,
-  emissive: vec4<f32>,
-};
-
-struct MaterialUniforms {
-  baseColor: vec3<f32>,
-  opacity: f32,
-  hasPalette: f32,
-  receiveShadow: f32,
-  aoIntensity: f32,
-  emissiveBrightness: f32,
-  palette: array<PaletteEntry, 32>,
-};
-
-struct ObjectUniforms {
-  worldMatrix: mat4x4<f32>,
-  normalMatrix: mat4x4<f32>,
-  outlineColorAndThickness: vec4<f32>,
-  boneMatrices: array<mat4x4<f32>, 32>,
-};
-
-@group(0) @binding(0) var<uniform> frame: FrameUniforms;
-@group(0) @binding(1) var shadowMap: texture_depth_2d;
-@group(0) @binding(2) var shadowSampler: sampler_comparison;
-@group(1) @binding(0) var<uniform> material: MaterialUniforms;
-@group(2) @binding(0) var<uniform> object: ObjectUniforms;
+${FRAME_BINDINGS}
+${MATERIAL_BINDING}
+${OBJECT_BINDING}
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
@@ -619,9 +614,8 @@ fn vs_main(
   @location(0) a_position: vec3<f32>,
   @location(1) a_normal: vec3<f32>,
   @location(2) a_uv: vec2<f32>,
-  @location(3) a_materialIndex: f32,
-  @location(4) a_joints: vec4<u32>,
-  @location(5) a_weights: vec4<f32>,
+  @location(3) a_joints: vec4<u32>,
+  @location(4) a_weights: vec4<f32>,
 ) -> VertexOutput {
   var out: VertexOutput;
 
@@ -652,47 +646,13 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 `
 
 export const BASIC_WGSL = /* wgsl */ `
-struct FrameUniforms {
-  viewProjection: mat4x4<f32>,
-  lightDir: vec3<f32>,
-  lightIntensity: f32,
-  lightColor: vec3<f32>,
-  ambientIntensity: f32,
-  ambientColor: vec3<f32>,
-  shadowEnabled: f32,
-  shadowVP: mat4x4<f32>,
-  constantBias: f32,
-  slopeBias: f32,
-  invMapSize: f32,
-  _pad0: f32,
-};
+${FRAME_UNIFORMS}
+${MATERIAL_UNIFORMS}
+${OBJECT_UNIFORMS}
 
-struct PaletteEntry {
-  color: vec4<f32>,
-  emissive: vec4<f32>,
-};
-
-struct MaterialUniforms {
-  baseColor: vec3<f32>,
-  opacity: f32,
-  hasPalette: f32,
-  receiveShadow: f32,
-  aoIntensity: f32,
-  emissiveBrightness: f32,
-  palette: array<PaletteEntry, 32>,
-};
-
-struct ObjectUniforms {
-  worldMatrix: mat4x4<f32>,
-  normalMatrix: mat4x4<f32>,
-  outlineColorAndThickness: vec4<f32>,
-};
-
-@group(0) @binding(0) var<uniform> frame: FrameUniforms;
-@group(0) @binding(1) var shadowMap: texture_depth_2d;
-@group(0) @binding(2) var shadowSampler: sampler_comparison;
-@group(1) @binding(0) var<uniform> material: MaterialUniforms;
-@group(2) @binding(0) var<uniform> object: ObjectUniforms;
+${FRAME_BINDINGS}
+${MATERIAL_BINDING}
+${OBJECT_BINDING}
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
@@ -704,7 +664,6 @@ fn vs_main(
   @location(0) a_position: vec3<f32>,
   @location(1) a_normal: vec3<f32>,
   @location(2) a_uv: vec2<f32>,
-  @location(3) a_materialIndex: f32,
 ) -> VertexOutput {
   var out: VertexOutput;
   out.position = frame.viewProjection * object.worldMatrix * vec4<f32>(a_position, 1.0);

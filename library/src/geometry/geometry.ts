@@ -8,15 +8,23 @@
 // Geometry also computes an axis-aligned bounding box (AABB) used for frustum culling
 // (skipping objects that are off-screen) and raycasting (click detection).
 //
-// new Geometry(data)             – Wraps raw arrays into a Geometry object.
-// mergeGeometries(geos)          – Merges multiple geometries into one with per-geometry material indices.
-// computeSmoothNormals(geometry) – Computes position-averaged normals for gap-free inverted hull outlines.
-// geometry.hasAttribute()        – Checks if optional attributes (UVs, colors, joints, etc.) exist.
-// geometry.dispose()             – Releases GPU buffer references.
+// Vertex colors replace the palette system for per-vertex coloring. Instead of material
+// uniforms, colors and emissive values are baked directly into the geometry as vertex
+// attributes. The bakePalette() utility resolves materialIndices + palette entries into
+// per-vertex colors and emissiveColors arrays.
+//
+// new Geometry(data)                  – Wraps raw arrays into a Geometry object.
+// bakePalette(geometry, palette)      – Bakes palette entries into vertex colors/emissiveColors.
+// mergeGeometries(geos)               – Merges multiple geometries into one (preserves vertex colors).
+// mergeStaticIntoSkinned(skinned, …)  – Merges a static geometry into a skinned one, binding vertices to a bone.
+// computeSmoothNormals(geometry)      – Computes position-averaged normals for gap-free inverted hull outlines.
+// geometry.hasAttribute()             – Checks if optional attributes (UVs, colors, joints, etc.) exist.
+// geometry.dispose()                  – Releases GPU buffer references.
 
-import { aabbFromPoints } from '../math/index'
+import { aabbFromPoints, mat4Create, mat4Invert, mat4Multiply, vec3TransformMat4 } from '../math/index'
 
-import type { AABB } from '../math/index'
+import type { PaletteEntry } from '../materials/material'
+import type { AABB, Mat4 } from '../math/index'
 
 export interface GeometryData {
   positions: Float32Array
@@ -24,6 +32,7 @@ export interface GeometryData {
   indices: Uint16Array | Uint32Array
   uvs?: Float32Array
   colors?: Float32Array
+  emissiveColors?: Float32Array
   materialIndices?: Uint8Array
   joints?: Uint8Array | Uint16Array
   weights?: Float32Array
@@ -35,6 +44,7 @@ export class Geometry {
   indices: Uint16Array | Uint32Array
   uvs?: Float32Array
   colors?: Float32Array
+  emissiveColors?: Float32Array
   materialIndices?: Uint8Array
   joints?: Uint8Array | Uint16Array
   weights?: Float32Array
@@ -53,6 +63,7 @@ export class Geometry {
     this.indices = data.indices
     this.uvs = data.uvs
     this.colors = data.colors
+    this.emissiveColors = data.emissiveColors
     this.materialIndices = data.materialIndices
     this.joints = data.joints
     this.weights = data.weights
@@ -67,6 +78,8 @@ export class Geometry {
         return !!this.uvs
       case 'color':
         return !!this.colors
+      case 'emissiveColor':
+        return !!this.emissiveColors
       case 'materialIndex':
         return !!this.materialIndices
       case 'joints':
@@ -85,24 +98,69 @@ export class Geometry {
 }
 
 /**
- * Merges multiple geometries into one, assigning each geometry a material index
- * (0, 1, 2, …) so a palette material can color each sub-mesh independently.
+ * Bakes palette entries into per-vertex colors and emissiveColors.
+ * Reads materialIndices from the geometry, looks up each palette entry,
+ * and writes RGBA colors and RGBA emissiveColors (RGB pre-multiplied by intensity, A=1).
+ * Returns a new Geometry without materialIndices.
+ */
+export const bakePalette = (geometry: Geometry, palette: PaletteEntry[]): Geometry => {
+  const vc = geometry.vertexCount
+  const colors = new Float32Array(vc * 4)
+  const emissiveColors = new Float32Array(vc * 4)
+  const matIndices = geometry.materialIndices
+
+  for (let i = 0; i < vc; i++) {
+    const idx = matIndices ? matIndices[i]! : 0
+    const entry: PaletteEntry = palette[idx] ?? { color: [1, 1, 1] }
+    const o = i * 4
+    colors[o] = entry.color[0]
+    colors[o + 1] = entry.color[1]
+    colors[o + 2] = entry.color[2]
+    colors[o + 3] = 1.0
+    const intensity = entry.emissiveIntensity ?? 0
+    emissiveColors[o] = (entry.emissive?.[0] ?? 0) * intensity
+    emissiveColors[o + 1] = (entry.emissive?.[1] ?? 0) * intensity
+    emissiveColors[o + 2] = (entry.emissive?.[2] ?? 0) * intensity
+    emissiveColors[o + 3] = 1.0
+  }
+
+  return new Geometry({
+    positions: geometry.positions,
+    normals: geometry.normals,
+    indices: geometry.indices,
+    uvs: geometry.uvs,
+    colors,
+    emissiveColors,
+    joints: geometry.joints,
+    weights: geometry.weights,
+  })
+}
+
+/**
+ * Merges multiple geometries into one. If any input has vertex colors,
+ * all inputs must have colors (non-colored inputs get white).
  */
 export const mergeGeometries = (geometries: Geometry[]): Geometry => {
   let totalVertices = 0
   let totalIndices = 0
   let hasUVs = false
+  let hasColors = false
+  let hasMaterialIndices = false
   for (const geo of geometries) {
     totalVertices += geo.vertexCount
     totalIndices += geo.indexCount
     if (geo.uvs) hasUVs = true
+    if (geo.colors) hasColors = true
+    if (geo.materialIndices) hasMaterialIndices = true
   }
 
   const positions = new Float32Array(totalVertices * 3)
   const normals = new Float32Array(totalVertices * 3)
   const indices = totalVertices > 65535 ? new Uint32Array(totalIndices) : new Uint16Array(totalIndices)
-  const materialIndices = new Uint8Array(totalVertices)
   const uvs = hasUVs ? new Float32Array(totalVertices * 2) : undefined
+  const colors = hasColors ? new Float32Array(totalVertices * 4) : undefined
+  const emissiveColors = hasColors ? new Float32Array(totalVertices * 4) : undefined
+  const materialIndices = hasMaterialIndices ? new Uint8Array(totalVertices) : undefined
 
   let vOff = 0
   let iOff = 0
@@ -111,7 +169,33 @@ export const mergeGeometries = (geometries: Geometry[]): Geometry => {
     positions.set(geo.positions, vOff * 3)
     normals.set(geo.normals, vOff * 3)
     if (uvs && geo.uvs) uvs.set(geo.uvs, vOff * 2)
-    materialIndices.fill(i, vOff, vOff + geo.vertexCount)
+    if (colors) {
+      if (geo.colors) {
+        colors.set(geo.colors, vOff * 4)
+      } else {
+        // Default white for non-colored geometries
+        for (let j = 0; j < geo.vertexCount; j++) {
+          const o = (vOff + j) * 4
+          colors[o] = 1
+          colors[o + 1] = 1
+          colors[o + 2] = 1
+          colors[o + 3] = 1
+        }
+      }
+    }
+    if (emissiveColors) {
+      if (geo.emissiveColors) {
+        emissiveColors.set(geo.emissiveColors, vOff * 4)
+      } else {
+        // Default: no emissive, but A=1
+        for (let j = 0; j < geo.vertexCount; j++) {
+          emissiveColors[(vOff + j) * 4 + 3] = 1
+        }
+      }
+    }
+    if (materialIndices && geo.materialIndices) {
+      materialIndices.set(geo.materialIndices, vOff)
+    }
     for (let j = 0; j < geo.indexCount; j++) {
       indices[iOff + j] = geo.indices[j]! + vOff
     }
@@ -119,7 +203,158 @@ export const mergeGeometries = (geometries: Geometry[]): Geometry => {
     iOff += geo.indexCount
   }
 
-  return new Geometry({ positions, normals, indices, materialIndices, uvs })
+  return new Geometry({ positions, normals, indices, uvs, colors, emissiveColors, materialIndices })
+}
+
+/**
+ * Merges a static geometry into a skinned geometry, binding all static vertices
+ * to a single bone. This lets you attach a weapon (static mesh) to a character's
+ * hand bone and render both in a single draw call.
+ *
+ * Static positions/normals are transformed into bind-pose space so they animate
+ * correctly with the skeleton. The static vertices get joints=[boneIndex,0,0,0]
+ * and weights=[1,0,0,0] (100% influence from the target bone).
+ */
+export const mergeStaticIntoSkinned = (
+  skinned: Geometry,
+  static_: Geometry,
+  boneIndex: number,
+  inverseBindMatrix: Mat4,
+  localTransform?: Mat4,
+): Geometry => {
+  // Compute bind-pose transform: inverse(IBM) brings us from bone-local to bind-pose space
+  const bindPoseMatrix = mat4Create()
+  if (!mat4Invert(bindPoseMatrix, inverseBindMatrix)) return skinned
+
+  const finalTransform = mat4Create()
+  if (localTransform) {
+    mat4Multiply(finalTransform, bindPoseMatrix, localTransform)
+  } else {
+    finalTransform.set(bindPoseMatrix)
+  }
+
+  const skinnedVerts = skinned.vertexCount
+  const staticVerts = static_.vertexCount
+  const totalVerts = skinnedVerts + staticVerts
+  const totalIndices = skinned.indexCount + static_.indexCount
+
+  // Transform static positions into bind-pose space
+  const positions = new Float32Array(totalVerts * 3)
+  positions.set(skinned.positions)
+  const tmpVec = new Float32Array(3)
+  for (let i = 0; i < staticVerts; i++) {
+    tmpVec[0] = static_.positions[i * 3]!
+    tmpVec[1] = static_.positions[i * 3 + 1]!
+    tmpVec[2] = static_.positions[i * 3 + 2]!
+    vec3TransformMat4(tmpVec, tmpVec, finalTransform)
+    positions[(skinnedVerts + i) * 3] = tmpVec[0]!
+    positions[(skinnedVerts + i) * 3 + 1] = tmpVec[1]!
+    positions[(skinnedVerts + i) * 3 + 2] = tmpVec[2]!
+  }
+
+  // Transform static normals using the upper-left 3x3 (rotation only, no translation)
+  const normals = new Float32Array(totalVerts * 3)
+  normals.set(skinned.normals)
+  const m = finalTransform
+  for (let i = 0; i < staticVerts; i++) {
+    const nx = static_.normals[i * 3]!
+    const ny = static_.normals[i * 3 + 1]!
+    const nz = static_.normals[i * 3 + 2]!
+    let rx = m[0]! * nx + m[4]! * ny + m[8]! * nz
+    let ry = m[1]! * nx + m[5]! * ny + m[9]! * nz
+    let rz = m[2]! * nx + m[6]! * ny + m[10]! * nz
+    const len = Math.sqrt(rx * rx + ry * ry + rz * rz)
+    if (len > 1e-6) {
+      const inv = 1 / len
+      rx *= inv
+      ry *= inv
+      rz *= inv
+    }
+    normals[(skinnedVerts + i) * 3] = rx
+    normals[(skinnedVerts + i) * 3 + 1] = ry
+    normals[(skinnedVerts + i) * 3 + 2] = rz
+  }
+
+  // Merge indices (offset static indices by skinned vertex count)
+  const indices = totalVerts > 65535 ? new Uint32Array(totalIndices) : new Uint16Array(totalIndices)
+  indices.set(skinned.indices)
+  for (let i = 0; i < static_.indexCount; i++) {
+    indices[skinned.indexCount + i] = static_.indices[i]! + skinnedVerts
+  }
+
+  // Merge joints: skinned joints + static joints (all bound to boneIndex)
+  const useUint16 = skinned.joints instanceof Uint16Array || boneIndex > 255
+  const JointsArray = useUint16 ? Uint16Array : Uint8Array
+  const joints = new JointsArray(totalVerts * 4)
+  if (skinned.joints) joints.set(skinned.joints)
+  for (let i = 0; i < staticVerts; i++) {
+    joints[(skinnedVerts + i) * 4] = boneIndex
+  }
+
+  // Merge weights: skinned weights + static weights (100% on target bone)
+  const weights = new Float32Array(totalVerts * 4)
+  if (skinned.weights) weights.set(skinned.weights)
+  for (let i = 0; i < staticVerts; i++) {
+    weights[(skinnedVerts + i) * 4] = 1
+  }
+
+  // Merge vertex colors
+  let colors: Float32Array | undefined
+  if (skinned.colors || static_.colors) {
+    colors = new Float32Array(totalVerts * 4)
+    if (skinned.colors) {
+      colors.set(skinned.colors)
+    } else {
+      for (let i = 0; i < skinnedVerts; i++) {
+        const o = i * 4
+        colors[o] = 1
+        colors[o + 1] = 1
+        colors[o + 2] = 1
+        colors[o + 3] = 1
+      }
+    }
+    if (static_.colors) {
+      colors.set(static_.colors, skinnedVerts * 4)
+    } else {
+      for (let i = 0; i < staticVerts; i++) {
+        const o = (skinnedVerts + i) * 4
+        colors[o] = 1
+        colors[o + 1] = 1
+        colors[o + 2] = 1
+        colors[o + 3] = 1
+      }
+    }
+  }
+
+  // Merge emissive colors
+  let emissiveColors: Float32Array | undefined
+  if (skinned.emissiveColors || static_.emissiveColors) {
+    emissiveColors = new Float32Array(totalVerts * 4)
+    if (skinned.emissiveColors) {
+      emissiveColors.set(skinned.emissiveColors)
+    } else {
+      for (let i = 0; i < skinnedVerts; i++) {
+        emissiveColors[i * 4 + 3] = 1
+      }
+    }
+    if (static_.emissiveColors) {
+      emissiveColors.set(static_.emissiveColors, skinnedVerts * 4)
+    } else {
+      for (let i = 0; i < staticVerts; i++) {
+        emissiveColors[(skinnedVerts + i) * 4 + 3] = 1
+      }
+    }
+  }
+
+  // Merge UVs
+  let uvs: Float32Array | undefined
+  if (skinned.uvs || static_.uvs) {
+    uvs = new Float32Array(totalVerts * 2)
+    if (skinned.uvs) uvs.set(skinned.uvs)
+    if (static_.uvs) uvs.set(static_.uvs, skinnedVerts * 2)
+  }
+
+  return new Geometry({ positions, normals, indices, joints, weights, uvs, colors, emissiveColors })
 }
 
 /**

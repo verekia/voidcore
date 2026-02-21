@@ -4,11 +4,14 @@
 //   Vertex shader   – Transforms 3D positions into screen coordinates.
 //   Fragment shader – Computes the final color of each pixel.
 //
-// This file contains five shader variants plus shadow depth shaders:
+// This file contains shader variants plus shadow depth shaders:
 //   Lambert          – Diffuse lighting (ambient + directional light × surface normal)
 //                      with shadow map sampling (PCF 3×3).
+//   Lambert VC       – Same as Lambert but reads per-vertex color and emissive attributes
+//                      (baked from palette via bakePalette()).
 //   Lambert Textured – Same as Lambert but also samples color map and AO map textures.
 //   Lambert Skinned  – Same lighting + shadows, but vertices are deformed by bone matrices.
+//   Lambert Skinned VC – Skinned variant with vertex colors and emissive.
 //   Basic            – Flat unlit color (no lighting calculations).
 //   Basic Skinned    – Flat unlit color with skeletal deformation.
 //
@@ -183,7 +186,6 @@ precision highp float;
 layout(location = 0) in vec3 a_position;
 layout(location = 1) in vec4 a_normal;
 layout(location = 2) in vec2 a_uv;
-layout(location = 3) in float a_materialIndex;
 
 ${FRAME_BLOCK}
 ${OBJECT_BLOCK}
@@ -191,7 +193,6 @@ ${OBJECT_BLOCK}
 out vec3 v_worldPos;
 out vec3 v_normal;
 out vec2 v_uv;
-flat out int v_materialIndex;
 flat out float v_outlineFlag;
 
 void main() {
@@ -205,7 +206,6 @@ void main() {
   v_worldPos = worldPos.xyz;
   v_normal = normalize((u_normalMatrix * vec4(a_normal.xyz, 0.0)).xyz);
   v_uv = a_uv;
-  v_materialIndex = int(a_materialIndex);
   gl_Position = u_viewProjection * worldPos;
 }
 `
@@ -216,21 +216,13 @@ precision highp float;
 in vec3 v_worldPos;
 in vec3 v_normal;
 in vec2 v_uv;
-flat in int v_materialIndex;
 flat in float v_outlineFlag;
-
-struct PaletteEntry {
-  vec4 color;    // xyz = RGB, w = opacity
-  vec4 emissive; // xyz = RGB, w = emissiveIntensity
-};
 
 ${FRAME_BLOCK}
 ${objectBlock}
 
 uniform vec3 u_baseColor;
 uniform float u_opacity;
-uniform bool u_hasPalette;
-uniform PaletteEntry u_palette[32];
 uniform highp sampler2DShadow u_shadowMap;
 uniform bool u_receiveShadow;
 uniform float u_emissiveBrightness;
@@ -250,26 +242,16 @@ void main() {
 
   vec3 normal = normalize(v_normal);
   vec3 baseColor = u_baseColor;
-  vec3 emissive = vec3(0.0);
-
-  if (u_hasPalette) {
-    int idx = clamp(v_materialIndex, 0, 31);
-    baseColor = u_palette[idx].color.rgb;
-    emissive = u_palette[idx].emissive.rgb * u_palette[idx].emissive.a;
-  }
 
   vec3 ambient = u_ambientColor * u_ambientIntensity;
   float NdotL = max(dot(normal, u_lightDirection), 0.0);
   float shadow = u_receiveShadow ? sampleShadow(v_worldPos, NdotL) : 1.0;
   vec3 diffuse = u_lightColor * u_lightIntensity * NdotL * shadow;
 
-  vec3 litColor = baseColor * (ambient + diffuse);
-  float brightness = dot(emissive, vec3(0.299, 0.587, 0.114));
-  vec3 screenEmissive = mix(emissive, vec3(brightness), clamp(brightness, 0.0, 1.0) * u_emissiveBrightness);
-  vec3 finalColor = litColor + screenEmissive;
+  vec3 finalColor = baseColor * (ambient + diffuse);
 
   fragColor = vec4(finalColor, u_opacity);
-  fragEmissive = vec4(emissive * u_opacity, u_opacity);
+  fragEmissive = vec4(0.0, 0.0, 0.0, u_opacity);
 }
 `
 
@@ -282,9 +264,8 @@ precision highp float;
 layout(location = 0) in vec3 a_position;
 layout(location = 1) in vec4 a_normal;
 layout(location = 2) in vec2 a_uv;
-layout(location = 3) in float a_materialIndex;
-layout(location = 4) in vec4 a_joints;
-layout(location = 5) in vec4 a_weights;
+layout(location = 3) in vec4 a_joints;
+layout(location = 4) in vec4 a_weights;
 
 ${FRAME_BLOCK}
 ${SKINNED_OBJECT_BLOCK}
@@ -292,7 +273,6 @@ ${SKINNED_OBJECT_BLOCK}
 out vec3 v_worldPos;
 out vec3 v_normal;
 out vec2 v_uv;
-flat out int v_materialIndex;
 flat out float v_outlineFlag;
 
 void main() {
@@ -315,10 +295,150 @@ void main() {
   v_worldPos = worldPos;
   v_normal = skinnedNorm;
   v_uv = a_uv;
-  v_materialIndex = int(a_materialIndex);
   gl_Position = u_viewProjection * vec4(worldPos, 1.0);
 }
 `
+
+// ─── Vertex-color Lambert shaders ────────────────────────────────────
+
+export const LAMBERT_VC_VERT = `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec4 a_normal;
+layout(location = 2) in vec2 a_uv;
+layout(location = 3) in vec4 a_color;
+layout(location = 6) in vec4 a_emissive;
+
+${FRAME_BLOCK}
+${OBJECT_BLOCK}
+
+out vec3 v_worldPos;
+out vec3 v_normal;
+out vec2 v_uv;
+flat out float v_outlineFlag;
+out vec4 v_color;
+out vec4 v_emissive;
+
+void main() {
+  float flag = a_normal.w;
+  v_outlineFlag = flag;
+  vec3 pos = a_position;
+  if (flag > 0.5) {
+    pos = pos + normalize(a_normal.xyz) * u_outlineColorAndThickness.w;
+  }
+  vec4 worldPos = u_worldMatrix * vec4(pos, 1.0);
+  v_worldPos = worldPos.xyz;
+  v_normal = normalize((u_normalMatrix * vec4(a_normal.xyz, 0.0)).xyz);
+  v_uv = a_uv;
+  v_color = a_color;
+  v_emissive = a_emissive;
+  gl_Position = u_viewProjection * worldPos;
+}
+`
+
+const _makeLambertVCFrag = (objectBlock: string) => `#version 300 es
+precision highp float;
+
+in vec3 v_worldPos;
+in vec3 v_normal;
+in vec2 v_uv;
+flat in float v_outlineFlag;
+in vec4 v_color;
+in vec4 v_emissive;
+
+${FRAME_BLOCK}
+${objectBlock}
+
+uniform vec3 u_baseColor;
+uniform float u_opacity;
+uniform highp sampler2DShadow u_shadowMap;
+uniform bool u_receiveShadow;
+uniform float u_emissiveBrightness;
+
+layout(location = 0) out vec4 fragColor;
+layout(location = 1) out vec4 fragEmissive;
+
+${SHADOW_FUNCTIONS}
+
+void main() {
+  if (v_outlineFlag > 0.5) {
+    if (gl_FrontFacing || u_outlineColorAndThickness.w <= 0.0) discard;
+    fragColor = vec4(u_outlineColorAndThickness.xyz, 1.0);
+    fragEmissive = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
+
+  vec3 normal = normalize(v_normal);
+  vec3 baseColor = u_baseColor * v_color.rgb;
+  vec3 emissive = v_emissive.rgb;
+
+  vec3 ambient = u_ambientColor * u_ambientIntensity;
+  float NdotL = max(dot(normal, u_lightDirection), 0.0);
+  float shadow = u_receiveShadow ? sampleShadow(v_worldPos, NdotL) : 1.0;
+  vec3 diffuse = u_lightColor * u_lightIntensity * NdotL * shadow;
+
+  vec3 litColor = baseColor * (ambient + diffuse);
+  float brightness = dot(emissive, vec3(0.299, 0.587, 0.114));
+  vec3 screenEmissive = mix(emissive, vec3(brightness), clamp(brightness, 0.0, 1.0) * u_emissiveBrightness);
+  vec3 finalColor = litColor + screenEmissive;
+
+  fragColor = vec4(finalColor, u_opacity);
+  fragEmissive = vec4(emissive * u_opacity, u_opacity);
+}
+`
+
+export const LAMBERT_VC_FRAG = _makeLambertVCFrag(OBJECT_BLOCK)
+export const LAMBERT_SKINNED_VC_FRAG = _makeLambertVCFrag(SKINNED_OBJECT_BLOCK)
+
+export const LAMBERT_SKINNED_VC_VERT = `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec4 a_normal;
+layout(location = 2) in vec2 a_uv;
+layout(location = 3) in vec4 a_color;
+layout(location = 4) in vec4 a_joints;
+layout(location = 5) in vec4 a_weights;
+layout(location = 6) in vec4 a_emissive;
+
+${FRAME_BLOCK}
+${SKINNED_OBJECT_BLOCK}
+
+out vec3 v_worldPos;
+out vec3 v_normal;
+out vec2 v_uv;
+flat out float v_outlineFlag;
+out vec4 v_color;
+out vec4 v_emissive;
+
+void main() {
+  float flag = a_normal.w;
+  v_outlineFlag = flag;
+
+  mat4 skinMatrix =
+    a_weights.x * u_boneMatrices[int(a_joints.x)] +
+    a_weights.y * u_boneMatrices[int(a_joints.y)] +
+    a_weights.z * u_boneMatrices[int(a_joints.z)] +
+    a_weights.w * u_boneMatrices[int(a_joints.w)];
+
+  vec4 skinnedPos = skinMatrix * vec4(a_position, 1.0);
+  vec3 skinnedNorm = normalize((skinMatrix * vec4(a_normal.xyz, 0.0)).xyz);
+
+  vec3 worldPos = skinnedPos.xyz;
+  if (flag > 0.5) {
+    worldPos = worldPos + skinnedNorm * u_outlineColorAndThickness.w;
+  }
+  v_worldPos = worldPos;
+  v_normal = skinnedNorm;
+  v_uv = a_uv;
+  v_color = a_color;
+  v_emissive = a_emissive;
+  gl_Position = u_viewProjection * vec4(worldPos, 1.0);
+}
+`
+
+// ─── Textured Lambert shader ─────────────────────────────────────────
 
 export const LAMBERT_TEXTURED_FRAG = `#version 300 es
 precision highp float;
@@ -326,21 +446,13 @@ precision highp float;
 in vec3 v_worldPos;
 in vec3 v_normal;
 in vec2 v_uv;
-flat in int v_materialIndex;
 flat in float v_outlineFlag;
-
-struct PaletteEntry {
-  vec4 color;    // xyz = RGB, w = opacity
-  vec4 emissive; // xyz = RGB, w = emissiveIntensity
-};
 
 ${FRAME_BLOCK}
 ${OBJECT_BLOCK}
 
 uniform vec3 u_baseColor;
 uniform float u_opacity;
-uniform bool u_hasPalette;
-uniform PaletteEntry u_palette[32];
 uniform highp sampler2DShadow u_shadowMap;
 uniform bool u_receiveShadow;
 uniform float u_emissiveBrightness;
@@ -362,18 +474,10 @@ void main() {
   }
 
   vec3 normal = normalize(v_normal);
-  vec3 baseColor = u_baseColor;
-  vec3 emissive = vec3(0.0);
-
-  if (u_hasPalette) {
-    int idx = clamp(v_materialIndex, 0, 31);
-    baseColor = u_palette[idx].color.rgb;
-    emissive = u_palette[idx].emissive.rgb * u_palette[idx].emissive.a;
-  }
 
   // Sample texture maps (dummy white textures → identity when no map assigned)
   vec3 texColor = texture(u_colorMap, v_uv).rgb;
-  baseColor *= texColor;
+  vec3 baseColor = u_baseColor * texColor;
 
   float ao = mix(1.0, texture(u_aoMap, v_uv).r, u_aoIntensity);
   vec3 ambient = u_ambientColor * u_ambientIntensity * ao;
@@ -382,13 +486,10 @@ void main() {
   float shadow = u_receiveShadow ? sampleShadow(v_worldPos, NdotL) : 1.0;
   vec3 diffuse = u_lightColor * u_lightIntensity * NdotL * shadow;
 
-  vec3 litColor = baseColor * (ambient + diffuse);
-  float brightness = dot(emissive, vec3(0.299, 0.587, 0.114));
-  vec3 screenEmissive = mix(emissive, vec3(brightness), clamp(brightness, 0.0, 1.0) * u_emissiveBrightness);
-  vec3 finalColor = litColor + screenEmissive;
+  vec3 finalColor = baseColor * (ambient + diffuse);
 
   fragColor = vec4(finalColor, u_opacity);
-  fragEmissive = vec4(emissive * u_opacity, u_opacity);
+  fragEmissive = vec4(0.0, 0.0, 0.0, u_opacity);
 }
 `
 
@@ -398,9 +499,8 @@ precision highp float;
 layout(location = 0) in vec3 a_position;
 layout(location = 1) in vec3 a_normal;
 layout(location = 2) in vec2 a_uv;
-layout(location = 3) in float a_materialIndex;
-layout(location = 4) in vec4 a_joints;
-layout(location = 5) in vec4 a_weights;
+layout(location = 3) in vec4 a_joints;
+layout(location = 4) in vec4 a_weights;
 
 ${FRAME_BLOCK}
 ${SKINNED_OBJECT_BLOCK}

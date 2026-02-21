@@ -8,7 +8,7 @@ VoidCore is a performant 3D graphics engine written in TypeScript. It supports b
 
 - **Coordinate system**: Z-up, right-handed. Forward is +Y, right is +X, up is +Z.
 - **Math**: All types are backed by typed float arrays (Float32Array by default, configurable to Float16Array via `floatPrecision` option) with a "write into output" pattern (zero allocation).
-- **Rendering**: Dual-backend (WebGPU/WebGL2), MSAA, MRT (color + emissive), single shadow map with PCF filtering, sorted alpha-blend transparency (premultiplied alpha on WebGPU), bloom post-processing, configurable DPR limiting. Texture maps (color map, AO map) on Lambert materials with KTX2/Basis Universal support — the KTX2 loader transcodes to GPU-native compressed formats (ASTC 4×4, BC7, BC3, ETC2 RGBA) when available, falling back to RGBA8. Both renderers detect supported compressed formats at init (`engine.compressedTextureFormats`). Shadow configuration (ortho box size, near/far, bias) lives on the DirectionalLight; the renderer only owns the texture resolution. Shadow baking freezes the shadow map for static scenes (`engine.shadowsBaked` / `<BakeShadows />`). Per-material face culling via `side` property (`'front'`/`'back'`/`'double'`). Single-draw-call inverted hull outlines on meshes via `outline` option (thickness + color, works with skinned meshes) — combined geometry (doubled vertices with smooth normals) drawn in one call with cullMode:none and front_facing discard in the fragment shader. Per-mesh distance culling via `maxDistance` (0 = disabled; hides mesh and its shadows when camera is farther than the specified distance; uses squared distance for zero-allocation performance).
+- **Rendering**: Dual-backend (WebGPU/WebGL2), MSAA, MRT (color + emissive), single shadow map with PCF filtering, sorted alpha-blend transparency (premultiplied alpha on WebGPU), bloom post-processing, configurable DPR limiting. Per-vertex colors via `bakePalette()` which resolves `materialIndices` + palette entries → per-vertex `colors` (unorm8x4) + `emissiveColors` (float16x4 HDR). The renderer detects `geometry.colors` and selects a vertex-color shader variant; meshes without vertex colors use `material.color` directly. Texture maps (color map, AO map) on Lambert materials with KTX2/Basis Universal support — the KTX2 loader transcodes to GPU-native compressed formats (ASTC 4×4, BC7, BC3, ETC2 RGBA) when available, falling back to RGBA8. Both renderers detect supported compressed formats at init (`engine.compressedTextureFormats`). Shadow configuration (ortho box size, near/far, bias) lives on the DirectionalLight; the renderer only owns the texture resolution. Shadow baking freezes the shadow map for static scenes (`engine.shadowsBaked` / `<BakeShadows />`). Per-material face culling via `side` property (`'front'`/`'back'`/`'double'`). Single-draw-call inverted hull outlines on meshes via `outline` option (thickness + color, works with skinned meshes) — combined geometry (doubled vertices with smooth normals) drawn in one call with cullMode:none and front_facing discard in the fragment shader. Per-mesh distance culling via `maxDistance` (0 = disabled; hides mesh and its shadows when camera is farther than the specified distance; uses squared distance for zero-allocation performance).
 - **Scheduler**: Single rAF loop with priority-ordered callbacks, global/per-callback FPS caps. Both `maxFps` and `maxDpr` can be changed dynamically at runtime.
 - **Scene graph**: Tree of Nodes with dirty-flag world matrix propagation. Transforms are set via `setPosition(x, y, z)`, `setRotation(x, y, z, w)`, `setScale(x, y, z)` / `setScale(s)` which automatically mark the node dirty. Per-component setters are also available: `setPositionX/Y/Z(v)`, `setScaleX/Y/Z(v)`. `markTransformDirty()` is available for code that writes directly to the underlying Float32Arrays (e.g., `quatFromAxisAngle`).
 - **HTML overlay**: DOM elements tracked to 3D world positions via CSS transforms. Supports node tracking with offset, centering, dirty checking, depth-based z-index, distance scaling, and per-element pointer events.
@@ -19,7 +19,7 @@ VoidCore is a performant 3D graphics engine written in TypeScript. It supports b
 Monorepo with bun workspaces. Linting (oxlint) and formatting (oxfmt) are configured at the root.
 
 ```
-packages/voidcore/       – The library package (published to npm as "voidcore")
+library/       – The library package (published to npm as "voidcore")
   src/
     engine.ts            – Main entry point, owns the scheduler and renderer
     float.ts             – Configurable float precision (Float32Array/Float16Array)
@@ -58,7 +58,7 @@ packages/voidcore/       – The library package (published to npm as "voidcore"
   tsconfig.json          – Library tsconfig (jsx: react-jsx, noEmit: true)
   tsup.config.js         – tsup build config for npm publishing
 
-examples/nextjs/         – Next.js demo app (imports voidcore from workspace)
+example/         – Next.js demo app (imports voidcore from workspace)
   pages/                 – Next.js pages
   components/            – Example-specific React components
   public/                – Static assets (draco, basis, ktx2, glb files)

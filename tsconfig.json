@@ -1,4 +1,11 @@
 {
   "files": [],
-  "references": [{ "path": "packages/voidcore" }, { "path": "examples/nextjs" }]
+  "references": [
+    {
+      "path": "library"
+    },
+    {
+      "path": "example"
+    }
+  ]
 }

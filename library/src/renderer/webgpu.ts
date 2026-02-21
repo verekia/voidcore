@@ -27,8 +27,10 @@
 //                    triggers VK_ERROR_UNKNOWN on some Android Vulkan drivers when combined
 //                    with comparison texture sampling (textureSampleCompareLevel).
 //   MRT           – Multiple render targets: color and emissive are written simultaneously.
-//   Vertex packing – Normals use snorm8x4, UVs use float16x2, bone weights use unorm8x4
-//                    to reduce vertex buffer size (~40% smaller than all-float32).
+//   Vertex colors – Meshes with baked vertex colors use separate VC pipelines.
+//                    Color (unorm8x4) and emissive (float16x4) are vertex attributes.
+//   Vertex packing – Normals use snorm8x4, UVs use float16x2, bone weights use unorm8x4,
+//                    vertex colors use unorm8x4, emissive uses float16x4.
 //
 // WebGPURenderer.create()  – Async factory that initializes the GPU device and pipelines.
 // WebGPURenderer.render()  – Draws one frame.
@@ -48,7 +50,7 @@ import {
 } from '../math/index'
 import { Mesh } from '../scene/mesh'
 import { Node } from '../scene/node'
-import { packNormalsSnorm8, packUVsFloat16, packWeightsUnorm8 } from './pack'
+import { packColorsUnorm8, packEmissiveFloat16, packNormalsSnorm8, packUVsFloat16, packWeightsUnorm8 } from './pack'
 import {
   collectMeshes,
   computeLightDir,
@@ -61,6 +63,8 @@ import {
 import { createSortState, sortMeshes } from './sort'
 import {
   LAMBERT_WGSL,
+  LAMBERT_VC_WGSL,
+  LAMBERT_SKINNED_VC_WGSL,
   LAMBERT_TEXTURED_WGSL,
   BASIC_WGSL,
   LAMBERT_SKINNED_WGSL,
@@ -73,7 +77,6 @@ import {
 } from './webgpu-shaders'
 
 import type { Geometry } from '../geometry/geometry'
-import type { PaletteEntry } from '../materials/material'
 import type { Material } from '../materials/material'
 import type { CompressedTextureFormat, Texture, TextureFormat } from '../materials/texture'
 import type { AABB, Mat4, Vec3 } from '../math/index'
@@ -105,11 +108,12 @@ interface GeoBufs {
   position: GPUBuffer
   normal: GPUBuffer
   uv: GPUBuffer
-  materialIndex: GPUBuffer
   index: GPUBuffer
   indexFormat: GPUIndexFormat
   indexCount: number
   baseIndexCount?: number
+  color?: GPUBuffer
+  emissive?: GPUBuffer
   joints?: GPUBuffer
   weights?: GPUBuffer
 }
@@ -147,8 +151,8 @@ const FRAME_UB_SIZE = 192
 const SHADOW_UB_SIZE = 64
 // ObjectUniforms: mat4(64) + mat4(64) + vec4(16) = 144 bytes
 const OBJECT_UB_SIZE = 144
-// MaterialUniforms: vec3+f32(16) + 4*f32(16) + 32*PaletteEntry(32) = 1056 bytes
-const MATERIAL_UB_SIZE = 1056
+// MaterialUniforms: vec3+f32(16) + 4*f32(16) = 32 bytes
+const MATERIAL_UB_SIZE = 32
 // Bloom down params: vec2+f32+pad(16)
 const BLOOM_DOWN_UB_SIZE = 16
 // Bloom up params: vec2+pad(16)
@@ -165,13 +169,28 @@ const VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
   { arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' as GPUVertexFormat }] },
   { arrayStride: 4, attributes: [{ shaderLocation: 1, offset: 0, format: 'snorm8x4' as GPUVertexFormat }] },
   { arrayStride: 4, attributes: [{ shaderLocation: 2, offset: 0, format: 'float16x2' as GPUVertexFormat }] },
-  { arrayStride: 4, attributes: [{ shaderLocation: 3, offset: 0, format: 'float32' as GPUVertexFormat }] },
 ]
 
 const SKINNED_VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
   ...VERTEX_BUFFER_LAYOUT,
+  { arrayStride: 4, attributes: [{ shaderLocation: 3, offset: 0, format: 'uint8x4' as GPUVertexFormat }] },
+  { arrayStride: 4, attributes: [{ shaderLocation: 4, offset: 0, format: 'unorm8x4' as GPUVertexFormat }] },
+]
+
+// Vertex-color Lambert: pos + normal + uv + color + emissive
+const VC_VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
+  ...VERTEX_BUFFER_LAYOUT,
+  { arrayStride: 4, attributes: [{ shaderLocation: 3, offset: 0, format: 'unorm8x4' as GPUVertexFormat }] },
+  { arrayStride: 8, attributes: [{ shaderLocation: 6, offset: 0, format: 'float16x4' as GPUVertexFormat }] },
+]
+
+// Vertex-color Lambert skinned: pos + normal + uv + color + joints + weights + emissive
+const VC_SKINNED_VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
+  ...VERTEX_BUFFER_LAYOUT,
+  { arrayStride: 4, attributes: [{ shaderLocation: 3, offset: 0, format: 'unorm8x4' as GPUVertexFormat }] },
   { arrayStride: 4, attributes: [{ shaderLocation: 4, offset: 0, format: 'uint8x4' as GPUVertexFormat }] },
   { arrayStride: 4, attributes: [{ shaderLocation: 5, offset: 0, format: 'unorm8x4' as GPUVertexFormat }] },
+  { arrayStride: 8, attributes: [{ shaderLocation: 6, offset: 0, format: 'float16x4' as GPUVertexFormat }] },
 ]
 
 // Shadow depth pass: position only
@@ -224,6 +243,11 @@ export class WebGPURenderer implements Renderer {
   // Textured pipeline variants
   private lambertTexturedPipeline!: GPURenderPipeline
   private lambertTexturedTransparentPipeline!: GPURenderPipeline
+  // Vertex-color pipeline variants
+  private lambertVCPipeline!: GPURenderPipeline
+  private lambertSkinnedVCPipeline!: GPURenderPipeline
+  private lambertVCTransparentPipeline!: GPURenderPipeline
+  private lambertSkinnedVCTransparentPipeline!: GPURenderPipeline
 
   // Pipeline cache for per-material side (cull mode) variants
   // Key: basePipelineId << 2 | cullModeId (0=back, 1=front, 2=none)
@@ -557,6 +581,8 @@ export class WebGPURenderer implements Renderer {
 
     // Initialize textured pipeline resources
     this._initTexturedPipelines()
+    // Initialize vertex-color pipeline variants
+    this._initVCPipelines()
   }
 
   private _initTexturedPipelines() {
@@ -633,12 +659,73 @@ export class WebGPURenderer implements Renderer {
     })
   }
 
+  private _initVCPipelines() {
+    const device = this.device
+
+    const vcModule = device.createShaderModule({ code: LAMBERT_VC_WGSL })
+    const vcSkinnedModule = device.createShaderModule({ code: LAMBERT_SKINNED_VC_WGSL })
+
+    const vcPipelineLayout = device.createPipelineLayout({
+      bindGroupLayouts: [this.frameBGL, this.materialBGL, this.objectBGL],
+    })
+    const vcSkinnedPipelineLayout = device.createPipelineLayout({
+      bindGroupLayouts: [this.frameBGL, this.materialBGL, this.skinnedObjectBGL],
+    })
+
+    const opaqueTargets: GPUColorTargetState[] = [{ format: 'rgba8unorm' }, { format: 'rgba16float' }]
+    const transparentBlend: GPUBlendState = {
+      color: { operation: 'add', srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+      alpha: { operation: 'add', srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+    }
+    const transparentTargets: GPUColorTargetState[] = [
+      { format: 'rgba8unorm', blend: transparentBlend },
+      { format: 'rgba16float', blend: transparentBlend },
+    ]
+
+    this.lambertVCPipeline = device.createRenderPipeline({
+      layout: vcPipelineLayout,
+      vertex: { module: vcModule, entryPoint: 'vs_main', buffers: VC_VERTEX_BUFFER_LAYOUT },
+      fragment: { module: vcModule, entryPoint: 'fs_main', targets: opaqueTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
+      multisample: { count: this.samples },
+    })
+
+    this.lambertSkinnedVCPipeline = device.createRenderPipeline({
+      layout: vcSkinnedPipelineLayout,
+      vertex: { module: vcSkinnedModule, entryPoint: 'vs_main', buffers: VC_SKINNED_VERTEX_BUFFER_LAYOUT },
+      fragment: { module: vcSkinnedModule, entryPoint: 'fs_main', targets: opaqueTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
+      multisample: { count: this.samples },
+    })
+
+    this.lambertVCTransparentPipeline = device.createRenderPipeline({
+      layout: vcPipelineLayout,
+      vertex: { module: vcModule, entryPoint: 'vs_main', buffers: VC_VERTEX_BUFFER_LAYOUT },
+      fragment: { module: vcModule, entryPoint: 'fs_main', targets: transparentTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+      multisample: { count: this.samples },
+    })
+
+    this.lambertSkinnedVCTransparentPipeline = device.createRenderPipeline({
+      layout: vcSkinnedPipelineLayout,
+      vertex: { module: vcSkinnedModule, entryPoint: 'vs_main', buffers: VC_SKINNED_VERTEX_BUFFER_LAYOUT },
+      fragment: { module: vcSkinnedModule, entryPoint: 'fs_main', targets: transparentTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+      multisample: { count: this.samples },
+    })
+  }
+
   /**
    * Get or create a pipeline variant with a specific cull mode.
    * Pipeline types:
    *   0=lambert, 1=basic, 2=lambertSkinned, 3=basicSkinned, 4=lambertTextured,
    *   5=lambertTransparent, 6=basicTransparent, 7=lambertSkinnedTransparent,
-   *   8=basicSkinnedTransparent, 9=lambertTexturedTransparent
+   *   8=basicSkinnedTransparent, 9=lambertTexturedTransparent,
+   *   10=lambertVC, 11=lambertSkinnedVC, 12=lambertVCTransparent, 13=lambertSkinnedVCTransparent
    * Cull modes: 0=back, 1=front, 2=none
    */
   private _getSidePipeline(pipelineType: number, cullMode: GPUCullMode): GPURenderPipeline {
@@ -648,13 +735,22 @@ export class WebGPURenderer implements Renderer {
     if (cached) return cached
 
     const device = this.device
-    const isTransparent = pipelineType >= 5
-    const isSkinned = pipelineType === 2 || pipelineType === 3 || pipelineType === 7 || pipelineType === 8
+    const isTransparent = pipelineType >= 5 && pipelineType <= 9 ? true : pipelineType === 12 || pipelineType === 13
+    const isSkinned =
+      pipelineType === 2 ||
+      pipelineType === 3 ||
+      pipelineType === 7 ||
+      pipelineType === 8 ||
+      pipelineType === 11 ||
+      pipelineType === 13
     const isTextured = pipelineType === 4 || pipelineType === 9
+    const isVC = pipelineType >= 10
 
     // Determine shader code
     let shaderCode: string
-    if (isTextured) {
+    if (isVC) {
+      shaderCode = isSkinned ? LAMBERT_SKINNED_VC_WGSL : LAMBERT_VC_WGSL
+    } else if (isTextured) {
       shaderCode = LAMBERT_TEXTURED_WGSL
     } else {
       const isLambert = pipelineType === 0 || pipelineType === 2 || pipelineType === 5 || pipelineType === 7
@@ -672,7 +768,12 @@ export class WebGPURenderer implements Renderer {
     const layout = device.createPipelineLayout({ bindGroupLayouts })
 
     // Vertex buffers
-    const buffers = isSkinned ? SKINNED_VERTEX_BUFFER_LAYOUT : VERTEX_BUFFER_LAYOUT
+    let buffers: GPUVertexBufferLayout[]
+    if (isVC) {
+      buffers = isSkinned ? VC_SKINNED_VERTEX_BUFFER_LAYOUT : VC_VERTEX_BUFFER_LAYOUT
+    } else {
+      buffers = isSkinned ? SKINNED_VERTEX_BUFFER_LAYOUT : VERTEX_BUFFER_LAYOUT
+    }
 
     // Fragment targets
     let targets: GPUColorTargetState[]
@@ -1413,22 +1514,27 @@ export class WebGPURenderer implements Renderer {
     })
     d.queue.writeBuffer(uvBuf, 0, packedUVs.buffer, packedUVs.byteOffset, packedUVs.byteLength)
 
-    // Material indices: convert Uint8 to Float32 (WebGPU has no uint8 scalar vertex format,
-    // so we can't match WebGL2's raw Uint8 upload — the smallest integer format is uint8x2)
-    let matIdxData: Float32Array
-    if (geometry.materialIndices) {
-      matIdxData = new Float32Array(geometry.materialIndices.length)
-      for (let i = 0; i < geometry.materialIndices.length; i++) {
-        matIdxData[i] = geometry.materialIndices[i]!
-      }
-    } else {
-      matIdxData = new Float32Array(geometry.vertexCount)
+    // Vertex colors (unorm8x4) and emissive (float16x4) — only for baked-palette meshes
+    let colorBuf: GPUBuffer | undefined
+    let emissiveBuf: GPUBuffer | undefined
+    if (geometry.colors) {
+      const packedColors = packColorsUnorm8(geometry.colors, geometry.vertexCount)
+      colorBuf = d.createBuffer({
+        size: Math.max(packedColors.byteLength, 4),
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      })
+      d.queue.writeBuffer(colorBuf, 0, packedColors.buffer, packedColors.byteOffset, packedColors.byteLength)
+
+      const packedEmissive = packEmissiveFloat16(
+        geometry.emissiveColors ?? new Float32Array(geometry.vertexCount * 4),
+        geometry.vertexCount,
+      )
+      emissiveBuf = d.createBuffer({
+        size: Math.max(packedEmissive.byteLength, 4),
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      })
+      d.queue.writeBuffer(emissiveBuf, 0, packedEmissive.buffer, packedEmissive.byteOffset, packedEmissive.byteLength)
     }
-    const matIdxBuf = d.createBuffer({
-      size: matIdxData.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    })
-    d.queue.writeBuffer(matIdxBuf, 0, matIdxData.buffer, matIdxData.byteOffset, matIdxData.byteLength)
 
     // Index buffer (size must be 4-byte aligned for WebGPU writeBuffer)
     const indexFormat: GPUIndexFormat = geometry.indices instanceof Uint32Array ? 'uint32' : 'uint16'
@@ -1475,8 +1581,9 @@ export class WebGPURenderer implements Renderer {
       cached.position.destroy()
       cached.normal.destroy()
       cached.uv.destroy()
-      cached.materialIndex.destroy()
       cached.index.destroy()
+      if (cached.color) cached.color.destroy()
+      if (cached.emissive) cached.emissive.destroy()
       if (cached.joints) cached.joints.destroy()
       if (cached.weights) cached.weights.destroy()
     }
@@ -1485,10 +1592,11 @@ export class WebGPURenderer implements Renderer {
       position: positionBuf,
       normal: normalBuf,
       uv: uvBuf,
-      materialIndex: matIdxBuf,
       index: indexBuf,
       indexFormat,
       indexCount: geometry.indexCount,
+      color: colorBuf,
+      emissive: emissiveBuf,
       joints: jointsBuf,
       weights: weightsBuf,
     }
@@ -1544,22 +1652,36 @@ export class WebGPURenderer implements Renderer {
     })
     d.queue.writeBuffer(uvBuf, 0, combinedUV.buffer, combinedUV.byteOffset, combinedUV.byteLength)
 
-    // Combined material indices: [original, duplicated]
-    let baseMatIdx: Float32Array
-    if (geometry.materialIndices) {
-      baseMatIdx = new Float32Array(geometry.materialIndices.length)
-      for (let i = 0; i < geometry.materialIndices.length; i++) baseMatIdx[i] = geometry.materialIndices[i]!
-    } else {
-      baseMatIdx = new Float32Array(vc)
+    // Combined vertex colors and emissive: [original, duplicated]
+    let colorBuf: GPUBuffer | undefined
+    let emissiveBuf: GPUBuffer | undefined
+    if (geometry.colors) {
+      const baseColors = packColorsUnorm8(geometry.colors, vc)
+      const combinedColors = new Uint8Array(vc * 2 * 4)
+      combinedColors.set(baseColors, 0)
+      combinedColors.set(baseColors, vc * 4)
+      colorBuf = d.createBuffer({
+        size: combinedColors.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      })
+      d.queue.writeBuffer(colorBuf, 0, combinedColors.buffer, combinedColors.byteOffset, combinedColors.byteLength)
+
+      const baseEmissive = packEmissiveFloat16(geometry.emissiveColors ?? new Float32Array(vc * 4), vc)
+      const combinedEmissive = new Uint16Array(vc * 2 * 4)
+      combinedEmissive.set(baseEmissive, 0)
+      combinedEmissive.set(baseEmissive, vc * 4)
+      emissiveBuf = d.createBuffer({
+        size: combinedEmissive.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      })
+      d.queue.writeBuffer(
+        emissiveBuf,
+        0,
+        combinedEmissive.buffer,
+        combinedEmissive.byteOffset,
+        combinedEmissive.byteLength,
+      )
     }
-    const combinedMatIdx = new Float32Array(vc * 2)
-    combinedMatIdx.set(baseMatIdx, 0)
-    combinedMatIdx.set(baseMatIdx, vc)
-    const matIdxBuf = d.createBuffer({
-      size: combinedMatIdx.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    })
-    d.queue.writeBuffer(matIdxBuf, 0, combinedMatIdx.buffer, combinedMatIdx.byteOffset, combinedMatIdx.byteLength)
 
     // Combined index buffer: [original CCW, reversed CW + vc offset]
     const use32 = vc * 2 > 65535 || geometry.indices instanceof Uint32Array
@@ -1612,8 +1734,9 @@ export class WebGPURenderer implements Renderer {
       cached.position.destroy()
       cached.normal.destroy()
       cached.uv.destroy()
-      cached.materialIndex.destroy()
       cached.index.destroy()
+      if (cached.color) cached.color.destroy()
+      if (cached.emissive) cached.emissive.destroy()
       if (cached.joints) cached.joints.destroy()
       if (cached.weights) cached.weights.destroy()
     }
@@ -1622,11 +1745,12 @@ export class WebGPURenderer implements Renderer {
       position: posBuf,
       normal: normBuf,
       uv: uvBuf,
-      materialIndex: matIdxBuf,
       index: idxBuf,
       indexFormat: use32 ? 'uint32' : 'uint16',
       indexCount: ic * 2,
       baseIndexCount: ic,
+      color: colorBuf,
+      emissive: emissiveBuf,
       joints: jointsBuf,
       weights: weightsBuf,
     }
@@ -1661,27 +1785,9 @@ export class WebGPURenderer implements Renderer {
     data[1] = material.color[1]
     data[2] = material.color[2]
     data[3] = material.opacity
-
-    const hasPalette = !!material.palette
-    data[4] = hasPalette ? 1.0 : 0.0
-    data[5] = material.receiveShadow ? 1.0 : 0.0
-    data[6] = material.aoIntensity
-    data[7] = material.emissiveBrightness
-
-    if (hasPalette && material.palette) {
-      for (let i = 0; i < 32; i++) {
-        const entry: PaletteEntry = material.palette[i] ?? { color: [1, 1, 1] }
-        const offset = 8 + i * 8
-        data[offset] = entry.color[0]
-        data[offset + 1] = entry.color[1]
-        data[offset + 2] = entry.color[2]
-        data[offset + 3] = 1.0
-        data[offset + 4] = entry.emissive?.[0] ?? 0
-        data[offset + 5] = entry.emissive?.[1] ?? 0
-        data[offset + 6] = entry.emissive?.[2] ?? 0
-        data[offset + 7] = entry.emissiveIntensity ?? 0
-      }
-    }
+    data[4] = material.receiveShadow ? 1.0 : 0.0
+    data[5] = material.aoIntensity
+    data[6] = material.emissiveBrightness
 
     this.device.queue.writeBuffer(cache.buffer, 0, data.buffer, data.byteOffset, data.byteLength)
   }
@@ -2117,10 +2223,18 @@ export class WebGPURenderer implements Renderer {
       pass.setVertexBuffer(0, geoBufs.position)
       pass.setVertexBuffer(1, geoBufs.normal)
       pass.setVertexBuffer(2, geoBufs.uv)
-      pass.setVertexBuffer(3, geoBufs.materialIndex)
-      if (mesh._isSkinned && geoBufs.joints && geoBufs.weights) {
-        pass.setVertexBuffer(4, geoBufs.joints)
-        pass.setVertexBuffer(5, geoBufs.weights)
+      if (geoBufs.color) {
+        pass.setVertexBuffer(3, geoBufs.color)
+        if (mesh._isSkinned && geoBufs.joints && geoBufs.weights) {
+          pass.setVertexBuffer(4, geoBufs.joints)
+          pass.setVertexBuffer(5, geoBufs.weights)
+          pass.setVertexBuffer(6, geoBufs.emissive!)
+        } else {
+          pass.setVertexBuffer(4, geoBufs.emissive!)
+        }
+      } else if (mesh._isSkinned && geoBufs.joints && geoBufs.weights) {
+        pass.setVertexBuffer(3, geoBufs.joints)
+        pass.setVertexBuffer(4, geoBufs.weights)
       }
       pass.setIndexBuffer(geoBufs.index, geoBufs.indexFormat)
 
@@ -2156,11 +2270,15 @@ export class WebGPURenderer implements Renderer {
       // Outlined Lambert meshes use cullMode:none (shader handles front-face discard)
       if (mesh._outlineThickness > 0 && mesh.material.type === 'lambert') cullMode = 'none'
 
+      const hasVC = !!mesh.geometry.colors && mesh.material.type === 'lambert'
+
       let pipeline: GPURenderPipeline
       if (cullMode !== 'back') {
         // Non-default cull mode: use lazy pipeline cache
         let pipelineType: number
-        if (mesh._isSkinned) {
+        if (hasVC) {
+          pipelineType = mesh._isSkinned ? 11 : 10
+        } else if (mesh._isSkinned) {
           pipelineType = mesh.material.type === 'lambert' ? 2 : 3
         } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
           pipelineType = 4
@@ -2170,7 +2288,9 @@ export class WebGPURenderer implements Renderer {
         pipeline = this._getSidePipeline(pipelineType, cullMode)
       } else {
         // Default cull mode: use existing pipelines (fast path)
-        if (mesh._isSkinned) {
+        if (hasVC) {
+          pipeline = mesh._isSkinned ? this.lambertSkinnedVCPipeline : this.lambertVCPipeline
+        } else if (mesh._isSkinned) {
           pipeline = mesh.material.type === 'lambert' ? this.lambertSkinnedPipeline : this.basicSkinnedPipeline
         } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
           pipeline = this.lambertTexturedPipeline
@@ -2178,7 +2298,7 @@ export class WebGPURenderer implements Renderer {
           pipeline = mesh.material.type === 'lambert' ? this.lambertPipeline : this.basicPipeline
         }
       }
-      if (mesh.material._hasTextures && !mesh._isSkinned) {
+      if (mesh.material._hasTextures && !mesh._isSkinned && !hasVC) {
         scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))
       }
       drawMeshGPU(scenePass, mesh, pipeline)
@@ -2195,11 +2315,15 @@ export class WebGPURenderer implements Renderer {
       // Outlined Lambert meshes use cullMode:none (shader handles front-face discard)
       if (mesh._outlineThickness > 0 && mesh.material.type === 'lambert') cullMode = 'none'
 
+      const hasVC = !!mesh.geometry.colors && mesh.material.type === 'lambert'
+
       let pipeline: GPURenderPipeline
       if (cullMode !== 'none') {
         // Non-default cull mode for transparent: use lazy pipeline cache
         let pipelineType: number
-        if (mesh._isSkinned) {
+        if (hasVC) {
+          pipelineType = mesh._isSkinned ? 13 : 12
+        } else if (mesh._isSkinned) {
           pipelineType = mesh.material.type === 'lambert' ? 7 : 8
         } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
           pipelineType = 9
@@ -2209,7 +2333,9 @@ export class WebGPURenderer implements Renderer {
         pipeline = this._getSidePipeline(pipelineType, cullMode)
       } else {
         // Default cull mode for transparent: use existing pipelines (fast path)
-        if (mesh._isSkinned) {
+        if (hasVC) {
+          pipeline = mesh._isSkinned ? this.lambertSkinnedVCTransparentPipeline : this.lambertVCTransparentPipeline
+        } else if (mesh._isSkinned) {
           pipeline =
             mesh.material.type === 'lambert'
               ? this.lambertSkinnedTransparentPipeline
@@ -2220,7 +2346,7 @@ export class WebGPURenderer implements Renderer {
           pipeline = mesh.material.type === 'lambert' ? this.lambertTransparentPipeline : this.basicTransparentPipeline
         }
       }
-      if (mesh.material._hasTextures && !mesh._isSkinned) {
+      if (mesh.material._hasTextures && !mesh._isSkinned && !hasVC) {
         scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))
       }
       drawMeshGPU(scenePass, mesh, pipeline)

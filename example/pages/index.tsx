@@ -22,7 +22,7 @@ useGLTF.preload(playerBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
-const CHARACTER_COUNT = 800
+const CHARACTER_COUNT = 400
 
 // ─── Page ───────────────────────────────────────────────────────────────────
 

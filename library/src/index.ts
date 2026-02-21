@@ -20,7 +20,13 @@ export { AmbientLight, type AmbientLightOptions, DirectionalLight, type Directio
 export { cloneScene, type CloneOptions, type CloneResult } from './scene/clone'
 
 // Geometry
-export { Geometry, mergeGeometries, computeSmoothNormals } from './geometry/geometry'
+export {
+  Geometry,
+  bakePalette,
+  mergeGeometries,
+  mergeStaticIntoSkinned,
+  computeSmoothNormals,
+} from './geometry/geometry'
 export {
   PlaneGeometry,
   BoxGeometry,
@@ -32,7 +38,7 @@ export {
 } from './geometry/primitives'
 
 // Materials
-export { BasicMaterial, LambertMaterial, Material, type MaterialSide } from './materials/material'
+export { BasicMaterial, LambertMaterial, Material, type MaterialSide, type PaletteEntry } from './materials/material'
 export { Texture, type CompressedTextureFormat, type TextureFormat } from './materials/texture'
 
 // Controls

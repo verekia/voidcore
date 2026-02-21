@@ -29,9 +29,9 @@
 //   - Clip space depth is [-1, 1] instead of WebGPU's [0, 1]
 //   - Shadow uses mat4Ortho ([-1,1] depth) instead of mat4OrthoZO ([0,1] depth)
 //
-// Vertex packing: normals → snorm8, UVs → float16, material indices → uint8,
-// joints → uint8, bone weights → unorm8. This reduces vertex buffer size by ~50%
-// compared to using float32 for everything.
+// Vertex packing: normals → snorm8, UVs → float16, vertex colors → unorm8,
+// emissive → float16, joints → uint8, bone weights → unorm8. Meshes with
+// baked vertex colors use separate VC shader programs.
 //
 // WebGLRenderer.render()  – Draws one frame.
 // WebGLRenderer.dispose() – Releases all GPU resources.
@@ -50,7 +50,7 @@ import {
 } from '../math/index'
 import { Mesh } from '../scene/mesh'
 import { Node } from '../scene/node'
-import { packNormalsSnorm8, packUVsFloat16, packWeightsUnorm8 } from './pack'
+import { packColorsUnorm8, packEmissiveFloat16, packNormalsSnorm8, packUVsFloat16, packWeightsUnorm8 } from './pack'
 import {
   collectMeshes,
   computeLightDir,
@@ -64,7 +64,11 @@ import { createSortState, sortMeshes } from './sort'
 import {
   LAMBERT_VERT,
   LAMBERT_FRAG,
+  LAMBERT_VC_VERT,
+  LAMBERT_VC_FRAG,
   LAMBERT_SKINNED_FRAG,
+  LAMBERT_SKINNED_VC_VERT,
+  LAMBERT_SKINNED_VC_FRAG,
   LAMBERT_TEXTURED_FRAG,
   LAMBERT_SKINNED_VERT,
   BASIC_VERT,
@@ -80,7 +84,7 @@ import {
 } from './webgl-shaders'
 
 import type { Geometry } from '../geometry/geometry'
-import type { Material, PaletteEntry } from '../materials/material'
+import type { Material } from '../materials/material'
 import type { CompressedTextureFormat, Texture, TextureFormat } from '../materials/texture'
 import type { AABB, Mat4, Vec3 } from '../math/index'
 import type { PerspectiveCamera } from '../scene/camera'
@@ -97,7 +101,7 @@ interface GPUBuffers {
   index: WebGLBuffer
   uv?: WebGLBuffer
   color?: WebGLBuffer
-  materialIndex?: WebGLBuffer
+  emissive?: WebGLBuffer
   joints?: WebGLBuffer
   weights?: WebGLBuffer
   vao?: WebGLVertexArrayObject
@@ -146,9 +150,6 @@ const createProgram = (gl: WebGL2RenderingContext, vertSrc: string, fragSrc: str
 interface SceneUniformLocs {
   u_baseColor: WebGLUniformLocation | null
   u_opacity: WebGLUniformLocation | null
-  u_hasPalette: WebGLUniformLocation | null
-  u_paletteColor: (WebGLUniformLocation | null)[]
-  u_paletteEmissive: (WebGLUniformLocation | null)[]
   u_shadowMap: WebGLUniformLocation | null
   u_receiveShadow: WebGLUniformLocation | null
   u_emissiveBrightness: WebGLUniformLocation | null
@@ -169,27 +170,16 @@ interface BlitUniformLocs {
   u_bloomIntensity: WebGLUniformLocation | null
 }
 
-const cacheSceneLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): SceneUniformLocs => {
-  const paletteColor: (WebGLUniformLocation | null)[] = []
-  const paletteEmissive: (WebGLUniformLocation | null)[] = []
-  for (let i = 0; i < 32; i++) {
-    paletteColor.push(gl.getUniformLocation(program, `u_palette[${i}].color`))
-    paletteEmissive.push(gl.getUniformLocation(program, `u_palette[${i}].emissive`))
-  }
-  return {
-    u_baseColor: gl.getUniformLocation(program, 'u_baseColor'),
-    u_opacity: gl.getUniformLocation(program, 'u_opacity'),
-    u_hasPalette: gl.getUniformLocation(program, 'u_hasPalette'),
-    u_paletteColor: paletteColor,
-    u_paletteEmissive: paletteEmissive,
-    u_shadowMap: gl.getUniformLocation(program, 'u_shadowMap'),
-    u_receiveShadow: gl.getUniformLocation(program, 'u_receiveShadow'),
-    u_emissiveBrightness: gl.getUniformLocation(program, 'u_emissiveBrightness'),
-    u_colorMap: gl.getUniformLocation(program, 'u_colorMap'),
-    u_aoMap: gl.getUniformLocation(program, 'u_aoMap'),
-    u_aoIntensity: gl.getUniformLocation(program, 'u_aoIntensity'),
-  }
-}
+const cacheSceneLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): SceneUniformLocs => ({
+  u_baseColor: gl.getUniformLocation(program, 'u_baseColor'),
+  u_opacity: gl.getUniformLocation(program, 'u_opacity'),
+  u_shadowMap: gl.getUniformLocation(program, 'u_shadowMap'),
+  u_receiveShadow: gl.getUniformLocation(program, 'u_receiveShadow'),
+  u_emissiveBrightness: gl.getUniformLocation(program, 'u_emissiveBrightness'),
+  u_colorMap: gl.getUniformLocation(program, 'u_colorMap'),
+  u_aoMap: gl.getUniformLocation(program, 'u_aoMap'),
+  u_aoIntensity: gl.getUniformLocation(program, 'u_aoIntensity'),
+})
 
 const cachePostLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): PostUniformLocs => ({
   u_srcTexture: gl.getUniformLocation(program, 'u_srcTexture'),
@@ -247,12 +237,21 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
     gl.bufferData(gl.ARRAY_BUFFER, packUVsFloat16(geometry.uvs), gl.STATIC_DRAW)
   }
 
-  // Material index — upload Uint8Array directly (no Float32 conversion needed)
-  let matIdxBuffer: WebGLBuffer | undefined
-  if (geometry.materialIndices) {
-    matIdxBuffer = gl.createBuffer()!
-    gl.bindBuffer(gl.ARRAY_BUFFER, matIdxBuffer)
-    gl.bufferData(gl.ARRAY_BUFFER, geometry.materialIndices, gl.STATIC_DRAW)
+  // Vertex colors (unorm8x4) and emissive (float16x4) — only for baked-palette meshes
+  let colorBuffer: WebGLBuffer | undefined
+  let emissiveBuffer: WebGLBuffer | undefined
+  if (geometry.colors) {
+    colorBuffer = gl.createBuffer()!
+    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer)
+    gl.bufferData(gl.ARRAY_BUFFER, packColorsUnorm8(geometry.colors, geometry.vertexCount), gl.STATIC_DRAW)
+
+    emissiveBuffer = gl.createBuffer()!
+    gl.bindBuffer(gl.ARRAY_BUFFER, emissiveBuffer)
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      packEmissiveFloat16(geometry.emissiveColors ?? new Float32Array(geometry.vertexCount * 4), geometry.vertexCount),
+      gl.STATIC_DRAW,
+    )
   }
 
   // Joints buffer — upload Uint8Array directly (no Float32 conversion needed)
@@ -293,32 +292,56 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
     gl.vertexAttribPointer(2, 2, gl.HALF_FLOAT, false, 0, 0)
   }
 
-  // Material index (location 3) — uint8 not normalized: byte value N becomes float N.0
-  if (matIdxBuffer) {
-    gl.bindBuffer(gl.ARRAY_BUFFER, matIdxBuffer)
+  // Vertex color meshes: color@3, joints@4, weights@5, emissive@6
+  // Non-VC meshes: joints@3, weights@4
+  const hasVC = !!colorBuffer
+  if (hasVC) {
+    // Color (location 3) — unorm8x4
+    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer!)
     gl.enableVertexAttribArray(3)
-    gl.vertexAttribPointer(3, 1, gl.UNSIGNED_BYTE, false, 1, 0)
+    gl.vertexAttribPointer(3, 4, gl.UNSIGNED_BYTE, true, 0, 0)
+
+    if (jointsBuffer) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, jointsBuffer)
+      gl.enableVertexAttribArray(4)
+      gl.vertexAttribPointer(4, 4, gl.UNSIGNED_BYTE, false, 0, 0)
+    } else {
+      gl.disableVertexAttribArray(4)
+    }
+
+    if (weightsBuffer) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, weightsBuffer)
+      gl.enableVertexAttribArray(5)
+      gl.vertexAttribPointer(5, 4, gl.UNSIGNED_BYTE, true, 0, 0)
+    } else {
+      gl.disableVertexAttribArray(5)
+    }
+
+    // Emissive (location 6) — float16x4
+    gl.bindBuffer(gl.ARRAY_BUFFER, emissiveBuffer!)
+    gl.enableVertexAttribArray(6)
+    gl.vertexAttribPointer(6, 4, gl.HALF_FLOAT, false, 0, 0)
   } else {
     gl.disableVertexAttribArray(3)
-    gl.vertexAttrib1f(3, 0.0)
-  }
 
-  // Joints (location 4) — uint8 not normalized: byte value N becomes float N.0
-  if (jointsBuffer) {
-    gl.bindBuffer(gl.ARRAY_BUFFER, jointsBuffer)
-    gl.enableVertexAttribArray(4)
-    gl.vertexAttribPointer(4, 4, gl.UNSIGNED_BYTE, false, 0, 0)
-  } else {
-    gl.disableVertexAttribArray(4)
-  }
+    // Joints (location 3) — uint8 not normalized
+    if (jointsBuffer) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, jointsBuffer)
+      gl.enableVertexAttribArray(3)
+      gl.vertexAttribPointer(3, 4, gl.UNSIGNED_BYTE, false, 0, 0)
+    }
 
-  // Weights (location 5) — unorm8x4: UNSIGNED_BYTE normalized, GPU maps [0,255]→[0.0,1.0]
-  if (weightsBuffer) {
-    gl.bindBuffer(gl.ARRAY_BUFFER, weightsBuffer)
-    gl.enableVertexAttribArray(5)
-    gl.vertexAttribPointer(5, 4, gl.UNSIGNED_BYTE, true, 0, 0)
-  } else {
+    // Weights (location 4) — unorm8x4
+    if (weightsBuffer) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, weightsBuffer)
+      gl.enableVertexAttribArray(4)
+      gl.vertexAttribPointer(4, 4, gl.UNSIGNED_BYTE, true, 0, 0)
+    } else {
+      gl.disableVertexAttribArray(4)
+    }
+
     gl.disableVertexAttribArray(5)
+    gl.disableVertexAttribArray(6)
   }
 
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuffer)
@@ -329,7 +352,8 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
     normal: normBuffer,
     index: idxBuffer,
     uv: uvBuffer,
-    materialIndex: matIdxBuffer,
+    color: colorBuffer,
+    emissive: emissiveBuffer,
     joints: jointsBuffer,
     weights: weightsBuffer,
     vao,
@@ -387,15 +411,25 @@ const ensureOutlineGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry)
     gl.bufferData(gl.ARRAY_BUFFER, combinedUV, gl.STATIC_DRAW)
   }
 
-  // Combined material indices: [original, duplicated]
-  let matIdxBuf: WebGLBuffer | undefined
-  if (geometry.materialIndices) {
-    const combinedMatIdx = new Uint8Array(vc * 2)
-    combinedMatIdx.set(geometry.materialIndices, 0)
-    combinedMatIdx.set(geometry.materialIndices, vc)
-    matIdxBuf = gl.createBuffer()!
-    gl.bindBuffer(gl.ARRAY_BUFFER, matIdxBuf)
-    gl.bufferData(gl.ARRAY_BUFFER, combinedMatIdx, gl.STATIC_DRAW)
+  // Combined vertex colors and emissive: [original, duplicated]
+  let colorBuf: WebGLBuffer | undefined
+  let emissiveBuf: WebGLBuffer | undefined
+  if (geometry.colors) {
+    const baseColors = packColorsUnorm8(geometry.colors, vc)
+    const combinedColors = new Uint8Array(vc * 2 * 4)
+    combinedColors.set(baseColors, 0)
+    combinedColors.set(baseColors, vc * 4)
+    colorBuf = gl.createBuffer()!
+    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuf)
+    gl.bufferData(gl.ARRAY_BUFFER, combinedColors, gl.STATIC_DRAW)
+
+    const baseEmissive = packEmissiveFloat16(geometry.emissiveColors ?? new Float32Array(vc * 4), vc)
+    const combinedEmissive = new Uint16Array(vc * 2 * 4)
+    combinedEmissive.set(baseEmissive, 0)
+    combinedEmissive.set(baseEmissive, vc * 4)
+    emissiveBuf = gl.createBuffer()!
+    gl.bindBuffer(gl.ARRAY_BUFFER, emissiveBuf)
+    gl.bufferData(gl.ARRAY_BUFFER, combinedEmissive, gl.STATIC_DRAW)
   }
 
   // Combined joints + weights for skinned meshes
@@ -455,32 +489,52 @@ const ensureOutlineGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry)
     gl.disableVertexAttribArray(2)
   }
 
-  // Material index (location 3)
-  if (matIdxBuf) {
-    gl.bindBuffer(gl.ARRAY_BUFFER, matIdxBuf)
+  // Vertex color meshes: color@3, joints@4, weights@5, emissive@6
+  // Non-VC meshes: joints@3, weights@4
+  const hasVC = !!colorBuf
+  if (hasVC) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuf!)
     gl.enableVertexAttribArray(3)
-    gl.vertexAttribPointer(3, 1, gl.UNSIGNED_BYTE, false, 1, 0)
+    gl.vertexAttribPointer(3, 4, gl.UNSIGNED_BYTE, true, 0, 0)
+
+    if (jointsBuf) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, jointsBuf)
+      gl.enableVertexAttribArray(4)
+      gl.vertexAttribPointer(4, 4, gl.UNSIGNED_BYTE, false, 0, 0)
+    } else {
+      gl.disableVertexAttribArray(4)
+    }
+
+    if (weightsBuf) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, weightsBuf)
+      gl.enableVertexAttribArray(5)
+      gl.vertexAttribPointer(5, 4, gl.UNSIGNED_BYTE, true, 0, 0)
+    } else {
+      gl.disableVertexAttribArray(5)
+    }
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, emissiveBuf!)
+    gl.enableVertexAttribArray(6)
+    gl.vertexAttribPointer(6, 4, gl.HALF_FLOAT, false, 0, 0)
   } else {
     gl.disableVertexAttribArray(3)
-    gl.vertexAttrib1f(3, 0.0)
-  }
 
-  // Joints (location 4)
-  if (jointsBuf) {
-    gl.bindBuffer(gl.ARRAY_BUFFER, jointsBuf)
-    gl.enableVertexAttribArray(4)
-    gl.vertexAttribPointer(4, 4, gl.UNSIGNED_BYTE, false, 0, 0)
-  } else {
-    gl.disableVertexAttribArray(4)
-  }
+    if (jointsBuf) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, jointsBuf)
+      gl.enableVertexAttribArray(3)
+      gl.vertexAttribPointer(3, 4, gl.UNSIGNED_BYTE, false, 0, 0)
+    }
 
-  // Weights (location 5)
-  if (weightsBuf) {
-    gl.bindBuffer(gl.ARRAY_BUFFER, weightsBuf)
-    gl.enableVertexAttribArray(5)
-    gl.vertexAttribPointer(5, 4, gl.UNSIGNED_BYTE, true, 0, 0)
-  } else {
+    if (weightsBuf) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, weightsBuf)
+      gl.enableVertexAttribArray(4)
+      gl.vertexAttribPointer(4, 4, gl.UNSIGNED_BYTE, true, 0, 0)
+    } else {
+      gl.disableVertexAttribArray(4)
+    }
+
     gl.disableVertexAttribArray(5)
+    gl.disableVertexAttribArray(6)
   }
 
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf)
@@ -663,9 +717,11 @@ export class WebGLRenderer implements Renderer {
   }
 
   private lambertProgram: WebGLProgram
+  private lambertVCProgram: WebGLProgram
   private lambertTexturedProgram: WebGLProgram
   private basicProgram: WebGLProgram
   private lambertSkinnedProgram: WebGLProgram
+  private lambertSkinnedVCProgram: WebGLProgram
   private basicSkinnedProgram: WebGLProgram
   private shadowDepthProgram: WebGLProgram
   private shadowDepthSkinnedProgram: WebGLProgram
@@ -675,9 +731,11 @@ export class WebGLRenderer implements Renderer {
 
   // Cached uniform locations
   private _lambertLocs!: SceneUniformLocs
+  private _lambertVCLocs!: SceneUniformLocs
   private _lambertTexturedLocs!: SceneUniformLocs
   private _basicLocs!: SceneUniformLocs
   private _lambertSkinnedLocs!: SceneUniformLocs
+  private _lambertSkinnedVCLocs!: SceneUniformLocs
   private _basicSkinnedLocs!: SceneUniformLocs
 
   // Texture map cache
@@ -838,9 +896,11 @@ export class WebGLRenderer implements Renderer {
 
     // Compile programs
     this.lambertProgram = createProgram(gl, LAMBERT_VERT, LAMBERT_FRAG)
+    this.lambertVCProgram = createProgram(gl, LAMBERT_VC_VERT, LAMBERT_VC_FRAG)
     this.lambertTexturedProgram = createProgram(gl, LAMBERT_VERT, LAMBERT_TEXTURED_FRAG)
     this.basicProgram = createProgram(gl, BASIC_VERT, BASIC_FRAG)
     this.lambertSkinnedProgram = createProgram(gl, LAMBERT_SKINNED_VERT, LAMBERT_SKINNED_FRAG)
+    this.lambertSkinnedVCProgram = createProgram(gl, LAMBERT_SKINNED_VC_VERT, LAMBERT_SKINNED_VC_FRAG)
     this.basicSkinnedProgram = createProgram(gl, BASIC_SKINNED_VERT, BASIC_FRAG)
     this.shadowDepthProgram = createProgram(gl, SHADOW_DEPTH_VERT, SHADOW_DEPTH_FRAG)
     this.shadowDepthSkinnedProgram = createProgram(gl, SHADOW_DEPTH_SKINNED_VERT, SHADOW_DEPTH_FRAG)
@@ -850,9 +910,11 @@ export class WebGLRenderer implements Renderer {
 
     // Cache uniform locations
     this._lambertLocs = cacheSceneLocs(gl, this.lambertProgram)
+    this._lambertVCLocs = cacheSceneLocs(gl, this.lambertVCProgram)
     this._lambertTexturedLocs = cacheSceneLocs(gl, this.lambertTexturedProgram)
     this._basicLocs = cacheSceneLocs(gl, this.basicProgram)
     this._lambertSkinnedLocs = cacheSceneLocs(gl, this.lambertSkinnedProgram)
+    this._lambertSkinnedVCLocs = cacheSceneLocs(gl, this.lambertSkinnedVCProgram)
     this._basicSkinnedLocs = cacheSceneLocs(gl, this.basicSkinnedProgram)
     this._bloomDownLocs = cachePostLocs(gl, this.bloomDownsampleProgram)
     this._bloomUpLocs = cachePostLocs(gl, this.bloomUpsampleProgram)
@@ -879,9 +941,11 @@ export class WebGLRenderer implements Renderer {
 
     // Bind UBO block indices for all scene programs (done once at init)
     this._bindUBOBlocks(this.lambertProgram, false)
+    this._bindUBOBlocks(this.lambertVCProgram, false)
     this._bindUBOBlocks(this.lambertTexturedProgram, false)
     this._bindUBOBlocks(this.basicProgram, false)
     this._bindUBOBlocks(this.lambertSkinnedProgram, true)
+    this._bindUBOBlocks(this.lambertSkinnedVCProgram, true)
     this._bindUBOBlocks(this.basicSkinnedProgram, true)
     // Shadow UBO (binding 2, 64 bytes = mat4)
     this._shadowUBO = gl.createBuffer()!
@@ -1585,23 +1649,8 @@ export class WebGLRenderer implements Renderer {
         gl.uniform3fv(locs.u_baseColor, mesh.material.color)
         gl.uniform1f(locs.u_opacity, mesh.material.opacity)
         if (mesh.material.type === 'lambert') {
-          const hasPalette = !!mesh.material.palette && mesh.geometry.hasAttribute('materialIndex')
-          gl.uniform1i(locs.u_hasPalette, hasPalette ? 1 : 0)
           gl.uniform1i(locs.u_receiveShadow, mesh.material.receiveShadow ? 1 : 0)
           gl.uniform1f(locs.u_emissiveBrightness, mesh.material.emissiveBrightness)
-          if (hasPalette && mesh.material.palette) {
-            for (let i = 0; i < 32; i++) {
-              const entry: PaletteEntry = mesh.material.palette[i] ?? { color: [1, 1, 1] }
-              gl.uniform4f(locs.u_paletteColor[i]!, entry.color[0], entry.color[1], entry.color[2], 1.0)
-              gl.uniform4f(
-                locs.u_paletteEmissive[i]!,
-                entry.emissive?.[0] ?? 0,
-                entry.emissive?.[1] ?? 0,
-                entry.emissive?.[2] ?? 0,
-                entry.emissiveIntensity ?? 0,
-              )
-            }
-          }
         }
       }
 
@@ -1631,13 +1680,22 @@ export class WebGLRenderer implements Renderer {
     for (let si = 0; si < transparentStart; si++) {
       const mesh = meshes[sortedIndices[si]!]!
       const isOutlined = mesh._outlineThickness > 0 && mesh.material.type === 'lambert'
+      const hasVC = !!mesh.geometry.colors && mesh.material.type === 'lambert'
 
       // Apply material side (cull mode), considering outlines
       applySide(mesh.material.side, isOutlined)
 
       let program: WebGLProgram
       let locs: SceneUniformLocs
-      if (mesh._isSkinned) {
+      if (hasVC) {
+        if (mesh._isSkinned) {
+          program = this.lambertSkinnedVCProgram
+          locs = this._lambertSkinnedVCLocs
+        } else {
+          program = this.lambertVCProgram
+          locs = this._lambertVCLocs
+        }
+      } else if (mesh._isSkinned) {
         if (mesh.material.type === 'lambert') {
           program = this.lambertSkinnedProgram
           locs = this._lambertSkinnedLocs
@@ -1662,7 +1720,7 @@ export class WebGLRenderer implements Renderer {
       if (programChanged && mesh.material.type === 'lambert') {
         gl.uniform1i(locs.u_shadowMap, 2)
       }
-      if (mesh.material._hasTextures && !mesh._isSkinned) {
+      if (mesh.material._hasTextures && !mesh._isSkinned && !hasVC) {
         this._bindMaterialTextures(mesh.material, locs)
       }
 
@@ -1682,13 +1740,22 @@ export class WebGLRenderer implements Renderer {
       for (let si = transparentStart; si < meshes.length; si++) {
         const mesh = meshes[sortedIndices[si]!]!
         const isOutlined = mesh._outlineThickness > 0 && mesh.material.type === 'lambert'
+        const hasVC = !!mesh.geometry.colors && mesh.material.type === 'lambert'
 
         // Apply material side (cull mode), considering outlines
         applySide(mesh.material.side, isOutlined)
 
         let program: WebGLProgram
         let locs: SceneUniformLocs
-        if (mesh._isSkinned) {
+        if (hasVC) {
+          if (mesh._isSkinned) {
+            program = this.lambertSkinnedVCProgram
+            locs = this._lambertSkinnedVCLocs
+          } else {
+            program = this.lambertVCProgram
+            locs = this._lambertVCLocs
+          }
+        } else if (mesh._isSkinned) {
           if (mesh.material.type === 'lambert') {
             program = this.lambertSkinnedProgram
             locs = this._lambertSkinnedLocs
@@ -1713,7 +1780,7 @@ export class WebGLRenderer implements Renderer {
         if (programChanged && mesh.material.type === 'lambert') {
           gl.uniform1i(locs.u_shadowMap, 2)
         }
-        if (mesh.material._hasTextures && !mesh._isSkinned) {
+        if (mesh.material._hasTextures && !mesh._isSkinned && !hasVC) {
           this._bindMaterialTextures(mesh.material, locs)
         }
 
@@ -1840,9 +1907,11 @@ export class WebGLRenderer implements Renderer {
     gl.deleteTexture(this._shadowTexture)
     gl.deleteFramebuffer(this._shadowFbo)
     gl.deleteProgram(this.lambertProgram)
+    gl.deleteProgram(this.lambertVCProgram)
     gl.deleteProgram(this.lambertTexturedProgram)
     gl.deleteProgram(this.basicProgram)
     gl.deleteProgram(this.lambertSkinnedProgram)
+    gl.deleteProgram(this.lambertSkinnedVCProgram)
     gl.deleteProgram(this.basicSkinnedProgram)
     gl.deleteProgram(this.shadowDepthProgram)
     gl.deleteProgram(this.shadowDepthSkinnedProgram)
