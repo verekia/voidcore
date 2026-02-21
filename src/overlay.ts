@@ -75,7 +75,7 @@ const _vpMatrix: Mat4 = mat4Create()
 
 const projectToScreen = (
   worldPos: Vec3,
-  vpMatrix: Float32Array,
+  vpMatrix: Mat4,
   canvasWidth: number,
   canvasHeight: number,
 ): { x: number; y: number; depth: number; visible: boolean } => {

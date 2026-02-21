@@ -7,7 +7,7 @@ VoidCore is a performant 3D graphics engine written in TypeScript. It supports b
 ## Architecture
 
 - **Coordinate system**: Z-up, right-handed. Forward is +Y, right is +X, up is +Z.
-- **Math**: All types are Float32Array-backed with a "write into output" pattern (zero allocation).
+- **Math**: All types are backed by typed float arrays (Float32Array by default, configurable to Float16Array via `floatPrecision` option) with a "write into output" pattern (zero allocation).
 - **Rendering**: Dual-backend (WebGPU/WebGL2), MSAA, MRT (color + emissive), single shadow map with PCF filtering, sorted alpha-blend transparency (premultiplied alpha on WebGPU), bloom post-processing, configurable DPR limiting. Texture maps (color map, AO map) on Lambert materials with KTX2/Basis Universal support. Shadow configuration (ortho box size, near/far, bias) lives on the DirectionalLight; the renderer only owns the texture resolution. Shadow baking freezes the shadow map for static scenes (`engine.shadowsBaked` / `<BakeShadows />`).
 - **Scheduler**: Single rAF loop with priority-ordered callbacks, global/per-callback FPS caps. Both `maxFps` and `maxDpr` can be changed dynamically at runtime.
 - **Scene graph**: Tree of Nodes with dirty-flag world matrix propagation. Transforms are set via `setPosition(x, y, z)`, `setRotation(x, y, z, w)`, `setScale(x, y, z)` / `setScale(s)` which automatically mark the node dirty. Per-component setters are also available: `setPositionX/Y/Z(v)`, `setScaleX/Y/Z(v)`. `markTransformDirty()` is available for code that writes directly to the underlying Float32Arrays (e.g., `quatFromAxisAngle`).
@@ -19,6 +19,7 @@ VoidCore is a performant 3D graphics engine written in TypeScript. It supports b
 ```
 src/
   engine.ts              – Main entry point, owns the scheduler and renderer
+  float.ts               – Configurable float precision (Float32Array/Float16Array)
   scheduler.ts           – Priority-based rAF loop with FPS throttling
   index.ts               – Public API barrel export
   animation/             – Skeletal animation (clips, mixer, skeleton)

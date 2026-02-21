@@ -22,6 +22,7 @@
 // node.lookAt()  – Orients the node to face a target point (Z-up convention).
 // updateWorldMatrices() – Recursively recomputes world matrices for dirty nodes.
 
+import { createFloatArrayFrom } from '../float'
 import { mat4Compose, mat4Copy, mat4Create, mat4Multiply, quatCreate, vec3Create } from '../math/index'
 
 import type { Mat4, Quat, Vec3 } from '../math/index'
@@ -29,7 +30,7 @@ import type { Mat4, Quat, Vec3 } from '../math/index'
 export type NodeType = 'group' | 'mesh' | 'camera' | 'directionalLight' | 'ambientLight'
 
 // Scratch for lookAt — avoids per-call allocation
-const _lookAtFwd = new Float32Array(3)
+const _lookAtFwd = vec3Create()
 
 export class Node {
   name = ''
@@ -37,7 +38,7 @@ export class Node {
 
   position: Vec3 = vec3Create()
   rotation: Quat = quatCreate()
-  scale: Vec3 = new Float32Array([1, 1, 1])
+  scale: Vec3 = createFloatArrayFrom([1, 1, 1])
 
   parent: Node | null = null
   children: Node[] = []

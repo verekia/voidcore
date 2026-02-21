@@ -20,7 +20,7 @@ A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 sup
 - **Priority scheduler** – Single rAF loop with priority-ordered callbacks and FPS capping
 - **HTML overlay** – DOM elements tracking 3D world positions with dirty checking, depth z-index, distance scaling
 - **Orbit controls** – Mouse/touch camera controls with damping and inertia
-- **Zero-allocation math** – Float32Array-backed vectors, matrices, and quaternions
+- **Zero-allocation math** – Float32Array-backed vectors, matrices, and quaternions (configurable to Float16Array via `floatPrecision` option)
 - **Z-up coordinate system** – Right-handed, Z-up convention throughout
 
 ## Quick Start

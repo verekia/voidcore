@@ -1,8 +1,9 @@
 // Math – Linear algebra primitives for 3D graphics (vectors, matrices, quaternions).
 //
-// All types are backed by Float32Array for direct GPU upload with zero copying. Functions
-// follow a "write into output" pattern (e.g. vec3Add(out, a, b)) to avoid allocating new
-// arrays every frame, which is critical for performance in a render loop.
+// All types are backed by typed float arrays (Float32Array or Float16Array depending on the
+// engine's floatPrecision setting) for direct GPU upload with zero copying. Functions follow
+// a "write into output" pattern (e.g. vec3Add(out, a, b)) to avoid allocating new arrays
+// every frame, which is critical for performance in a render loop.
 //
 // Coordinate system: Z-up, right-handed. Forward is +Y, right is +X, up is +Z.
 //
@@ -17,14 +18,16 @@
 // AABB  – Axis-aligned bounding box [minX,minY,minZ, maxX,maxY,maxZ] for culling/raycasting.
 // Frustum – Six clip planes extracted from the view-projection matrix for frustum culling.
 //
-// Voidcore Math — Z-up, right-handed, Float32Array-backed, zero-allocation
+// Voidcore Math — Z-up, right-handed, FloatArray-backed, zero-allocation
 
-export type Vec2 = Float32Array // length 2
-export type Vec3 = Float32Array // length 3
-export type Vec4 = Float32Array // length 4
-export type Quat = Float32Array // length 4 [x,y,z,w]
-export type Mat4 = Float32Array // length 16, column-major
-export type AABB = Float32Array // length 6 [minX, minY, minZ, maxX, maxY, maxZ]
+import { createFloatArray, createFloatArrayFrom, type FloatArray } from '../float'
+
+export type Vec2 = FloatArray // length 2
+export type Vec3 = FloatArray // length 3
+export type Vec4 = FloatArray // length 4
+export type Quat = FloatArray // length 4 [x,y,z,w]
+export type Mat4 = FloatArray // length 16, column-major
+export type AABB = FloatArray // length 6 [minX, minY, minZ, maxX, maxY, maxZ]
 
 // ─── Constants ────────────────────────────────────────────────────────
 
@@ -40,7 +43,7 @@ export const MAT4_IDENTITY: Mat4 = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 
 
 // ─── Vec3 ─────────────────────────────────────────────────────────────
 
-export const vec3Create = (): Vec3 => new Float32Array(3)
+export const vec3Create = (): Vec3 => createFloatArray(3)
 
 export const vec3Set = (out: Vec3, x: number, y: number, z: number): Vec3 => {
   out[0] = x
@@ -187,7 +190,7 @@ export const vec3DistanceSq = (a: Vec3, b: Vec3): number => {
 
 // ─── Vec4 ─────────────────────────────────────────────────────────────
 
-export const vec4Create = (): Vec4 => new Float32Array(4)
+export const vec4Create = (): Vec4 => createFloatArray(4)
 
 export const vec4Set = (out: Vec4, x: number, y: number, z: number, w: number): Vec4 => {
   out[0] = x
@@ -212,7 +215,7 @@ export const vec4TransformMat4 = (out: Vec4, a: Vec4, m: Mat4): Vec4 => {
 // ─── Mat4 (column-major) ──────────────────────────────────────────────
 
 export const mat4Create = (): Mat4 => {
-  const out = new Float32Array(16)
+  const out = createFloatArray(16)
   out[0] = 1
   out[5] = 1
   out[10] = 1
@@ -599,7 +602,7 @@ export const mat4GetTranslation = (out: Vec3, m: Mat4): Vec3 => {
 // ─── Quat ─────────────────────────────────────────────────────────────
 
 export const quatCreate = (): Quat => {
-  const out = new Float32Array(4)
+  const out = createFloatArray(4)
   out[3] = 1
   return out
 }
@@ -715,7 +718,8 @@ export const quatConjugate = (out: Quat, a: Quat): Quat => {
 
 // ─── AABB ─────────────────────────────────────────────────────────────
 
-export const aabbCreate = (): AABB => new Float32Array([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity])
+export const aabbCreate = (): AABB =>
+  createFloatArrayFrom([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity])
 
 export const aabbFromPoints = (out: AABB, positions: Float32Array, count: number): AABB => {
   out[0] = Infinity
@@ -813,7 +817,7 @@ export const aabbSize = (out: Vec3, a: AABB): Vec3 => {
 // ─── Frustum ──────────────────────────────────────────────────────────
 
 // 6 planes, each [nx, ny, nz, d] = 24 floats
-export const frustumFromViewProjection = (out: Float32Array, vp: Mat4): Float32Array => {
+export const frustumFromViewProjection = (out: FloatArray, vp: Mat4): FloatArray => {
   // Gribb-Hartmann plane extraction
   const m = vp
   // Left
@@ -862,7 +866,7 @@ export const frustumFromViewProjection = (out: Float32Array, vp: Mat4): Float32A
   return out
 }
 
-export const frustumContainsAABB = (planes: Float32Array, aabb: AABB): boolean => {
+export const frustumContainsAABB = (planes: FloatArray, aabb: AABB): boolean => {
   for (let i = 0; i < 6; i++) {
     const o = i * 4
     const nx = planes[o]!,

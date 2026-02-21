@@ -30,7 +30,9 @@
 // WebGPURenderer.render()  – Draws one frame.
 // WebGPURenderer.dispose() – Releases all GPU resources.
 
+import { createFloatArray } from '../float'
 import {
+  aabbCreate,
   frustumFromViewProjection,
   mat4Create,
   mat4Invert,
@@ -284,11 +286,11 @@ export class WebGPURenderer implements Renderer {
   private _vpMatrix: Mat4 = mat4Create()
   private _invWorldMatrix: Mat4 = mat4Create()
   private _normalMatrix: Mat4 = mat4Create()
-  private _frustumPlanes = new Float32Array(24)
-  private _shadowFrustumPlanes = new Float32Array(24)
-  private _worldAABB: AABB = new Float32Array(6)
+  private _frustumPlanes = createFloatArray(24)
+  private _shadowFrustumPlanes = createFloatArray(24)
+  private _worldAABB: AABB = aabbCreate()
   private _lightDir = vec3Create()
-  private _tempVec3 = new Float32Array(3)
+  private _tempVec3 = vec3Create()
   private _meshes: Mesh[] = []
   private _sortState: SortState = createSortState(4096)
   // Reusable typed arrays for uniform writes
@@ -1533,7 +1535,7 @@ export class WebGPURenderer implements Renderer {
     // ─── Shadow computation ────────────────────────────────────────
     // Compute shadow matrix BEFORE traversal so we can collect shadow-only
     // casters in the same pass as camera-visible meshes.
-    let shadowFrustum: Float32Array | null = null
+    let shadowFrustum: import('../float').FloatArray | null = null
     if (shadowActive) {
       this._computeShadowMatrix(dirLight!, lightDir)
       frustumFromViewProjection(this._shadowFrustumPlanes, this._shadowVP)

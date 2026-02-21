@@ -13,11 +13,14 @@
 // engine.maxFps       – Global FPS cap (0 = uncapped).
 // engine.maxDpr       – Max device pixel ratio (default 1.25 on mobile, 1.5 on desktop).
 // engine.render()     – Renders a single frame (call this inside a registered callback).
+// engine.floatPrecision – The active float precision ('float16' or 'float32').
 // engine.dispose()    – Cleans up the scheduler and GPU resources.
 
+import { setFloatPrecision } from './float'
 import { createRenderer, type Renderer, type RendererConfig, type FrameStats } from './renderer/renderer'
 import { Scheduler, type SchedulerCallback, type SchedulerCallbackOptions } from './scheduler'
 
+import type { FloatPrecision } from './float'
 import type { ShadowConfig } from './renderer/renderer'
 import type { PerspectiveCamera } from './scene/camera'
 import type { Scene } from './scene/scene'
@@ -26,6 +29,8 @@ export interface EngineConfig extends RendererConfig {
   backend?: 'auto' | 'webgpu' | 'webgl2'
   shadows?: boolean | ShadowConfig
   debug?: boolean
+  /** Float precision for math types: 'auto' tries Float16Array and falls back to Float32Array. */
+  floatPrecision?: FloatPrecision | 'auto'
 }
 
 export class Engine {
@@ -33,12 +38,15 @@ export class Engine {
   backend: 'webgpu' | 'webgl2'
   canvas: HTMLCanvasElement
   scheduler: Scheduler
+  /** The resolved float precision ('float16' or 'float32'). */
+  floatPrecision: FloatPrecision
 
-  constructor(canvas: HTMLCanvasElement, renderer: Renderer) {
+  constructor(canvas: HTMLCanvasElement, renderer: Renderer, floatPrecision: FloatPrecision) {
     this.canvas = canvas
     this.renderer = renderer
     this.backend = renderer.backend
     this.scheduler = new Scheduler()
+    this.floatPrecision = floatPrecision
   }
 
   /** Global FPS cap applied to the entire loop. 0 = uncapped (run every rAF). */
@@ -102,7 +110,9 @@ export class Engine {
   }
 
   static async create(canvas: HTMLCanvasElement, config: EngineConfig = {}): Promise<Engine> {
+    const resolvedPrecision = setFloatPrecision(config.floatPrecision ?? 'float32')
+    console.log(`[voidcore] Float precision: ${resolvedPrecision === 'float16' ? 'F16' : 'F32'}`)
     const renderer = await createRenderer(canvas, config)
-    return new Engine(canvas, renderer)
+    return new Engine(canvas, renderer, resolvedPrecision)
   }
 }
