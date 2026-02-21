@@ -149,7 +149,9 @@ export const collectMeshes = (
         }
       }
 
-      if (mesh.frustumCulled) {
+      if (!mesh.geometry || !mesh.material) {
+        culledCount++
+      } else if (mesh.frustumCulled) {
         aabbTransform(worldAABB, mesh.geometry.aabb, mesh._worldMatrix)
         if (frustumContainsAABB(cameraFrustum, worldAABB)) {
           meshes[meshCount++] = mesh

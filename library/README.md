@@ -3,7 +3,7 @@
 A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 support.
 
 > [!IMPORTANT]
-> This engine is developed specifically for [**Mana Blade**](https://manablade.com/) and is not meant to be used by other projects.
+> This engine is developed specifically for [**Mana Blade**](https://manablade.com/) and is not meant to be used by other projects at the moment.
 
 ## Features
 
