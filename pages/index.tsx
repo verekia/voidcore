@@ -10,7 +10,7 @@ import FloatSwitch from '../components/FloatSwitch'
 import Lighting from '../components/Lighting'
 import RotatingCube from '../components/RotatingCube'
 import StatsOverlay from '../components/StatsOverlay'
-import { Canvas, useGLTF } from '../src/react/index'
+import { Canvas, useGLTF } from '../src/index'
 
 import type { Engine } from '../src/index'
 

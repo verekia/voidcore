@@ -1529,7 +1529,7 @@ export class WebGLRenderer implements Renderer {
       this._setProgram(program)
       gl.uniform1f(locs.u_outlineThickness, thickness)
       gl.uniform3f(locs.u_outlineColor, color[0], color[1], color[2])
-      gl.uniformMatrix4fv(locs.u_viewProjection, false, this._vpMatrix)
+      gl.uniformMatrix4fv(locs.u_viewProjection, false, this._vpMatrix as Float32Array)
 
       ensureGPUBuffers(gl, mesh.geometry)
       ensureOutlineBuffers(gl, mesh.geometry)

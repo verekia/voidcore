@@ -1,4 +1,4 @@
-// Voidcore — Public API
+// Voidcore — Public API (engine + React bindings)
 
 // Engine
 export { Engine, type EngineConfig } from './engine'
@@ -53,6 +53,24 @@ export { DirectionalLightHelper } from './helpers/directional-light-helper'
 
 // Overlay
 export { createOverlayManager, type OverlayHandle, type OverlayOptions } from './overlay'
+
+// React bindings
+export { BakeShadows } from './react/BakeShadows'
+export { Canvas, type CanvasProps } from './react/Canvas'
+export { Html, type HtmlProps } from './react/Html'
+export { useEngine, useFrame, useLoader, useGLTF, useKTX2, useAnimations } from './react/hooks'
+export { VoidContext, type VoidStore, type FrameCallback } from './react/context'
+export type {
+  NodeProps,
+  MeshProps,
+  GroupProps,
+  AmbientLightProps,
+  DirectionalLightProps,
+  CameraProps,
+  GeometryProps,
+  MaterialProps,
+  PrimitiveProps,
+} from './react/types'
 
 // Math
 export {

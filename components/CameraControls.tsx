@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react'
 
-import { OrbitControls } from '../src/index'
-import { useEngine, useFrame } from '../src/react/index'
+import { OrbitControls, useEngine, useFrame } from '../src/index'
 
 const CameraControls = () => {
   const { camera, canvas } = useEngine()

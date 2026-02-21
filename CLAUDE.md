@@ -12,7 +12,7 @@ VoidCore is a performant 3D graphics engine written in TypeScript. It supports b
 - **Scheduler**: Single rAF loop with priority-ordered callbacks, global/per-callback FPS caps. Both `maxFps` and `maxDpr` can be changed dynamically at runtime.
 - **Scene graph**: Tree of Nodes with dirty-flag world matrix propagation. Transforms are set via `setPosition(x, y, z)`, `setRotation(x, y, z, w)`, `setScale(x, y, z)` / `setScale(s)` which automatically mark the node dirty. Per-component setters are also available: `setPositionX/Y/Z(v)`, `setScaleX/Y/Z(v)`. `markTransformDirty()` is available for code that writes directly to the underlying Float32Arrays (e.g., `quatFromAxisAngle`).
 - **HTML overlay**: DOM elements tracked to 3D world positions via CSS transforms. Supports node tracking with offset, centering, dirty checking, depth-based z-index, distance scaling, and per-element pointer events.
-- **React bindings**: Optional declarative layer via `voidcore/react` subpath. Uses a custom `react-reconciler` to map JSX elements (`<mesh>`, `<boxGeometry>`, `<lambertMaterial>`, `<directionalLight>`, `<ambientLight>`, etc.) to engine objects. Provides hooks (`useFrame`, `useEngine`, `useGLTF`, `useKTX2`, `useAnimations`) and a `<Canvas>` root component.
+- **React bindings**: Optional declarative layer exported directly from `voidcore`. Uses a custom `react-reconciler` to map JSX elements (`<mesh>`, `<boxGeometry>`, `<lambertMaterial>`, `<directionalLight>`, `<ambientLight>`, etc.) to engine objects. Provides hooks (`useFrame`, `useEngine`, `useGLTF`, `useKTX2`, `useAnimations`) and a `<Canvas>` root component.
 
 ## Project Structure
 
@@ -41,7 +41,7 @@ src/
     sort.ts              – Radix sort for draw order
   overlay.ts             – HTML overlay manager (DOM elements tracking 3D positions)
   scene/                 – Scene graph nodes (Node, Scene, Mesh, Group, Camera, Light)
-  react/                 – React declarative bindings (voidcore/react subpath)
+  react/                 – React declarative bindings (exported from voidcore top-level)
     BakeShadows.tsx      – Freezes shadow map for static scenes
     Canvas.tsx           – Root component (engine init, reconciler mount, rAF loop)
     reconciler.ts        – Custom react-reconciler host config
@@ -50,7 +50,7 @@ src/
     events.ts            – Pointer event system (raycast-based)
     context.ts           – React context for engine state
     Html.tsx             – DOM overlay projected to 3D coordinates
-    index.ts             – Barrel export
+    index.ts             – Internal barrel (not a public entry point)
 pages/                   – Next.js example app (uses React bindings)
 ```
 

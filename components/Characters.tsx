@@ -1,7 +1,6 @@
 import { memo, useRef, useMemo } from 'react'
 
-import { Raycaster, cloneScene, LambertMaterial, Mesh } from '../src/index'
-import { useEngine, useFrame, useGLTF, useAnimations } from '../src/react/index'
+import { Raycaster, cloneScene, LambertMaterial, Mesh, useEngine, useFrame, useGLTF, useAnimations } from '../src/index'
 import { staticBundleSrc, playerBundleSrc } from './assets'
 
 import type { AnimationClip, Geometry } from '../src/index'
@@ -24,7 +23,6 @@ const megaxeMaterial = new LambertMaterial({
 interface CharacterProps {
   x: number
   y: number
-  initialZ: number
   megaxeGeometry: Geometry | null
   playerGltf: GLTFResult
   clips: AnimationClip[]
@@ -34,17 +32,7 @@ interface CharacterProps {
 }
 
 const Character = memo(
-  ({
-    x,
-    y,
-    initialZ,
-    megaxeGeometry,
-    playerGltf,
-    clips,
-    startAngle,
-    startClipIndex,
-    startTimeIntoClip,
-  }: CharacterProps) => {
+  ({ x, y, megaxeGeometry, playerGltf, clips, startAngle, startClipIndex, startTimeIntoClip }: CharacterProps) => {
     const { scene } = useEngine()
 
     const { root, skeleton } = useMemo(() => {
@@ -57,7 +45,7 @@ const Character = memo(
         const handBone = skeleton.getBone('Hand.R')
         if (handBone) {
           const axe = new Mesh(megaxeGeometry, megaxeMaterial)
-          axe.outline = { thickness: 0.05, maxDistance: 100 }
+          axe.outline = { thickness: 0.03, maxDistance: 100 }
           axe.setRotation(0, 0, 1, 0)
           handBone.add(axe)
         }
@@ -65,7 +53,7 @@ const Character = memo(
 
       root.traverse(node => {
         if (node instanceof Mesh) {
-          node.outline = { thickness: 0.05, maxDistance: 100 }
+          node.outline = { thickness: 0.03, maxDistance: 100 }
         }
       })
 
@@ -75,14 +63,11 @@ const Character = memo(
     const { actions } = useAnimations(clips, skeleton)
     const actionList = useMemo(() => clips.map(c => actions[c.name]!), [clips, actions])
 
-    const raycaster = useMemo(() => new Raycaster(), [])
-    const rayOrigin = useMemo(() => new Float32Array([x, y, 200]), [x, y])
-    const rayDir = useMemo(() => new Float32Array([0, 0, -1]), [])
-
     const stateRef = useRef({
       initialized: false,
       angle: startAngle,
-      z: initialZ,
+      z: -50,
+      zResolved: false,
       currentClip: startClipIndex,
       nextSwitch: CLIP_DURATION - startTimeIntoClip,
     })
@@ -99,16 +84,20 @@ const Character = memo(
         }
       }
 
-      // Raycast every frame for benchmarking, even though the character doesn't move
-      const edenMesh = scene.getByName('eden') as Mesh | undefined
-      if (edenMesh) {
-        raycaster.set(rayOrigin, rayDir)
-        const hits = raycaster.intersectObject(edenMesh)
-        if (hits.length > 0) s.z = hits[0]!.point[2]!
+      if (!s.zResolved) {
+        s.zResolved = true
+        const edenMesh = scene.getByName('eden') as Mesh | undefined
+        if (edenMesh) {
+          const raycaster = new Raycaster()
+          raycaster.set(new Float32Array([x, y, 200]), new Float32Array([0, 0, -1]))
+          const hits = raycaster.intersectObject(edenMesh)
+          if (hits.length > 0) s.z = hits[0]!.point[2]!
+        }
       }
 
       // s.angle += ORBIT_SPEED * dt
       root.setPosition(x + Math.cos(s.angle) * ORBIT_RADIUS, y + Math.sin(s.angle) * ORBIT_RADIUS, s.z)
+      root.setScale(0.6)
 
       if (elapsed >= s.nextSwitch && actionList.length > 1) {
         const cur = s.currentClip
@@ -124,7 +113,6 @@ const Character = memo(
 )
 
 const Characters = ({ count }: { count: number }) => {
-  const { scene } = useEngine()
   const megaxeGltf = useGLTF(staticBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
   const playerGltf = useGLTF(playerBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
 
@@ -145,43 +133,24 @@ const Characters = ({ count }: { count: number }) => {
     return result
   }, [playerGltf])
 
-  // Generate grid positions, raycast against Eden, and only keep positions that hit
   const characters = useMemo(() => {
-    const edenMesh = scene.getByName('eden') as Mesh | undefined
-    if (!edenMesh) return []
-
     const cols = Math.ceil(Math.sqrt(count))
     const totalCycle = clips.length * CLIP_DURATION
-    const raycaster = new Raycaster()
-    const origin = new Float32Array(3)
-    const dir = new Float32Array([0, 0, -1])
     const result = []
-
     for (let i = 0; i < count; i++) {
       const col = i % cols
       const row = Math.floor(i / cols)
-      const x = (col - (cols - 1) / 2) * GRID_SPACING
-      const y = (row - (cols - 1) / 2) * GRID_SPACING
-
-      origin[0] = x
-      origin[1] = y
-      origin[2] = 200
-      raycaster.set(origin, dir)
-      const hits = raycaster.intersectObject(edenMesh)
-      if (hits.length === 0) continue
-
       const offset = Math.random() * totalCycle
       result.push({
-        x,
-        y,
-        initialZ: hits[0]!.point[2]!,
+        x: (col - (cols - 1) / 2) * GRID_SPACING,
+        y: (row - (cols - 1) / 2) * GRID_SPACING,
         startAngle: Math.random() * Math.PI * 2,
         startClipIndex: Math.floor(offset / CLIP_DURATION) % Math.max(clips.length, 1),
         startTimeIntoClip: offset % CLIP_DURATION,
       })
     }
     return result
-  }, [count, clips, scene])
+  }, [count, clips])
 
   return (
     <group>
@@ -190,7 +159,6 @@ const Characters = ({ count }: { count: number }) => {
           key={i}
           x={c.x}
           y={c.y}
-          initialZ={c.initialZ}
           megaxeGeometry={megaxeGeometry}
           playerGltf={playerGltf}
           clips={clips}

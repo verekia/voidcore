@@ -1,7 +1,6 @@
 import { Suspense, useMemo } from 'react'
 
-import { LambertMaterial, mergeGeometries, prebuildBVH } from '../src/index'
-import { BakeShadows, useGLTF, useKTX2 } from '../src/react/index'
+import { LambertMaterial, mergeGeometries, prebuildBVH, BakeShadows, useGLTF, useKTX2 } from '../src/index'
 import { staticBundleSrc, cityAoSrc } from './assets'
 
 const EDEN_COLORS: [number, number, number][] = [

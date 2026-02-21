@@ -1,7 +1,6 @@
 import { useMemo, useRef } from 'react'
 
-import { quatFromAxisAngle } from '../src/index'
-import { useFrame } from '../src/react/index'
+import { quatFromAxisAngle, useFrame } from '../src/index'
 
 const CUBE_COLORS: [number, number, number][] = [
   [1.0, 0.2, 0.2],

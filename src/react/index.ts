@@ -1,9 +1,7 @@
-// Voidcore React — Declarative React bindings for VoidCore's 3D engine.
+// Voidcore React — Internal barrel for React bindings.
 //
-// Provides a <Canvas> root component that initializes the engine, plus JSX elements
-// for scene graph nodes (<mesh>, <group>, <directionalLight>, <ambientLight>), geometries, and materials.
-// Hooks (useFrame, useEngine, useGLTF, useAnimations) connect React components to the
-// engine's render loop and asset pipeline.
+// These are re-exported from the top-level src/index.ts as part of the unified voidcore package.
+// Do not use this file as a public entry point.
 
 export { BakeShadows } from './BakeShadows'
 export { Canvas, type CanvasProps } from './Canvas'
