@@ -859,13 +859,13 @@ export class WebGPURenderer implements Renderer {
       entries: [{ binding: 0, resource: { buffer: this._occlusionDynBuf, size: OCCLUSION_UB_SIZE } }],
     })
 
-    // Pre-allocate render pass descriptor (depth-only, loads scene depth)
+    // Pre-allocate render pass descriptor (depth-only, read-only depth test).
+    // When depthReadOnly is true, depthLoadOp/depthStoreOp must NOT be provided
+    // (WebGPU spec requirement — providing them causes a validation error).
     this._occlusionPassDesc = {
       colorAttachments: [],
       depthStencilAttachment: {
         view: null!, // updated per-frame
-        depthLoadOp: 'load',
-        depthStoreOp: 'discard',
         depthReadOnly: true,
       },
       occlusionQuerySet: this._occlusionQuerySet,
