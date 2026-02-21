@@ -125,32 +125,49 @@ describe('packWeightsUnorm8', () => {
     expect(packed[3]).toBe(0)
   })
 
-  test('packs 0.5', () => {
-    const weights = new Float32Array([0.5])
+  test('all-zero weights stay zero', () => {
+    const weights = new Float32Array([0, 0, 0, 0])
     const packed = packWeightsUnorm8(weights)
-    // round(0.5 * 255) = 128
-    expect(packed[0]).toBe(128)
+    expect(packed[0]).toBe(0)
+    expect(packed[1]).toBe(0)
+    expect(packed[2]).toBe(0)
+    expect(packed[3]).toBe(0)
   })
 
   test('clamps negative values to 0', () => {
-    const weights = new Float32Array([-0.5])
+    const weights = new Float32Array([-0.5, 1, 0, 0])
     const packed = packWeightsUnorm8(weights)
     expect(packed[0]).toBe(0)
+    expect(packed[1]).toBe(255)
   })
 
-  test('clamps values above 1 to 255', () => {
-    const weights = new Float32Array([1.5])
-    const packed = packWeightsUnorm8(weights)
-    expect(packed[0]).toBe(255)
+  test('quantized weights always sum to 255', () => {
+    // Weights that would cause rounding drift without normalization
+    const testCases = [
+      [0.8, 0.15, 0.05, 0],
+      [0.7, 0.2, 0.08, 0.02],
+      [0.33, 0.33, 0.33, 0.01],
+      [0.25, 0.25, 0.25, 0.25],
+      [1, 0, 0, 0],
+      [0.5, 0.5, 0, 0],
+      [0.6, 0.3, 0.1, 0],
+    ]
+    for (const tc of testCases) {
+      const packed = packWeightsUnorm8(new Float32Array(tc))
+      const sum = packed[0]! + packed[1]! + packed[2]! + packed[3]!
+      expect(sum).toBe(255)
+    }
   })
 
-  test('packs typical blend weights', () => {
-    // Common case: one dominant bone
+  test('packs typical blend weights with correct proportions', () => {
     const weights = new Float32Array([0.8, 0.15, 0.05, 0])
     const packed = packWeightsUnorm8(weights)
-    expect(packed[0]).toBe(204) // round(0.8 * 255)
-    expect(packed[1]).toBe(38) // round(0.15 * 255)
-    expect(packed[2]).toBe(13) // round(0.05 * 255)
+    // Largest component gets the rounding residual
+    expect(packed[0]! + packed[1]! + packed[2]! + packed[3]!).toBe(255)
+    // Values should be approximately correct
+    expect(packed[0]).toBeGreaterThan(200)
+    expect(packed[1]).toBeGreaterThan(35)
+    expect(packed[2]).toBeGreaterThan(10)
     expect(packed[3]).toBe(0)
   })
 })

@@ -10,9 +10,11 @@
 // Dynamic geometry is supported via geometry.needsUpdate — position and normal buffers are
 // re-uploaded with DYNAMIC_DRAW when the flag is set (used by helpers and procedural meshes).
 //
-// Inverted hull outlines are supported per-mesh: a front-face-culled inflated copy of the mesh
-// is drawn before the main mesh to create a silhouette effect. The material `side` property
-// (front/back/double) controls per-material face culling.
+// Inverted hull outlines are supported per-mesh via combined geometry: the vertex/index buffers
+// are doubled (original + outline with smooth normals) and drawn in a single draw call with
+// cullMode:none. The fragment shader uses gl_FrontFacing to discard front-facing outline
+// triangles (they overlap the original mesh), keeping only back-facing ones (silhouette). The material `side` property (front/back/double) controls
+// per-material face culling.
 //
 // A GL state cache (_set* helpers) eliminates redundant state calls between consecutive draws.
 // The radix sort groups meshes by pipeline > material > depth, so the cache yields significant
@@ -62,6 +64,7 @@ import { createSortState, sortMeshes } from './sort'
 import {
   LAMBERT_VERT,
   LAMBERT_FRAG,
+  LAMBERT_SKINNED_FRAG,
   LAMBERT_TEXTURED_FRAG,
   LAMBERT_SKINNED_VERT,
   BASIC_VERT,
@@ -70,9 +73,6 @@ import {
   SHADOW_DEPTH_VERT,
   SHADOW_DEPTH_SKINNED_VERT,
   SHADOW_DEPTH_FRAG,
-  OUTLINE_VERT,
-  OUTLINE_SKINNED_VERT,
-  OUTLINE_FRAG,
   FULLSCREEN_VERT,
   BLOOM_DOWNSAMPLE_FRAG,
   BLOOM_UPSAMPLE_FRAG,
@@ -101,8 +101,13 @@ interface GPUBuffers {
   joints?: WebGLBuffer
   weights?: WebGLBuffer
   vao?: WebGLVertexArrayObject
-  smoothNormal?: WebGLBuffer
-  outlineVao?: WebGLVertexArrayObject
+}
+
+interface OutlineGPUBuffers {
+  vao: WebGLVertexArrayObject
+  index: WebGLBuffer
+  indexCount: number
+  indexType: number
 }
 
 // ─── Shader compilation ───────────────────────────────────────────────
@@ -158,12 +163,6 @@ interface PostUniformLocs {
   u_useKarisAverage: WebGLUniformLocation | null
 }
 
-interface OutlineUniformLocs {
-  u_outlineThickness: WebGLUniformLocation | null
-  u_outlineColor: WebGLUniformLocation | null
-  u_viewProjection: WebGLUniformLocation | null
-}
-
 interface BlitUniformLocs {
   u_sceneTexture: WebGLUniformLocation | null
   u_bloomTexture: WebGLUniformLocation | null
@@ -217,15 +216,6 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
     const packedNormals = packNormalsSnorm8(geometry.normals, geometry.vertexCount)
     gl.bindBuffer(gl.ARRAY_BUFFER, bufs.normal)
     gl.bufferData(gl.ARRAY_BUFFER, packedNormals, gl.DYNAMIC_DRAW)
-    // Invalidate smooth normals / outline VAO so they get rebuilt
-    if (bufs.smoothNormal) {
-      gl.deleteBuffer(bufs.smoothNormal)
-      bufs.smoothNormal = undefined
-    }
-    if (bufs.outlineVao) {
-      gl.deleteVertexArray(bufs.outlineVao)
-      bufs.outlineVao = undefined
-    }
     geometry._smoothNormals = undefined
     geometry.needsUpdate = false
     return
@@ -347,44 +337,127 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
   geometry.needsUpdate = false
 }
 
-// ─── Outline buffers (smooth normals + dedicated VAO) ─────────────────
+// ─── Outline combined buffers (doubled vertices + smooth normals) ──────
 
-const ensureOutlineBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
-  const bufs = geometry._gpuBuffers as GPUBuffers
-  if (bufs.outlineVao) return
+const _outlineBufsCache = new WeakMap<Geometry, OutlineGPUBuffers>()
 
-  if (!geometry._smoothNormals) computeSmoothNormals(geometry)
-  const packedSmooth = packNormalsSnorm8(geometry._smoothNormals!, geometry.vertexCount)
+const ensureOutlineGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry): OutlineGPUBuffers => {
+  const cached = _outlineBufsCache.get(geometry)
+  if (cached) return cached
 
-  const smoothBuf = gl.createBuffer()!
-  gl.bindBuffer(gl.ARRAY_BUFFER, smoothBuf)
-  gl.bufferData(gl.ARRAY_BUFFER, packedSmooth, gl.STATIC_DRAW)
-  bufs.smoothNormal = smoothBuf
+  // Ensure base buffers exist
+  ensureGPUBuffers(gl, geometry)
 
-  // Create outline VAO: same as main VAO but with smooth normals at location 1
-  const outlineVao = gl.createVertexArray()!
-  gl.bindVertexArray(outlineVao)
+  const vc = geometry.vertexCount
+  const ic = geometry.indexCount
+
+  // Compute smooth normals for gap-free outline inflation
+  const smoothNormals = geometry._smoothNormals ?? computeSmoothNormals(geometry)
+
+  // Unbind any active VAO
+  gl.bindVertexArray(null)
+
+  // Combined positions: [original, duplicated for outline]
+  const combinedPos = new Float32Array(vc * 2 * 3)
+  combinedPos.set(geometry.positions, 0)
+  combinedPos.set(geometry.positions, vc * 3)
+  const posBuf = gl.createBuffer()!
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf)
+  gl.bufferData(gl.ARRAY_BUFFER, combinedPos, gl.STATIC_DRAW)
+
+  // Combined normals: [packed w=0, packed smooth w=127]
+  const baseNormals = packNormalsSnorm8(geometry.normals, vc, 0)
+  const outlineNormals = packNormalsSnorm8(smoothNormals, vc, 127)
+  const combinedNorm = new Int8Array(vc * 2 * 4)
+  combinedNorm.set(baseNormals, 0)
+  combinedNorm.set(outlineNormals, vc * 4)
+  const normBuf = gl.createBuffer()!
+  gl.bindBuffer(gl.ARRAY_BUFFER, normBuf)
+  gl.bufferData(gl.ARRAY_BUFFER, combinedNorm, gl.STATIC_DRAW)
+
+  // Combined UVs: [original, duplicated]
+  let uvBuf: WebGLBuffer | undefined
+  if (geometry.uvs) {
+    const baseUVs = packUVsFloat16(geometry.uvs)
+    const combinedUV = new Uint16Array(vc * 2 * 2)
+    combinedUV.set(baseUVs, 0)
+    combinedUV.set(baseUVs, vc * 2)
+    uvBuf = gl.createBuffer()!
+    gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf)
+    gl.bufferData(gl.ARRAY_BUFFER, combinedUV, gl.STATIC_DRAW)
+  }
+
+  // Combined material indices: [original, duplicated]
+  let matIdxBuf: WebGLBuffer | undefined
+  if (geometry.materialIndices) {
+    const combinedMatIdx = new Uint8Array(vc * 2)
+    combinedMatIdx.set(geometry.materialIndices, 0)
+    combinedMatIdx.set(geometry.materialIndices, vc)
+    matIdxBuf = gl.createBuffer()!
+    gl.bindBuffer(gl.ARRAY_BUFFER, matIdxBuf)
+    gl.bufferData(gl.ARRAY_BUFFER, combinedMatIdx, gl.STATIC_DRAW)
+  }
+
+  // Combined joints + weights for skinned meshes
+  let jointsBuf: WebGLBuffer | undefined
+  if (geometry.joints) {
+    const jointsU8 = geometry.joints instanceof Uint8Array ? geometry.joints : new Uint8Array(geometry.joints)
+    const combinedJoints = new Uint8Array(vc * 2 * 4)
+    combinedJoints.set(jointsU8, 0)
+    combinedJoints.set(jointsU8, vc * 4)
+    jointsBuf = gl.createBuffer()!
+    gl.bindBuffer(gl.ARRAY_BUFFER, jointsBuf)
+    gl.bufferData(gl.ARRAY_BUFFER, combinedJoints, gl.STATIC_DRAW)
+  }
+
+  let weightsBuf: WebGLBuffer | undefined
+  if (geometry.weights) {
+    const baseWeights = packWeightsUnorm8(geometry.weights)
+    const combinedWeights = new Uint8Array(vc * 2 * 4)
+    combinedWeights.set(baseWeights, 0)
+    combinedWeights.set(baseWeights, vc * 4)
+    weightsBuf = gl.createBuffer()!
+    gl.bindBuffer(gl.ARRAY_BUFFER, weightsBuf)
+    gl.bufferData(gl.ARRAY_BUFFER, combinedWeights, gl.STATIC_DRAW)
+  }
+
+  // Combined index buffer: [original CCW, reversed CW + vc offset]
+  const use32 = vc * 2 > 65535 || geometry.indices instanceof Uint32Array
+  const IndexArray = use32 ? Uint32Array : Uint16Array
+  const combinedIdx = new IndexArray(ic * 2)
+  for (let i = 0; i < ic; i++) combinedIdx[i] = geometry.indices[i]!
+  // Same winding (CCW) + vertex offset for outline (front_facing discard handles silhouette)
+  for (let i = 0; i < ic; i++) combinedIdx[ic + i] = geometry.indices[i]! + vc
+  const idxBuf = gl.createBuffer()!
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf)
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, combinedIdx, gl.STATIC_DRAW)
+
+  // Create combined VAO
+  const vao = gl.createVertexArray()!
+  gl.bindVertexArray(vao)
 
   // Position (location 0)
-  gl.bindBuffer(gl.ARRAY_BUFFER, bufs.position)
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf)
   gl.enableVertexAttribArray(0)
   gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0)
 
-  // Smooth normal (location 1) — snorm8x4
-  gl.bindBuffer(gl.ARRAY_BUFFER, smoothBuf)
+  // Normal (location 1) — snorm8x4
+  gl.bindBuffer(gl.ARRAY_BUFFER, normBuf)
   gl.enableVertexAttribArray(1)
   gl.vertexAttribPointer(1, 4, gl.BYTE, true, 0, 0)
 
-  // UV (location 2)
-  if (bufs.uv) {
-    gl.bindBuffer(gl.ARRAY_BUFFER, bufs.uv)
+  // UV (location 2) — float16x2
+  if (uvBuf) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf)
     gl.enableVertexAttribArray(2)
     gl.vertexAttribPointer(2, 2, gl.HALF_FLOAT, false, 0, 0)
+  } else {
+    gl.disableVertexAttribArray(2)
   }
 
   // Material index (location 3)
-  if (bufs.materialIndex) {
-    gl.bindBuffer(gl.ARRAY_BUFFER, bufs.materialIndex)
+  if (matIdxBuf) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, matIdxBuf)
     gl.enableVertexAttribArray(3)
     gl.vertexAttribPointer(3, 1, gl.UNSIGNED_BYTE, false, 1, 0)
   } else {
@@ -393,8 +466,8 @@ const ensureOutlineBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) =>
   }
 
   // Joints (location 4)
-  if (bufs.joints) {
-    gl.bindBuffer(gl.ARRAY_BUFFER, bufs.joints)
+  if (jointsBuf) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, jointsBuf)
     gl.enableVertexAttribArray(4)
     gl.vertexAttribPointer(4, 4, gl.UNSIGNED_BYTE, false, 0, 0)
   } else {
@@ -402,18 +475,25 @@ const ensureOutlineBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) =>
   }
 
   // Weights (location 5)
-  if (bufs.weights) {
-    gl.bindBuffer(gl.ARRAY_BUFFER, bufs.weights)
+  if (weightsBuf) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, weightsBuf)
     gl.enableVertexAttribArray(5)
     gl.vertexAttribPointer(5, 4, gl.UNSIGNED_BYTE, true, 0, 0)
   } else {
     gl.disableVertexAttribArray(5)
   }
 
-  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bufs.index)
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf)
   gl.bindVertexArray(null)
 
-  bufs.outlineVao = outlineVao
+  const outBufs: OutlineGPUBuffers = {
+    vao,
+    index: idxBuf,
+    indexCount: ic * 2,
+    indexType: use32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT,
+  }
+  _outlineBufsCache.set(geometry, outBufs)
+  return outBufs
 }
 
 // ─── Render targets ───────────────────────────────────────────────────
@@ -589,8 +669,6 @@ export class WebGLRenderer implements Renderer {
   private basicSkinnedProgram: WebGLProgram
   private shadowDepthProgram: WebGLProgram
   private shadowDepthSkinnedProgram: WebGLProgram
-  private outlineProgram: WebGLProgram
-  private outlineSkinnedProgram: WebGLProgram
   private bloomDownsampleProgram: WebGLProgram
   private bloomUpsampleProgram: WebGLProgram
   private blitProgram: WebGLProgram
@@ -601,10 +679,6 @@ export class WebGLRenderer implements Renderer {
   private _basicLocs!: SceneUniformLocs
   private _lambertSkinnedLocs!: SceneUniformLocs
   private _basicSkinnedLocs!: SceneUniformLocs
-
-  // Outline uniform locations
-  private _outlineLocs!: OutlineUniformLocs
-  private _outlineSkinnedLocs!: OutlineUniformLocs
 
   // Texture map cache
   private _glTexCache = new WeakMap<Texture, WebGLTexture>()
@@ -662,11 +736,11 @@ export class WebGLRenderer implements Renderer {
   // FrameBlock (binding 0): 208 bytes = 52 floats (VP + light + shadow data)
   private _frameUBO!: WebGLBuffer
   private _frameData = new Float32Array(52)
-  // ObjectBlock (binding 1, dynamic): mat4 worldMatrix + mat4 normalMatrix = 128 bytes
-  // SkinnedObjectBlock (binding 1, dynamic): above + mat4[32] boneMatrices = 2176 bytes
+  // ObjectBlock (binding 1, dynamic): mat4 worldMatrix + mat4 normalMatrix + vec4 outlineColorAndThickness = 144 bytes
+  // SkinnedObjectBlock (binding 1, dynamic): above + mat4[32] boneMatrices = 2192 bytes
   private _uboAlignment = 256
-  private _alignedObjectSize = 256 // ceil(128 / alignment) * alignment
-  private _alignedSkinnedSize = 2304 // ceil(2176 / alignment) * alignment
+  private _alignedObjectSize = 256 // ceil(144 / alignment) * alignment
+  private _alignedSkinnedSize = 2304 // ceil(2192 / alignment) * alignment
   private _objectDynBuf!: WebGLBuffer
   private _skinnedDynBuf!: WebGLBuffer
   private _objectBatchData!: Float32Array
@@ -766,12 +840,10 @@ export class WebGLRenderer implements Renderer {
     this.lambertProgram = createProgram(gl, LAMBERT_VERT, LAMBERT_FRAG)
     this.lambertTexturedProgram = createProgram(gl, LAMBERT_VERT, LAMBERT_TEXTURED_FRAG)
     this.basicProgram = createProgram(gl, BASIC_VERT, BASIC_FRAG)
-    this.lambertSkinnedProgram = createProgram(gl, LAMBERT_SKINNED_VERT, LAMBERT_FRAG)
+    this.lambertSkinnedProgram = createProgram(gl, LAMBERT_SKINNED_VERT, LAMBERT_SKINNED_FRAG)
     this.basicSkinnedProgram = createProgram(gl, BASIC_SKINNED_VERT, BASIC_FRAG)
     this.shadowDepthProgram = createProgram(gl, SHADOW_DEPTH_VERT, SHADOW_DEPTH_FRAG)
     this.shadowDepthSkinnedProgram = createProgram(gl, SHADOW_DEPTH_SKINNED_VERT, SHADOW_DEPTH_FRAG)
-    this.outlineProgram = createProgram(gl, OUTLINE_VERT, OUTLINE_FRAG)
-    this.outlineSkinnedProgram = createProgram(gl, OUTLINE_SKINNED_VERT, OUTLINE_FRAG)
     this.bloomDownsampleProgram = createProgram(gl, FULLSCREEN_VERT, BLOOM_DOWNSAMPLE_FRAG)
     this.bloomUpsampleProgram = createProgram(gl, FULLSCREEN_VERT, BLOOM_UPSAMPLE_FRAG)
     this.blitProgram = createProgram(gl, FULLSCREEN_VERT, BLIT_FRAG)
@@ -782,16 +854,6 @@ export class WebGLRenderer implements Renderer {
     this._basicLocs = cacheSceneLocs(gl, this.basicProgram)
     this._lambertSkinnedLocs = cacheSceneLocs(gl, this.lambertSkinnedProgram)
     this._basicSkinnedLocs = cacheSceneLocs(gl, this.basicSkinnedProgram)
-    this._outlineLocs = {
-      u_outlineThickness: gl.getUniformLocation(this.outlineProgram, 'u_outlineThickness'),
-      u_outlineColor: gl.getUniformLocation(this.outlineProgram, 'u_outlineColor'),
-      u_viewProjection: gl.getUniformLocation(this.outlineProgram, 'u_viewProjection'),
-    }
-    this._outlineSkinnedLocs = {
-      u_outlineThickness: gl.getUniformLocation(this.outlineSkinnedProgram, 'u_outlineThickness'),
-      u_outlineColor: gl.getUniformLocation(this.outlineSkinnedProgram, 'u_outlineColor'),
-      u_viewProjection: gl.getUniformLocation(this.outlineSkinnedProgram, 'u_viewProjection'),
-    }
     this._bloomDownLocs = cachePostLocs(gl, this.bloomDownsampleProgram)
     this._bloomUpLocs = cachePostLocs(gl, this.bloomUpsampleProgram)
     this._blitLocs = cacheBlitLocs(gl, this.blitProgram)
@@ -804,8 +866,8 @@ export class WebGLRenderer implements Renderer {
 
     // UBO setup
     this._uboAlignment = gl.getParameter(gl.UNIFORM_BUFFER_OFFSET_ALIGNMENT) as number
-    this._alignedObjectSize = Math.ceil(128 / this._uboAlignment) * this._uboAlignment
-    this._alignedSkinnedSize = Math.ceil(2176 / this._uboAlignment) * this._uboAlignment
+    this._alignedObjectSize = Math.ceil(144 / this._uboAlignment) * this._uboAlignment
+    this._alignedSkinnedSize = Math.ceil(2192 / this._uboAlignment) * this._uboAlignment
 
     // Frame UBO (208 bytes = 52 floats)
     this._frameUBO = gl.createBuffer()!
@@ -821,8 +883,6 @@ export class WebGLRenderer implements Renderer {
     this._bindUBOBlocks(this.basicProgram, false)
     this._bindUBOBlocks(this.lambertSkinnedProgram, true)
     this._bindUBOBlocks(this.basicSkinnedProgram, true)
-    this._bindUBOBlocks(this.outlineProgram, false)
-    this._bindUBOBlocks(this.outlineSkinnedProgram, true)
     // Shadow UBO (binding 2, 64 bytes = mat4)
     this._shadowUBO = gl.createBuffer()!
     gl.bindBuffer(gl.UNIFORM_BUFFER, this._shadowUBO)
@@ -1237,8 +1297,22 @@ export class WebGLRenderer implements Renderer {
     let skinnedIdx = 0
 
     // Fill camera-visible meshes
+    const camPos = camera.position
     for (let si = 0; si < meshes.length; si++) {
       const mesh = meshes[sortedIndices[si]!]!
+
+      // Compute effective outline thickness (0 if beyond outlineMaxDistance)
+      let thickness = mesh._outlineThickness
+      if (thickness > 0) {
+        const maxDist = mesh._outlineMaxDistance
+        if (maxDist > 0) {
+          const dx = mesh._worldMatrix[12]! - camPos[0]!
+          const dy = mesh._worldMatrix[13]! - camPos[1]!
+          const dz = mesh._worldMatrix[14]! - camPos[2]!
+          if (dx * dx + dy * dy + dz * dz > maxDist * maxDist) thickness = 0
+        }
+      }
+
       if (mesh._isSkinned) {
         mesh.skeleton!.update()
         const off = skinnedIdx * alignedSkinnedFloats
@@ -1247,7 +1321,12 @@ export class WebGLRenderer implements Renderer {
           mat4Transpose(this._normalMatrix, this._invWorldMatrix)
         }
         skinnedBatch.set(this._normalMatrix, off + 16)
-        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 32)
+        const oc = mesh._outlineColor
+        skinnedBatch[off + 32] = oc[0]
+        skinnedBatch[off + 33] = oc[1]
+        skinnedBatch[off + 34] = oc[2]
+        skinnedBatch[off + 35] = thickness
+        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 36)
         mesh._batchIndex = skinnedIdx++
       } else {
         const off = objIdx * alignedObjFloats
@@ -1256,6 +1335,11 @@ export class WebGLRenderer implements Renderer {
           mat4Transpose(this._normalMatrix, this._invWorldMatrix)
         }
         objBatch.set(this._normalMatrix, off + 16)
+        const oc = mesh._outlineColor
+        objBatch[off + 32] = oc[0]
+        objBatch[off + 33] = oc[1]
+        objBatch[off + 34] = oc[2]
+        objBatch[off + 35] = thickness
         mesh._batchIndex = objIdx++
       }
     }
@@ -1272,7 +1356,11 @@ export class WebGLRenderer implements Renderer {
           mat4Transpose(this._normalMatrix, this._invWorldMatrix)
         }
         skinnedBatch.set(this._normalMatrix, off + 16)
-        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 32)
+        skinnedBatch[off + 32] = 0
+        skinnedBatch[off + 33] = 0
+        skinnedBatch[off + 34] = 0
+        skinnedBatch[off + 35] = 0
+        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 36)
         mesh._batchIndex = skinnedIdx++
       } else {
         const off = objIdx * alignedObjFloats
@@ -1281,6 +1369,10 @@ export class WebGLRenderer implements Renderer {
           mat4Transpose(this._normalMatrix, this._invWorldMatrix)
         }
         objBatch.set(this._normalMatrix, off + 16)
+        objBatch[off + 32] = 0
+        objBatch[off + 33] = 0
+        objBatch[off + 34] = 0
+        objBatch[off + 35] = 0
         mesh._batchIndex = objIdx++
       }
     }
@@ -1388,12 +1480,12 @@ export class WebGLRenderer implements Renderer {
             1,
             this._skinnedDynBuf,
             mesh._batchIndex * this._alignedSkinnedSize,
-            2176,
+            2192,
           )
         } else {
           this._setProgram(this.shadowDepthProgram)
           this._setVAO(this.ensureShadowVAO(mesh.geometry, false))
-          gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 128)
+          gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 144)
         }
 
         gl.drawElements(gl.TRIANGLES, mesh.geometry.indexCount, idxType, 0)
@@ -1425,12 +1517,12 @@ export class WebGLRenderer implements Renderer {
             1,
             this._skinnedDynBuf,
             mesh._batchIndex * this._alignedSkinnedSize,
-            2176,
+            2192,
           )
         } else {
           this._setProgram(this.shadowDepthProgram)
           this._setVAO(this.ensureShadowVAO(mesh.geometry, false))
-          gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 128)
+          gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 144)
         }
 
         gl.drawElements(gl.TRIANGLES, mesh.geometry.indexCount, idxType, 0)
@@ -1464,13 +1556,27 @@ export class WebGLRenderer implements Renderer {
 
     // ─── Draw helper (shared by opaque + transparent loops) ──────
     const drawMesh = (si: number, locs: SceneUniformLocs, programChanged: boolean, mesh: Mesh) => {
-      ensureGPUBuffers(gl, mesh.geometry)
-      this._setVAO((mesh.geometry._gpuBuffers as GPUBuffers).vao!)
+      // Use combined outline buffers for outlined Lambert meshes
+      const isOutlined = mesh._outlineThickness > 0 && mesh.material.type === 'lambert'
+      let idxCount: number
+      let idxType: number
+
+      if (isOutlined) {
+        const outBufs = ensureOutlineGPUBuffers(gl, mesh.geometry)
+        this._setVAO(outBufs.vao)
+        idxCount = outBufs.indexCount
+        idxType = outBufs.indexType
+      } else {
+        ensureGPUBuffers(gl, mesh.geometry)
+        this._setVAO((mesh.geometry._gpuBuffers as GPUBuffers).vao!)
+        idxCount = mesh.geometry.indexCount
+        idxType = mesh.geometry.indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT
+      }
 
       if (mesh._isSkinned) {
-        gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._skinnedDynBuf, mesh._batchIndex * this._alignedSkinnedSize, 2176)
+        gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._skinnedDynBuf, mesh._batchIndex * this._alignedSkinnedSize, 2192)
       } else {
-        gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 128)
+        gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 144)
       }
 
       const materialChanged = mesh.material !== this._glMaterial || programChanged
@@ -1499,57 +1605,17 @@ export class WebGLRenderer implements Renderer {
         }
       }
 
-      const idxType = mesh.geometry.indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT
-      gl.drawElements(gl.TRIANGLES, mesh.geometry.indexCount, idxType, 0)
+      gl.drawElements(gl.TRIANGLES, idxCount, idxType, 0)
       drawCalls++
-      triangles += mesh.geometry.indexCount / 3
-    }
-
-    // ─── Outline draw helper ──────────────────────────────────────
-    const drawOutline = (mesh: Mesh) => {
-      const thickness = mesh._outlineThickness
-      if (thickness <= 0) return
-
-      const maxDist = mesh._outlineMaxDistance
-      if (maxDist > 0) {
-        const dx = mesh._worldMatrix[12]! - camera.position[0]!
-        const dy = mesh._worldMatrix[13]! - camera.position[1]!
-        const dz = mesh._worldMatrix[14]! - camera.position[2]!
-        if (dx * dx + dy * dy + dz * dz > maxDist * maxDist) return
-      }
-
-      const color = mesh._outlineColor
-
-      // Outline uses front-face culling (show back faces only)
-      this._setCullFace(true)
-      this._setCullMode(gl.FRONT)
-
-      const program = mesh._isSkinned ? this.outlineSkinnedProgram : this.outlineProgram
-      const locs = mesh._isSkinned ? this._outlineSkinnedLocs : this._outlineLocs
-      this._setProgram(program)
-      gl.uniform1f(locs.u_outlineThickness, thickness)
-      gl.uniform3f(locs.u_outlineColor, color[0], color[1], color[2])
-      gl.uniformMatrix4fv(locs.u_viewProjection, false, this._vpMatrix as Float32Array)
-
-      ensureGPUBuffers(gl, mesh.geometry)
-      ensureOutlineBuffers(gl, mesh.geometry)
-      this._setVAO((mesh.geometry._gpuBuffers as GPUBuffers).outlineVao!)
-
-      if (mesh._isSkinned) {
-        gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._skinnedDynBuf, mesh._batchIndex * this._alignedSkinnedSize, 2176)
-      } else {
-        gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 128)
-      }
-
-      const idxType = mesh.geometry.indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT
-      gl.drawElements(gl.TRIANGLES, mesh.geometry.indexCount, idxType, 0)
-      drawCalls++
-      triangles += mesh.geometry.indexCount / 3
+      triangles += idxCount / 3
     }
 
     // ─── Side (cull mode) helper ────────────────────────────────────
-    const applySide = (side: string, _isTransparent: boolean) => {
-      if (side === 'double') {
+    const applySide = (side: string, isOutlined: boolean) => {
+      if (isOutlined) {
+        // Outlined Lambert meshes use cullMode:none (shader handles front-face discard)
+        this._setCullFace(false)
+      } else if (side === 'double') {
         this._setCullFace(false)
       } else if (side === 'back') {
         this._setCullFace(true)
@@ -1564,12 +1630,10 @@ export class WebGLRenderer implements Renderer {
     // ─── Opaque draw loop ────────────────────────────────────────
     for (let si = 0; si < transparentStart; si++) {
       const mesh = meshes[sortedIndices[si]!]!
+      const isOutlined = mesh._outlineThickness > 0 && mesh.material.type === 'lambert'
 
-      // Draw outline first (behind the main mesh)
-      drawOutline(mesh)
-
-      // Apply material side (cull mode)
-      applySide(mesh.material.side, false)
+      // Apply material side (cull mode), considering outlines
+      applySide(mesh.material.side, isOutlined)
 
       let program: WebGLProgram
       let locs: SceneUniformLocs
@@ -1617,12 +1681,10 @@ export class WebGLRenderer implements Renderer {
 
       for (let si = transparentStart; si < meshes.length; si++) {
         const mesh = meshes[sortedIndices[si]!]!
+        const isOutlined = mesh._outlineThickness > 0 && mesh.material.type === 'lambert'
 
-        // Draw outline first
-        drawOutline(mesh)
-
-        // Apply material side
-        applySide(mesh.material.side, true)
+        // Apply material side (cull mode), considering outlines
+        applySide(mesh.material.side, isOutlined)
 
         let program: WebGLProgram
         let locs: SceneUniformLocs
@@ -1784,8 +1846,6 @@ export class WebGLRenderer implements Renderer {
     gl.deleteProgram(this.basicSkinnedProgram)
     gl.deleteProgram(this.shadowDepthProgram)
     gl.deleteProgram(this.shadowDepthSkinnedProgram)
-    gl.deleteProgram(this.outlineProgram)
-    gl.deleteProgram(this.outlineSkinnedProgram)
     gl.deleteProgram(this.bloomDownsampleProgram)
     gl.deleteProgram(this.bloomUpsampleProgram)
     gl.deleteProgram(this.blitProgram)

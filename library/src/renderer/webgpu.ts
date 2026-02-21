@@ -18,7 +18,9 @@
 //   Bind group    – A set of GPU resources (buffers, textures) bound to shader slots.
 //   Uniform buffer – CPU-to-GPU data (matrices, colors) uploaded once and read by shaders.
 //   MSAA          – Multi-sample anti-aliasing (4x) to smooth jagged edges.
-//   Outline       – Inverted hull outlines (front-face culled inflated mesh) per-mesh.
+//   Outline       – Inverted hull outlines via combined geometry (doubled vertices with
+//                    smooth normals) drawn in a single call with cullMode:none and
+//                    front_facing discard in the fragment shader.
 //   Side          – Per-material face culling control (front/back/double).
 //   Premul alpha  – Transparent pipelines use premultiplied alpha blend (src=one, dst=
 //                    one-minus-src-alpha). This avoids the 'src-alpha' blend factor which
@@ -65,8 +67,6 @@ import {
   BASIC_SKINNED_WGSL,
   SHADOW_DEPTH_WGSL,
   SHADOW_DEPTH_SKINNED_WGSL,
-  OUTLINE_WGSL,
-  OUTLINE_SKINNED_WGSL,
   BLOOM_DOWN_WGSL,
   BLOOM_UP_WGSL,
   BLIT_WGSL,
@@ -109,9 +109,9 @@ interface GeoBufs {
   index: GPUBuffer
   indexFormat: GPUIndexFormat
   indexCount: number
+  baseIndexCount?: number
   joints?: GPUBuffer
   weights?: GPUBuffer
-  smoothNormal?: GPUBuffer
 }
 
 interface MatCache {
@@ -145,8 +145,8 @@ interface RenderTargets {
 const FRAME_UB_SIZE = 192
 // ShadowUniforms: mat4(64)
 const SHADOW_UB_SIZE = 64
-// ObjectUniforms: mat4(64) + mat4(64) = 128 bytes
-const OBJECT_UB_SIZE = 128
+// ObjectUniforms: mat4(64) + mat4(64) + vec4(16) = 144 bytes
+const OBJECT_UB_SIZE = 144
 // MaterialUniforms: vec3+f32(16) + 4*f32(16) + 32*PaletteEntry(32) = 1056 bytes
 const MATERIAL_UB_SIZE = 1056
 // Bloom down params: vec2+f32+pad(16)
@@ -156,8 +156,8 @@ const BLOOM_UP_UB_SIZE = 16
 // Blit params: f32+pad(16)
 const BLIT_UB_SIZE = 16
 
-// SkinnedObjectUniforms: mat4(64) + mat4(64) + 32*mat4(2048) = 2176 bytes
-const SKINNED_OBJECT_UB_SIZE = 2176
+// SkinnedObjectUniforms: mat4(64) + mat4(64) + vec4(16) + 32*mat4(2048) = 2192 bytes
+const SKINNED_OBJECT_UB_SIZE = 2192
 
 // ─── Vertex buffer layout (shared by lambert + basic) ────────────────
 
@@ -225,10 +225,6 @@ export class WebGPURenderer implements Renderer {
   private lambertTexturedPipeline!: GPURenderPipeline
   private lambertTexturedTransparentPipeline!: GPURenderPipeline
 
-  // Outline pipelines (front-face culling, inflate along normals)
-  private outlinePipeline!: GPURenderPipeline
-  private outlineSkinnedPipeline!: GPURenderPipeline
-
   // Pipeline cache for per-material side (cull mode) variants
   // Key: basePipelineId << 2 | cullModeId (0=back, 1=front, 2=none)
   private _pipelineCache = new Map<number, GPURenderPipeline>()
@@ -241,7 +237,6 @@ export class WebGPURenderer implements Renderer {
   private postProcessBGL: GPUBindGroupLayout
   private blitBGL: GPUBindGroupLayout
   private textureBGL!: GPUBindGroupLayout
-  private outlineMaterialBGL!: GPUBindGroupLayout
 
   // Per-frame resources
   private frameUB: GPUBuffer
@@ -289,11 +284,9 @@ export class WebGPURenderer implements Renderer {
   private dummyTexture: GPUTexture
   private dummyTextureView: GPUTextureView
 
-  // Outline material cache (keyed by thickness + color hash)
-  private _outlineMatCache = new Map<string, MatCache>()
-
   // Cached GPU resources
   private _geoCache = new WeakMap<Geometry, GeoBufs>()
+  private _outlineGeoCache = new WeakMap<Geometry, GeoBufs>()
   private _matCache = new WeakMap<Material, MatCache>()
   private _gpuTexCache = new WeakMap<Texture, { texture: GPUTexture; view: GPUTextureView }>()
   private _texBGCache = new WeakMap<Material, GPUBindGroup>()
@@ -564,9 +557,6 @@ export class WebGPURenderer implements Renderer {
 
     // Initialize textured pipeline resources
     this._initTexturedPipelines()
-
-    // Initialize outline pipelines
-    this._initOutlinePipelines()
   }
 
   private _initTexturedPipelines() {
@@ -640,52 +630,6 @@ export class WebGPURenderer implements Renderer {
       minFilter: 'linear',
       addressModeU: 'clamp-to-edge',
       addressModeV: 'clamp-to-edge',
-    })
-  }
-
-  private _initOutlinePipelines() {
-    const device = this.device
-    const opaqueTargets: GPUColorTargetState[] = [{ format: 'rgba8unorm' }, { format: 'rgba16float' }]
-
-    // Outline shaders read material uniforms in the vertex stage (for thickness),
-    // so we need a separate BGL with VERTEX | FRAGMENT visibility.
-    this.outlineMaterialBGL = device.createBindGroupLayout({
-      entries: [
-        {
-          binding: 0,
-          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-          buffer: { type: 'uniform' },
-        },
-      ],
-    })
-
-    // Standard (non-skinned) outline pipeline layout: frame + material + object
-    const opaquePipelineLayout = device.createPipelineLayout({
-      bindGroupLayouts: [this.frameBGL, this.outlineMaterialBGL, this.objectBGL],
-    })
-    const skinnedPipelineLayout = device.createPipelineLayout({
-      bindGroupLayouts: [this.frameBGL, this.outlineMaterialBGL, this.skinnedObjectBGL],
-    })
-
-    const outlineModule = device.createShaderModule({ code: OUTLINE_WGSL })
-    const outlineSkinnedModule = device.createShaderModule({ code: OUTLINE_SKINNED_WGSL })
-
-    this.outlinePipeline = device.createRenderPipeline({
-      layout: opaquePipelineLayout,
-      vertex: { module: outlineModule, entryPoint: 'vs_main', buffers: VERTEX_BUFFER_LAYOUT },
-      fragment: { module: outlineModule, entryPoint: 'fs_main', targets: opaqueTargets },
-      primitive: { topology: 'triangle-list', cullMode: 'front', frontFace: 'ccw' },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
-      multisample: { count: this.samples },
-    })
-
-    this.outlineSkinnedPipeline = device.createRenderPipeline({
-      layout: skinnedPipelineLayout,
-      vertex: { module: outlineSkinnedModule, entryPoint: 'vs_main', buffers: SKINNED_VERTEX_BUFFER_LAYOUT },
-      fragment: { module: outlineSkinnedModule, entryPoint: 'fs_main', targets: opaqueTargets },
-      primitive: { topology: 'triangle-list', cullMode: 'front', frontFace: 'ccw' },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
-      multisample: { count: this.samples },
     })
   }
 
@@ -908,14 +852,20 @@ export class WebGPURenderer implements Renderer {
     })
 
     const objectBGL = device.createBindGroupLayout({
-      entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform', hasDynamicOffset: true } }],
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          buffer: { type: 'uniform', hasDynamicOffset: true },
+        },
+      ],
     })
 
     const skinnedObjectBGL = device.createBindGroupLayout({
       entries: [
         {
           binding: 0,
-          visibility: GPUShaderStage.VERTEX,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
           buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: SKINNED_OBJECT_UB_SIZE },
         },
       ],
@@ -1529,8 +1479,6 @@ export class WebGPURenderer implements Renderer {
       cached.index.destroy()
       if (cached.joints) cached.joints.destroy()
       if (cached.weights) cached.weights.destroy()
-      if (cached.smoothNormal) cached.smoothNormal.destroy()
-      geometry._smoothNormals = undefined
     }
 
     const bufs: GeoBufs = {
@@ -1549,17 +1497,141 @@ export class WebGPURenderer implements Renderer {
     return bufs
   }
 
-  private ensureSmoothNormalBuffer(geometry: Geometry, geoBufs: GeoBufs): GPUBuffer {
-    if (geoBufs.smoothNormal) return geoBufs.smoothNormal
-    if (!geometry._smoothNormals) computeSmoothNormals(geometry)
-    const packed = packNormalsSnorm8(geometry._smoothNormals!, geometry.vertexCount)
-    const buf = this.device.createBuffer({
-      size: packed.byteLength,
+  private ensureOutlineGeometryBuffers(geometry: Geometry): GeoBufs {
+    const cached = this._outlineGeoCache.get(geometry)
+    if (cached && !geometry.needsUpdate) return cached
+
+    // Ensure base geometry buffers exist
+    this.ensureGeometryBuffers(geometry)
+
+    const d = this.device
+    const vc = geometry.vertexCount
+    const ic = geometry.indexCount
+
+    // Compute smooth normals for gap-free outline inflation
+    const smoothNormals = geometry._smoothNormals ?? computeSmoothNormals(geometry)
+
+    // Combined positions: [original, duplicated for outline]
+    const combinedPos = new Float32Array(vc * 2 * 3)
+    combinedPos.set(geometry.positions, 0)
+    combinedPos.set(geometry.positions, vc * 3)
+    const posBuf = d.createBuffer({
+      size: combinedPos.byteLength,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     })
-    this.device.queue.writeBuffer(buf, 0, packed.buffer, packed.byteOffset, packed.byteLength)
-    geoBufs.smoothNormal = buf
-    return buf
+    d.queue.writeBuffer(posBuf, 0, combinedPos.buffer, combinedPos.byteOffset, combinedPos.byteLength)
+
+    // Combined normals: [packed w=0, packed smooth w=127]
+    const baseNormals = packNormalsSnorm8(geometry.normals, vc, 0)
+    const outlineNormals = packNormalsSnorm8(smoothNormals, vc, 127)
+    const combinedNorm = new Int8Array(vc * 2 * 4)
+    combinedNorm.set(baseNormals, 0)
+    combinedNorm.set(outlineNormals, vc * 4)
+    const normBuf = d.createBuffer({
+      size: combinedNorm.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    })
+    d.queue.writeBuffer(normBuf, 0, combinedNorm.buffer, combinedNorm.byteOffset, combinedNorm.byteLength)
+
+    // Combined UVs: [original, duplicated]
+    const baseUVs = geometry.uvs ? packUVsFloat16(geometry.uvs) : new Uint16Array(vc * 2)
+    const combinedUV = new Uint16Array(vc * 2 * 2)
+    combinedUV.set(baseUVs, 0)
+    combinedUV.set(baseUVs, vc * 2)
+    const uvBuf = d.createBuffer({
+      size: combinedUV.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    })
+    d.queue.writeBuffer(uvBuf, 0, combinedUV.buffer, combinedUV.byteOffset, combinedUV.byteLength)
+
+    // Combined material indices: [original, duplicated]
+    let baseMatIdx: Float32Array
+    if (geometry.materialIndices) {
+      baseMatIdx = new Float32Array(geometry.materialIndices.length)
+      for (let i = 0; i < geometry.materialIndices.length; i++) baseMatIdx[i] = geometry.materialIndices[i]!
+    } else {
+      baseMatIdx = new Float32Array(vc)
+    }
+    const combinedMatIdx = new Float32Array(vc * 2)
+    combinedMatIdx.set(baseMatIdx, 0)
+    combinedMatIdx.set(baseMatIdx, vc)
+    const matIdxBuf = d.createBuffer({
+      size: combinedMatIdx.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    })
+    d.queue.writeBuffer(matIdxBuf, 0, combinedMatIdx.buffer, combinedMatIdx.byteOffset, combinedMatIdx.byteLength)
+
+    // Combined index buffer: [original CCW, reversed CW + vc offset]
+    const use32 = vc * 2 > 65535 || geometry.indices instanceof Uint32Array
+    const IndexArray = use32 ? Uint32Array : Uint16Array
+    const combinedIdx = new IndexArray(ic * 2)
+    // Original indices (CCW)
+    for (let i = 0; i < ic; i++) combinedIdx[i] = geometry.indices[i]!
+    // Same winding (CCW) + vertex offset for outline (front_facing discard handles silhouette)
+    for (let i = 0; i < ic; i++) combinedIdx[ic + i] = geometry.indices[i]! + vc
+    const indexByteLength = combinedIdx.byteLength
+    const indexAlignedSize = (indexByteLength + 3) & ~3
+    const idxBuf = d.createBuffer({ size: indexAlignedSize, usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST })
+    if (indexByteLength === indexAlignedSize) {
+      d.queue.writeBuffer(idxBuf, 0, combinedIdx.buffer, combinedIdx.byteOffset, indexByteLength)
+    } else {
+      const padded = new Uint8Array(indexAlignedSize)
+      padded.set(new Uint8Array(combinedIdx.buffer, combinedIdx.byteOffset, indexByteLength))
+      d.queue.writeBuffer(idxBuf, 0, padded.buffer, 0, indexAlignedSize)
+    }
+
+    // Combined joints + weights for skinned meshes
+    let jointsBuf: GPUBuffer | undefined
+    if (geometry.joints) {
+      const jointsU8 = geometry.joints instanceof Uint8Array ? geometry.joints : new Uint8Array(geometry.joints)
+      const combinedJoints = new Uint8Array(vc * 2 * 4)
+      combinedJoints.set(jointsU8, 0)
+      combinedJoints.set(jointsU8, vc * 4)
+      jointsBuf = d.createBuffer({
+        size: combinedJoints.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      })
+      d.queue.writeBuffer(jointsBuf, 0, combinedJoints.buffer, combinedJoints.byteOffset, combinedJoints.byteLength)
+    }
+
+    let weightsBuf: GPUBuffer | undefined
+    if (geometry.weights) {
+      const baseWeights = packWeightsUnorm8(geometry.weights)
+      const combinedWeights = new Uint8Array(vc * 2 * 4)
+      combinedWeights.set(baseWeights, 0)
+      combinedWeights.set(baseWeights, vc * 4)
+      weightsBuf = d.createBuffer({
+        size: combinedWeights.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      })
+      d.queue.writeBuffer(weightsBuf, 0, combinedWeights.buffer, combinedWeights.byteOffset, combinedWeights.byteLength)
+    }
+
+    // Destroy old combined buffers
+    if (cached) {
+      cached.position.destroy()
+      cached.normal.destroy()
+      cached.uv.destroy()
+      cached.materialIndex.destroy()
+      cached.index.destroy()
+      if (cached.joints) cached.joints.destroy()
+      if (cached.weights) cached.weights.destroy()
+    }
+
+    const bufs: GeoBufs = {
+      position: posBuf,
+      normal: normBuf,
+      uv: uvBuf,
+      materialIndex: matIdxBuf,
+      index: idxBuf,
+      indexFormat: use32 ? 'uint32' : 'uint16',
+      indexCount: ic * 2,
+      baseIndexCount: ic,
+      joints: jointsBuf,
+      weights: weightsBuf,
+    }
+    this._outlineGeoCache.set(geometry, bufs)
+    return bufs
   }
 
   private ensureMaterialCache(material: Material): MatCache {
@@ -1579,39 +1651,6 @@ export class WebGPURenderer implements Renderer {
     const cache: MatCache = { buffer, bindGroup }
     this._matCache.set(material, cache)
     return cache
-  }
-
-  private _ensureOutlineMaterialCache(thickness: number, color: [number, number, number]): MatCache {
-    const key = `${thickness}_${color[0]}_${color[1]}_${color[2]}`
-    let cached = this._outlineMatCache.get(key)
-    if (cached) return cached
-
-    const d = this.device
-    const buffer = d.createBuffer({
-      size: MATERIAL_UB_SIZE,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    })
-    const bindGroup = d.createBindGroup({
-      layout: this.outlineMaterialBGL,
-      entries: [{ binding: 0, resource: { buffer } }],
-    })
-
-    // Write outline params: baseColor=outlineColor, emissiveBrightness=thickness
-    const data = this._materialData
-    data.fill(0)
-    data[0] = color[0]
-    data[1] = color[1]
-    data[2] = color[2]
-    data[3] = 1.0 // opacity
-    // data[4] = 0 (hasPalette)
-    // data[5] = 0 (receiveShadow)
-    // data[6] = 0 (aoIntensity)
-    data[7] = thickness // emissiveBrightness slot → used as outline thickness in outline shader
-    d.queue.writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength)
-
-    cached = { buffer, bindGroup }
-    this._outlineMatCache.set(key, cached)
-    return cached
   }
 
   private writeMaterialBuffer(material: Material, cache: MatCache) {
@@ -1829,8 +1868,22 @@ export class WebGPURenderer implements Renderer {
     const skinnedBatch = this._skinnedBatchData
 
     // Fill camera-visible meshes
+    const camPos = camera.position
     for (let si = 0; si < meshes.length; si++) {
       const mesh = meshes[sortedIndices[si]!]!
+
+      // Compute effective outline thickness (0 if beyond outlineMaxDistance)
+      let thickness = mesh._outlineThickness
+      if (thickness > 0) {
+        const maxDist = mesh._outlineMaxDistance
+        if (maxDist > 0) {
+          const dx = mesh._worldMatrix[12]! - camPos[0]!
+          const dy = mesh._worldMatrix[13]! - camPos[1]!
+          const dz = mesh._worldMatrix[14]! - camPos[2]!
+          if (dx * dx + dy * dy + dz * dz > maxDist * maxDist) thickness = 0
+        }
+      }
+
       if (mesh._isSkinned) {
         mesh.skeleton!.update()
         const off = skinnedIdx * alignedSkinnedFloats
@@ -1839,7 +1892,12 @@ export class WebGPURenderer implements Renderer {
           mat4Transpose(this._normalMatrix, this._invWorldMatrix)
         }
         skinnedBatch.set(this._normalMatrix, off + 16)
-        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 32)
+        const oc = mesh._outlineColor
+        skinnedBatch[off + 32] = oc[0]
+        skinnedBatch[off + 33] = oc[1]
+        skinnedBatch[off + 34] = oc[2]
+        skinnedBatch[off + 35] = thickness
+        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 36)
         mesh._batchIndex = skinnedIdx++
       } else {
         const off = objIdx * alignedObjFloats
@@ -1848,6 +1906,11 @@ export class WebGPURenderer implements Renderer {
           mat4Transpose(this._normalMatrix, this._invWorldMatrix)
         }
         objBatch.set(this._normalMatrix, off + 16)
+        const oc = mesh._outlineColor
+        objBatch[off + 32] = oc[0]
+        objBatch[off + 33] = oc[1]
+        objBatch[off + 34] = oc[2]
+        objBatch[off + 35] = thickness
         mesh._batchIndex = objIdx++
       }
     }
@@ -1864,7 +1927,11 @@ export class WebGPURenderer implements Renderer {
           mat4Transpose(this._normalMatrix, this._invWorldMatrix)
         }
         skinnedBatch.set(this._normalMatrix, off + 16)
-        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 32)
+        skinnedBatch[off + 32] = 0
+        skinnedBatch[off + 33] = 0
+        skinnedBatch[off + 34] = 0
+        skinnedBatch[off + 35] = 0
+        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 36)
         mesh._batchIndex = skinnedIdx++
       } else {
         const off = objIdx * alignedObjFloats
@@ -1873,6 +1940,10 @@ export class WebGPURenderer implements Renderer {
           mat4Transpose(this._normalMatrix, this._invWorldMatrix)
         }
         objBatch.set(this._normalMatrix, off + 16)
+        objBatch[off + 32] = 0
+        objBatch[off + 33] = 0
+        objBatch[off + 34] = 0
+        objBatch[off + 35] = 0
         mesh._batchIndex = objIdx++
       }
     }
@@ -2038,7 +2109,11 @@ export class WebGPURenderer implements Renderer {
     const drawMeshGPU = (pass: GPURenderPassEncoder, mesh: Mesh, pipeline: GPURenderPipeline) => {
       pass.setPipeline(pipeline)
 
-      const geoBufs = this.ensureGeometryBuffers(mesh.geometry)
+      // Use combined outline buffers for outlined Lambert meshes
+      const isOutlined = mesh._outlineThickness > 0 && mesh.material.type === 'lambert'
+      const geoBufs = isOutlined
+        ? this.ensureOutlineGeometryBuffers(mesh.geometry)
+        : this.ensureGeometryBuffers(mesh.geometry)
       pass.setVertexBuffer(0, geoBufs.position)
       pass.setVertexBuffer(1, geoBufs.normal)
       pass.setVertexBuffer(2, geoBufs.uv)
@@ -2069,62 +2144,17 @@ export class WebGPURenderer implements Renderer {
       triangles += geoBufs.indexCount / 3
     }
 
-    // ─── Outline draw helper ─────────────────────────────────────
-    const drawOutlineGPU = (pass: GPURenderPassEncoder, mesh: Mesh) => {
-      const thickness = mesh._outlineThickness
-      if (thickness <= 0) return
-
-      const maxDist = mesh._outlineMaxDistance
-      if (maxDist > 0) {
-        const dx = mesh._worldMatrix[12]! - camera.position[0]!
-        const dy = mesh._worldMatrix[13]! - camera.position[1]!
-        const dz = mesh._worldMatrix[14]! - camera.position[2]!
-        if (dx * dx + dy * dy + dz * dz > maxDist * maxDist) return
-      }
-
-      const color = mesh._outlineColor
-      const outlineMatCache = this._ensureOutlineMaterialCache(thickness, color)
-
-      const pipeline = mesh._isSkinned ? this.outlineSkinnedPipeline : this.outlinePipeline
-      pass.setPipeline(pipeline)
-
-      const geoBufs = this.ensureGeometryBuffers(mesh.geometry)
-      const smoothBuf = this.ensureSmoothNormalBuffer(mesh.geometry, geoBufs)
-      pass.setVertexBuffer(0, geoBufs.position)
-      pass.setVertexBuffer(1, smoothBuf)
-      pass.setVertexBuffer(2, geoBufs.uv)
-      pass.setVertexBuffer(3, geoBufs.materialIndex)
-      if (mesh._isSkinned && geoBufs.joints && geoBufs.weights) {
-        pass.setVertexBuffer(4, geoBufs.joints)
-        pass.setVertexBuffer(5, geoBufs.weights)
-      }
-      pass.setIndexBuffer(geoBufs.index, geoBufs.indexFormat)
-
-      if (mesh._isSkinned) {
-        pass.setBindGroup(2, this._skinnedDynBG, [mesh._batchIndex * this._alignedSkinnedSize])
-      } else {
-        pass.setBindGroup(2, this._objectDynBG, [mesh._batchIndex * this._alignedObjectSize])
-      }
-
-      pass.setBindGroup(0, this.frameBG)
-      pass.setBindGroup(1, outlineMatCache.bindGroup)
-
-      pass.drawIndexed(geoBufs.indexCount)
-      drawCalls++
-      triangles += geoBufs.indexCount / 3
-    }
-
     // ─── Opaque draw loop ────────────────────────────────────────
     this._lastMaterial = null
     for (let si = 0; si < transparentStart; si++) {
       const mesh = meshes[sortedIndices[si]!]!
 
-      // Draw outline first (behind the main mesh)
-      drawOutlineGPU(scenePass, mesh)
-
       // Determine cull mode from material side
       const side = mesh.material.side
-      const cullMode: GPUCullMode = side === 'back' ? 'front' : side === 'double' ? 'none' : 'back'
+      let cullMode: GPUCullMode = side === 'back' ? 'front' : side === 'double' ? 'none' : 'back'
+
+      // Outlined Lambert meshes use cullMode:none (shader handles front-face discard)
+      if (mesh._outlineThickness > 0 && mesh.material.type === 'lambert') cullMode = 'none'
 
       let pipeline: GPURenderPipeline
       if (cullMode !== 'back') {
@@ -2158,12 +2188,12 @@ export class WebGPURenderer implements Renderer {
     for (let si = transparentStart; si < meshes.length; si++) {
       const mesh = meshes[sortedIndices[si]!]!
 
-      // Draw outline first
-      drawOutlineGPU(scenePass, mesh)
-
       // Determine cull mode from material side
       const side = mesh.material.side
-      const cullMode: GPUCullMode = side === 'back' ? 'front' : side === 'double' ? 'none' : 'back'
+      let cullMode: GPUCullMode = side === 'back' ? 'front' : side === 'double' ? 'none' : 'back'
+
+      // Outlined Lambert meshes use cullMode:none (shader handles front-face discard)
+      if (mesh._outlineThickness > 0 && mesh.material.type === 'lambert') cullMode = 'none'
 
       let pipeline: GPURenderPipeline
       if (cullMode !== 'none') {

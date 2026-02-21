@@ -14,7 +14,10 @@
 //
 //   packWeightsUnorm8()  – Float32 bone weights (16 bytes/vertex) → Unorm8x4 (4 bytes/vertex).
 //                          Blend weights are in [0,1] and sum to 1.0; 8-bit unorm (1/255
-//                          precision) is sufficient for smooth skeletal deformation.
+//                          precision) is sufficient for smooth skeletal deformation. The four
+//                          quantized values are normalized to sum to exactly 255 — without this,
+//                          rounding errors cause the skin matrix to be slightly non-unit-sum,
+//                          and the resulting vertex offset grows with distance from origin.
 
 // ─── Float32-to-Float16 conversion ──────────────────────────────────
 
@@ -41,15 +44,15 @@ const floatToHalf = (val: number): number => {
 /**
  * Pack float32 normals (vec3 per vertex) into snorm8x4 (4 bytes per vertex).
  * Each component is clamped to [-1,1] and mapped to [-127,127] as Int8.
- * The 4th component (W) is set to 0 for GPU alignment.
+ * The 4th component (W) defaults to 0 but can be set via wValue (e.g. 127 for outline flag).
  */
-export const packNormalsSnorm8 = (normals: Float32Array, vertexCount: number): Int8Array => {
+export const packNormalsSnorm8 = (normals: Float32Array, vertexCount: number, wValue = 0): Int8Array => {
   const packed = new Int8Array(vertexCount * 4)
   for (let i = 0, j = 0; i < vertexCount * 3; i += 3, j += 4) {
     packed[j] = Math.round(Math.max(-1, Math.min(1, normals[i]!)) * 127)
     packed[j + 1] = Math.round(Math.max(-1, Math.min(1, normals[i + 1]!)) * 127)
     packed[j + 2] = Math.round(Math.max(-1, Math.min(1, normals[i + 2]!)) * 127)
-    // packed[j + 3] = 0 (already zero-initialized)
+    packed[j + 3] = wValue
   }
   return packed
 }
@@ -68,12 +71,37 @@ export const packUVsFloat16 = (uvs: Float32Array): Uint16Array => {
 
 /**
  * Pack float32 bone weights into unorm8 (1 byte per component).
- * Each value is clamped to [0,1] and mapped to [0,255] as Uint8.
+ * Each group of 4 weights is normalized so the quantized values sum to exactly 255,
+ * preventing distance-dependent vertex drift in skinned meshes.
  */
 export const packWeightsUnorm8 = (weights: Float32Array): Uint8Array => {
   const packed = new Uint8Array(weights.length)
-  for (let i = 0; i < weights.length; i++) {
-    packed[i] = Math.round(Math.max(0, Math.min(1, weights[i]!)) * 255)
+  for (let i = 0; i < weights.length; i += 4) {
+    const w0 = Math.max(0, weights[i]!)
+    const w1 = Math.max(0, weights[i + 1]!)
+    const w2 = Math.max(0, weights[i + 2]!)
+    const w3 = Math.max(0, weights[i + 3]!)
+    const sum = w0 + w1 + w2 + w3
+    if (sum === 0) continue // all zeros → leave as 0
+
+    // Scale so the group sums to 255, then round
+    const scale = 255 / sum
+    let a = Math.round(w0 * scale)
+    let b = Math.round(w1 * scale)
+    let c = Math.round(w2 * scale)
+    let d = Math.round(w3 * scale)
+
+    // Fix rounding residual on the largest component
+    const diff = 255 - (a + b + c + d)
+    if (a >= b && a >= c && a >= d) a += diff
+    else if (b >= c && b >= d) b += diff
+    else if (c >= d) c += diff
+    else d += diff
+
+    packed[i] = a
+    packed[i + 1] = b
+    packed[i + 2] = c
+    packed[i + 3] = d
   }
   return packed
 }

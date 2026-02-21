@@ -4,12 +4,12 @@ import { Raycaster, cloneScene, LambertMaterial, Mesh, useEngine, useFrame, useG
 
 import { staticBundleSrc, playerBundleSrc } from './assets'
 
-import type { AnimationClip, Geometry, GLTFResult } from 'voidcore'
+import type { AnimationClip, Geometry, GLTFResult, MeshOutline } from 'voidcore'
 
 const CLIP_DURATION = 2
 const CROSSFADE_DURATION = 0.3
 const ORBIT_RADIUS = 5
-const GRID_SPACING = 5
+const GRID_SPACING = 3
 
 const megaxeMaterial = new LambertMaterial({
   emissiveBrightness: 0.3,
@@ -35,29 +35,32 @@ const Character = memo(
   ({ x, y, megaxeGeometry, playerGltf, clips, startAngle, startClipIndex, startTimeIntoClip }: CharacterProps) => {
     const { scene } = useEngine()
 
-    const { root, skeleton } = useMemo(() => {
+    const { root, skeleton, meshes } = useMemo(() => {
       const { root, skeletons } = cloneScene(playerGltf.scene, playerGltf.skeletons, {
         meshFilter: m => m.name === 'Body',
       })
       const skeleton = skeletons[0]!
+      const meshes: Mesh[] = []
 
       if (megaxeGeometry) {
         const handBone = skeleton.getBone('Hand.R')
         if (handBone) {
           const axe = new Mesh(megaxeGeometry, megaxeMaterial)
-          axe.outline = { thickness: 0.03, maxDistance: 100 }
+          axe.outline = { thickness: 0.03, color: [0, 0, 0] }
           axe.setRotation(0, 0, 1, 0)
           handBone.add(axe)
+          meshes.push(axe)
         }
       }
 
       root.traverse(node => {
         if (node instanceof Mesh) {
-          node.outline = { thickness: 0.03, maxDistance: 100 }
+          node.outline = { thickness: 0.03, color: [0, 0, 0] }
+          meshes.push(node)
         }
       })
 
-      return { root, skeleton }
+      return { root, skeleton, meshes }
     }, [playerGltf, megaxeGeometry])
 
     const { actions } = useAnimations(clips, skeleton)
@@ -70,6 +73,8 @@ const Character = memo(
       zResolved: false,
       currentClip: startClipIndex,
       nextSwitch: CLIP_DURATION - startTimeIntoClip,
+      flashFramesLeft: 0,
+      nextFlash: Math.random() * 3 + 1,
     })
 
     useFrame(({ elapsed }) => {
@@ -98,6 +103,17 @@ const Character = memo(
       // s.angle += ORBIT_SPEED * dt
       root.setPosition(x + Math.cos(s.angle) * ORBIT_RADIUS, y + Math.sin(s.angle) * ORBIT_RADIUS, s.z)
       root.setScale(0.6)
+
+      // Random red outline flash
+      if (s.flashFramesLeft <= 0 && elapsed >= s.nextFlash) {
+        s.flashFramesLeft = 10
+        s.nextFlash = elapsed + Math.random() * 3 + 1
+      }
+      const flashColor: [number, number, number] = s.flashFramesLeft > 0 ? [1, 0, 0] : [0, 0, 0]
+      if (s.flashFramesLeft > 0) s.flashFramesLeft--
+      for (const m of meshes) {
+        ;(m.outline as MeshOutline).color = flashColor
+      }
 
       if (elapsed >= s.nextSwitch && actionList.length > 1) {
         const cur = s.currentClip

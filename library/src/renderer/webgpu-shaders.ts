@@ -17,9 +17,12 @@
 //   - Built-in `@builtin(vertex_index)` replaces `gl_VertexID`
 //   - Explicit return types on all functions
 //
-// Outline shaders implement the inverted hull technique: the vertex shader inflates each vertex
-// along its normal by the outline thickness, and the fragment shader outputs a solid color.
-// Skinned variants apply bone transforms before inflation.
+// Outlined Lambert meshes use a combined geometry buffer with doubled vertices: the first half
+// contains original vertices (normal.w = 0), the second half contains outline vertices with
+// smooth normals (normal.w = 1). The Lambert shader reads normal.w to distinguish main vs
+// outline fragments. Outline vertices are inflated along their normal by the thickness stored
+// in object.outlineColorAndThickness.w, and the fragment shader uses front_facing to discard
+// front-facing outline triangles (keeping only back-facing silhouette fragments).
 
 // ─── Shadow depth shaders (vertex-only, no fragment) ─────────────────
 
@@ -31,6 +34,7 @@ struct ShadowUniforms {
 struct ObjectUniforms {
   worldMatrix: mat4x4<f32>,
   normalMatrix: mat4x4<f32>,
+  outlineColorAndThickness: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> shadow: ShadowUniforms;
@@ -50,6 +54,7 @@ struct ShadowUniforms {
 struct ObjectUniforms {
   worldMatrix: mat4x4<f32>,
   normalMatrix: mat4x4<f32>,
+  outlineColorAndThickness: vec4<f32>,
   boneMatrices: array<mat4x4<f32>, 32>,
 };
 
@@ -107,6 +112,7 @@ struct MaterialUniforms {
 struct ObjectUniforms {
   worldMatrix: mat4x4<f32>,
   normalMatrix: mat4x4<f32>,
+  outlineColorAndThickness: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
@@ -121,19 +127,26 @@ struct VertexOutput {
   @location(1) normal: vec3<f32>,
   @location(2) uv: vec2<f32>,
   @location(3) @interpolate(flat) materialIndex: i32,
+  @location(4) @interpolate(flat) outlineFlag: f32,
 };
 
 @vertex
 fn vs_main(
   @location(0) a_position: vec3<f32>,
-  @location(1) a_normal: vec3<f32>,
+  @location(1) a_normal: vec4<f32>,
   @location(2) a_uv: vec2<f32>,
   @location(3) a_materialIndex: f32,
 ) -> VertexOutput {
   var out: VertexOutput;
-  let worldPos = object.worldMatrix * vec4<f32>(a_position, 1.0);
+  let flag = a_normal.w;
+  out.outlineFlag = flag;
+  var pos = a_position;
+  if (flag > 0.5) {
+    pos = pos + normalize(a_normal.xyz) * object.outlineColorAndThickness.w;
+  }
+  let worldPos = object.worldMatrix * vec4<f32>(pos, 1.0);
   out.worldPos = worldPos.xyz;
-  out.normal = normalize((object.normalMatrix * vec4<f32>(a_normal, 0.0)).xyz);
+  out.normal = normalize((object.normalMatrix * vec4<f32>(a_normal.xyz, 0.0)).xyz);
   out.uv = a_uv;
   out.materialIndex = i32(a_materialIndex);
   out.position = frame.viewProjection * worldPos;
@@ -177,8 +190,16 @@ struct FragmentOutput {
 };
 
 @fragment
-fn fs_main(in: VertexOutput) -> FragmentOutput {
+fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
   var out: FragmentOutput;
+
+  if (in.outlineFlag > 0.5) {
+    if (front_facing || object.outlineColorAndThickness.w <= 0.0) { discard; }
+    out.color = vec4<f32>(object.outlineColorAndThickness.xyz, 1.0);
+    out.emissive = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    return out;
+  }
+
   let normal = normalize(in.normal);
   var baseColor = material.baseColor;
   var alpha = material.opacity;
@@ -244,6 +265,7 @@ struct MaterialUniforms {
 struct ObjectUniforms {
   worldMatrix: mat4x4<f32>,
   normalMatrix: mat4x4<f32>,
+  outlineColorAndThickness: vec4<f32>,
   boneMatrices: array<mat4x4<f32>, 32>,
 };
 
@@ -259,18 +281,21 @@ struct VertexOutput {
   @location(1) normal: vec3<f32>,
   @location(2) uv: vec2<f32>,
   @location(3) @interpolate(flat) materialIndex: i32,
+  @location(4) @interpolate(flat) outlineFlag: f32,
 };
 
 @vertex
 fn vs_main(
   @location(0) a_position: vec3<f32>,
-  @location(1) a_normal: vec3<f32>,
+  @location(1) a_normal: vec4<f32>,
   @location(2) a_uv: vec2<f32>,
   @location(3) a_materialIndex: f32,
   @location(4) a_joints: vec4<u32>,
   @location(5) a_weights: vec4<f32>,
 ) -> VertexOutput {
   var out: VertexOutput;
+  let flag = a_normal.w;
+  out.outlineFlag = flag;
 
   let skinMatrix =
     a_weights.x * object.boneMatrices[a_joints.x] +
@@ -279,13 +304,17 @@ fn vs_main(
     a_weights.w * object.boneMatrices[a_joints.w];
 
   let skinnedPos = skinMatrix * vec4<f32>(a_position, 1.0);
-  out.worldPos = skinnedPos.xyz;
+  let skinnedNorm = normalize((skinMatrix * vec4<f32>(a_normal.xyz, 0.0)).xyz);
 
-  let skinnedNorm = skinMatrix * vec4<f32>(a_normal, 0.0);
-  out.normal = normalize(skinnedNorm.xyz);
+  var worldPos = skinnedPos.xyz;
+  if (flag > 0.5) {
+    worldPos = worldPos + skinnedNorm * object.outlineColorAndThickness.w;
+  }
+  out.worldPos = worldPos;
+  out.normal = skinnedNorm;
   out.uv = a_uv;
   out.materialIndex = i32(a_materialIndex);
-  out.position = frame.viewProjection * skinnedPos;
+  out.position = frame.viewProjection * vec4<f32>(worldPos, 1.0);
   return out;
 }
 
@@ -326,8 +355,16 @@ struct FragmentOutput {
 };
 
 @fragment
-fn fs_main(in: VertexOutput) -> FragmentOutput {
+fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
   var out: FragmentOutput;
+
+  if (in.outlineFlag > 0.5) {
+    if (front_facing || object.outlineColorAndThickness.w <= 0.0) { discard; }
+    out.color = vec4<f32>(object.outlineColorAndThickness.xyz, 1.0);
+    out.emissive = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    return out;
+  }
+
   let normal = normalize(in.normal);
   var baseColor = material.baseColor;
   var alpha = material.opacity;
@@ -395,6 +432,7 @@ struct MaterialUniforms {
 struct ObjectUniforms {
   worldMatrix: mat4x4<f32>,
   normalMatrix: mat4x4<f32>,
+  outlineColorAndThickness: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
@@ -412,19 +450,26 @@ struct VertexOutput {
   @location(1) normal: vec3<f32>,
   @location(2) uv: vec2<f32>,
   @location(3) @interpolate(flat) materialIndex: i32,
+  @location(4) @interpolate(flat) outlineFlag: f32,
 };
 
 @vertex
 fn vs_main(
   @location(0) a_position: vec3<f32>,
-  @location(1) a_normal: vec3<f32>,
+  @location(1) a_normal: vec4<f32>,
   @location(2) a_uv: vec2<f32>,
   @location(3) a_materialIndex: f32,
 ) -> VertexOutput {
   var out: VertexOutput;
-  let worldPos = object.worldMatrix * vec4<f32>(a_position, 1.0);
+  let flag = a_normal.w;
+  out.outlineFlag = flag;
+  var pos = a_position;
+  if (flag > 0.5) {
+    pos = pos + normalize(a_normal.xyz) * object.outlineColorAndThickness.w;
+  }
+  let worldPos = object.worldMatrix * vec4<f32>(pos, 1.0);
   out.worldPos = worldPos.xyz;
-  out.normal = normalize((object.normalMatrix * vec4<f32>(a_normal, 0.0)).xyz);
+  out.normal = normalize((object.normalMatrix * vec4<f32>(a_normal.xyz, 0.0)).xyz);
   out.uv = a_uv;
   out.materialIndex = i32(a_materialIndex);
   out.position = frame.viewProjection * worldPos;
@@ -469,8 +514,20 @@ struct FragmentOutput {
 };
 
 @fragment
-fn fs_main(in: VertexOutput) -> FragmentOutput {
+fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
   var out: FragmentOutput;
+
+  // Sample textures before any non-uniform branching (WGSL requires uniform control flow for textureSample)
+  let texColor = textureSample(colorMapTexture, mapSampler, in.uv).rgb;
+  let aoSample = textureSample(aoMapTexture, mapSampler, in.uv).r;
+
+  if (in.outlineFlag > 0.5) {
+    if (front_facing || object.outlineColorAndThickness.w <= 0.0) { discard; }
+    out.color = vec4<f32>(object.outlineColorAndThickness.xyz, 1.0);
+    out.emissive = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    return out;
+  }
+
   let normal = normalize(in.normal);
   var baseColor = material.baseColor;
   var alpha = material.opacity;
@@ -483,11 +540,9 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     emissive = material.palette[idx].emissive.rgb * material.palette[idx].emissive.a;
   }
 
-  // Sample texture maps (dummy white textures → identity when no map assigned)
-  let texColor = textureSample(colorMapTexture, mapSampler, in.uv).rgb;
   baseColor = baseColor * texColor;
 
-  let ao = mix(1.0, textureSample(aoMapTexture, mapSampler, in.uv).r, material.aoIntensity);
+  let ao = mix(1.0, aoSample, material.aoIntensity);
   let ambient = frame.ambientColor * frame.ambientIntensity * ao;
 
   let NdotL = max(dot(normal, frame.lightDir), 0.0);
@@ -544,6 +599,7 @@ struct MaterialUniforms {
 struct ObjectUniforms {
   worldMatrix: mat4x4<f32>,
   normalMatrix: mat4x4<f32>,
+  outlineColorAndThickness: vec4<f32>,
   boneMatrices: array<mat4x4<f32>, 32>,
 };
 
@@ -629,6 +685,7 @@ struct MaterialUniforms {
 struct ObjectUniforms {
   worldMatrix: mat4x4<f32>,
   normalMatrix: mat4x4<f32>,
+  outlineColorAndThickness: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
@@ -665,145 +722,6 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
   var out: FragmentOutput;
   out.color = vec4<f32>(material.baseColor * material.opacity, material.opacity);
   out.emissive = vec4<f32>(0.0, 0.0, 0.0, material.opacity);
-  return out;
-}
-`
-
-// ─── Outline shaders (inverted hull, smooth-normal inflation) ────────────
-// Smooth normals are bound at slot 1 instead of regular normals during the outline pass,
-// so vertices sharing the same position inflate in the same direction — eliminating gaps.
-
-export const OUTLINE_WGSL = /* wgsl */ `
-struct FrameUniforms {
-  viewProjection: mat4x4<f32>,
-  lightDir: vec3<f32>,
-  lightIntensity: f32,
-  lightColor: vec3<f32>,
-  ambientIntensity: f32,
-  ambientColor: vec3<f32>,
-  shadowEnabled: f32,
-  shadowVP: mat4x4<f32>,
-  constantBias: f32,
-  slopeBias: f32,
-  invMapSize: f32,
-  _pad0: f32,
-};
-
-struct MaterialUniforms {
-  baseColor: vec3<f32>,
-  opacity: f32,
-  hasPalette: f32,
-  receiveShadow: f32,
-  aoIntensity: f32,
-  emissiveBrightness: f32,
-};
-
-struct ObjectUniforms {
-  worldMatrix: mat4x4<f32>,
-  normalMatrix: mat4x4<f32>,
-};
-
-@group(0) @binding(0) var<uniform> frame: FrameUniforms;
-@group(0) @binding(1) var shadowMap: texture_depth_2d;
-@group(0) @binding(2) var shadowSampler: sampler_comparison;
-@group(1) @binding(0) var<uniform> material: MaterialUniforms;
-@group(2) @binding(0) var<uniform> object: ObjectUniforms;
-
-@vertex
-fn vs_main(
-  @location(0) a_position: vec3<f32>,
-  @location(1) a_normal: vec3<f32>,
-  @location(2) a_uv: vec2<f32>,
-  @location(3) a_materialIndex: f32,
-) -> @builtin(position) vec4<f32> {
-  let t = material.emissiveBrightness;
-  let inflated = a_position + normalize(a_normal) * t;
-  return frame.viewProjection * object.worldMatrix * vec4<f32>(inflated, 1.0);
-}
-
-struct FragmentOutput {
-  @location(0) color: vec4<f32>,
-  @location(1) emissive: vec4<f32>,
-};
-
-@fragment
-fn fs_main() -> FragmentOutput {
-  var out: FragmentOutput;
-  out.color = vec4<f32>(material.baseColor, 1.0);
-  out.emissive = vec4<f32>(0.0, 0.0, 0.0, 1.0);
-  return out;
-}
-`
-
-export const OUTLINE_SKINNED_WGSL = /* wgsl */ `
-struct FrameUniforms {
-  viewProjection: mat4x4<f32>,
-  lightDir: vec3<f32>,
-  lightIntensity: f32,
-  lightColor: vec3<f32>,
-  ambientIntensity: f32,
-  ambientColor: vec3<f32>,
-  shadowEnabled: f32,
-  shadowVP: mat4x4<f32>,
-  constantBias: f32,
-  slopeBias: f32,
-  invMapSize: f32,
-  _pad0: f32,
-};
-
-struct MaterialUniforms {
-  baseColor: vec3<f32>,
-  opacity: f32,
-  hasPalette: f32,
-  receiveShadow: f32,
-  aoIntensity: f32,
-  emissiveBrightness: f32,
-};
-
-struct ObjectUniforms {
-  worldMatrix: mat4x4<f32>,
-  normalMatrix: mat4x4<f32>,
-  boneMatrices: array<mat4x4<f32>, 32>,
-};
-
-@group(0) @binding(0) var<uniform> frame: FrameUniforms;
-@group(0) @binding(1) var shadowMap: texture_depth_2d;
-@group(0) @binding(2) var shadowSampler: sampler_comparison;
-@group(1) @binding(0) var<uniform> material: MaterialUniforms;
-@group(2) @binding(0) var<uniform> object: ObjectUniforms;
-
-@vertex
-fn vs_main(
-  @location(0) a_position: vec3<f32>,
-  @location(1) a_normal: vec3<f32>,
-  @location(2) a_uv: vec2<f32>,
-  @location(3) a_materialIndex: f32,
-  @location(4) a_joints: vec4<u32>,
-  @location(5) a_weights: vec4<f32>,
-) -> @builtin(position) vec4<f32> {
-  let skinMatrix =
-    a_weights.x * object.boneMatrices[a_joints.x] +
-    a_weights.y * object.boneMatrices[a_joints.y] +
-    a_weights.z * object.boneMatrices[a_joints.z] +
-    a_weights.w * object.boneMatrices[a_joints.w];
-
-  let skinnedPos = skinMatrix * vec4<f32>(a_position, 1.0);
-  let skinnedNorm = normalize((skinMatrix * vec4<f32>(a_normal, 0.0)).xyz);
-  let t = material.emissiveBrightness;
-  let inflated = skinnedPos.xyz + skinnedNorm * t;
-  return frame.viewProjection * vec4<f32>(inflated, 1.0);
-}
-
-struct FragmentOutput {
-  @location(0) color: vec4<f32>,
-  @location(1) emissive: vec4<f32>,
-};
-
-@fragment
-fn fs_main() -> FragmentOutput {
-  var out: FragmentOutput;
-  out.color = vec4<f32>(material.baseColor, 1.0);
-  out.emissive = vec4<f32>(0.0, 0.0, 0.0, 1.0);
   return out;
 }
 `

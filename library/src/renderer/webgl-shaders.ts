@@ -16,9 +16,10 @@
 //   Shadow Depth         – Writes depth from light's perspective (static meshes).
 //   Shadow Depth Skinned – Same but with skeletal deformation.
 //
-// Plus outline shaders (inverted hull technique):
-//   Outline              – Inflates vertices along normals, outputs solid color.
-//   Outline Skinned      – Same but with skeletal deformation applied before inflation.
+// Outlined Lambert meshes use combined geometry with doubled vertices (original + outline with
+// smooth normals). The Lambert shader reads normal.w to distinguish main vs outline fragments.
+// Outline vertices are inflated by thickness from the object UBO, and the fragment shader uses
+// gl_FrontFacing to discard front-facing outline triangles (keeping only back-facing silhouette).
 //
 // Plus three post-processing shaders (fullscreen triangle, no vertex buffer needed):
 //   Bloom Downsample – 13-tap filter that progressively shrinks the emissive image.
@@ -50,14 +51,16 @@
 //   float u_invMapSize           float 50
 //   float _biasPad               float 51
 //
-// ObjectBlock (binding 1, 128 bytes std140):
-//   mat4 u_worldMatrix    offset 0
-//   mat4 u_normalMatrix   offset 64
+// ObjectBlock (binding 1, 144 bytes std140):
+//   mat4 u_worldMatrix              offset 0
+//   mat4 u_normalMatrix             offset 64
+//   vec4 u_outlineColorAndThickness  offset 128
 //
-// SkinnedObjectBlock (binding 1, 2176 bytes std140):
-//   mat4 u_worldMatrix       offset 0
-//   mat4 u_normalMatrix      offset 64
-//   mat4 u_boneMatrices[32]  offset 128
+// SkinnedObjectBlock (binding 1, 2192 bytes std140):
+//   mat4 u_worldMatrix              offset 0
+//   mat4 u_normalMatrix             offset 64
+//   vec4 u_outlineColorAndThickness  offset 128
+//   mat4 u_boneMatrices[32]          offset 144
 //
 // ShadowBlock (binding 2, 64 bytes std140):
 //   mat4 u_shadowVP          offset 0
@@ -84,12 +87,14 @@ const OBJECT_BLOCK = `
 layout(std140) uniform ObjectBlock {
   mat4 u_worldMatrix;
   mat4 u_normalMatrix;
+  vec4 u_outlineColorAndThickness;
 };`
 
 const SKINNED_OBJECT_BLOCK = `
 layout(std140) uniform SkinnedObjectBlock {
   mat4 u_worldMatrix;
   mat4 u_normalMatrix;
+  vec4 u_outlineColorAndThickness;
   mat4 u_boneMatrices[32];
 };`
 
@@ -176,7 +181,7 @@ export const LAMBERT_VERT = `#version 300 es
 precision highp float;
 
 layout(location = 0) in vec3 a_position;
-layout(location = 1) in vec3 a_normal;
+layout(location = 1) in vec4 a_normal;
 layout(location = 2) in vec2 a_uv;
 layout(location = 3) in float a_materialIndex;
 
@@ -187,24 +192,32 @@ out vec3 v_worldPos;
 out vec3 v_normal;
 out vec2 v_uv;
 flat out int v_materialIndex;
+flat out float v_outlineFlag;
 
 void main() {
-  vec4 worldPos = u_worldMatrix * vec4(a_position, 1.0);
+  float flag = a_normal.w;
+  v_outlineFlag = flag;
+  vec3 pos = a_position;
+  if (flag > 0.5) {
+    pos = pos + normalize(a_normal.xyz) * u_outlineColorAndThickness.w;
+  }
+  vec4 worldPos = u_worldMatrix * vec4(pos, 1.0);
   v_worldPos = worldPos.xyz;
-  v_normal = normalize((u_normalMatrix * vec4(a_normal, 0.0)).xyz);
+  v_normal = normalize((u_normalMatrix * vec4(a_normal.xyz, 0.0)).xyz);
   v_uv = a_uv;
   v_materialIndex = int(a_materialIndex);
   gl_Position = u_viewProjection * worldPos;
 }
 `
 
-export const LAMBERT_FRAG = `#version 300 es
+const _makeLambertFrag = (objectBlock: string) => `#version 300 es
 precision highp float;
 
 in vec3 v_worldPos;
 in vec3 v_normal;
 in vec2 v_uv;
 flat in int v_materialIndex;
+flat in float v_outlineFlag;
 
 struct PaletteEntry {
   vec4 color;    // xyz = RGB, w = opacity
@@ -212,6 +225,7 @@ struct PaletteEntry {
 };
 
 ${FRAME_BLOCK}
+${objectBlock}
 
 uniform vec3 u_baseColor;
 uniform float u_opacity;
@@ -227,6 +241,13 @@ layout(location = 1) out vec4 fragEmissive;
 ${SHADOW_FUNCTIONS}
 
 void main() {
+  if (v_outlineFlag > 0.5) {
+    if (gl_FrontFacing || u_outlineColorAndThickness.w <= 0.0) discard;
+    fragColor = vec4(u_outlineColorAndThickness.xyz, 1.0);
+    fragEmissive = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
+
   vec3 normal = normalize(v_normal);
   vec3 baseColor = u_baseColor;
   vec3 emissive = vec3(0.0);
@@ -252,11 +273,14 @@ void main() {
 }
 `
 
+export const LAMBERT_FRAG = _makeLambertFrag(OBJECT_BLOCK)
+export const LAMBERT_SKINNED_FRAG = _makeLambertFrag(SKINNED_OBJECT_BLOCK)
+
 export const LAMBERT_SKINNED_VERT = `#version 300 es
 precision highp float;
 
 layout(location = 0) in vec3 a_position;
-layout(location = 1) in vec3 a_normal;
+layout(location = 1) in vec4 a_normal;
 layout(location = 2) in vec2 a_uv;
 layout(location = 3) in float a_materialIndex;
 layout(location = 4) in vec4 a_joints;
@@ -269,8 +293,12 @@ out vec3 v_worldPos;
 out vec3 v_normal;
 out vec2 v_uv;
 flat out int v_materialIndex;
+flat out float v_outlineFlag;
 
 void main() {
+  float flag = a_normal.w;
+  v_outlineFlag = flag;
+
   mat4 skinMatrix =
     a_weights.x * u_boneMatrices[int(a_joints.x)] +
     a_weights.y * u_boneMatrices[int(a_joints.y)] +
@@ -278,13 +306,17 @@ void main() {
     a_weights.w * u_boneMatrices[int(a_joints.w)];
 
   vec4 skinnedPos = skinMatrix * vec4(a_position, 1.0);
-  v_worldPos = skinnedPos.xyz;
+  vec3 skinnedNorm = normalize((skinMatrix * vec4(a_normal.xyz, 0.0)).xyz);
 
-  vec4 skinnedNorm = skinMatrix * vec4(a_normal, 0.0);
-  v_normal = normalize(skinnedNorm.xyz);
+  vec3 worldPos = skinnedPos.xyz;
+  if (flag > 0.5) {
+    worldPos = worldPos + skinnedNorm * u_outlineColorAndThickness.w;
+  }
+  v_worldPos = worldPos;
+  v_normal = skinnedNorm;
   v_uv = a_uv;
   v_materialIndex = int(a_materialIndex);
-  gl_Position = u_viewProjection * skinnedPos;
+  gl_Position = u_viewProjection * vec4(worldPos, 1.0);
 }
 `
 
@@ -295,6 +327,7 @@ in vec3 v_worldPos;
 in vec3 v_normal;
 in vec2 v_uv;
 flat in int v_materialIndex;
+flat in float v_outlineFlag;
 
 struct PaletteEntry {
   vec4 color;    // xyz = RGB, w = opacity
@@ -302,6 +335,7 @@ struct PaletteEntry {
 };
 
 ${FRAME_BLOCK}
+${OBJECT_BLOCK}
 
 uniform vec3 u_baseColor;
 uniform float u_opacity;
@@ -320,6 +354,13 @@ layout(location = 1) out vec4 fragEmissive;
 ${SHADOW_FUNCTIONS}
 
 void main() {
+  if (v_outlineFlag > 0.5) {
+    if (gl_FrontFacing || u_outlineColorAndThickness.w <= 0.0) discard;
+    fragColor = vec4(u_outlineColorAndThickness.xyz, 1.0);
+    fragEmissive = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
+
   vec3 normal = normalize(v_normal);
   vec3 baseColor = u_baseColor;
   vec3 emissive = vec3(0.0);
@@ -411,70 +452,6 @@ layout(location = 1) out vec4 fragEmissive;
 void main() {
   fragColor = vec4(u_baseColor, u_opacity);
   fragEmissive = vec4(0.0, 0.0, 0.0, u_opacity);
-}
-`
-
-// ─── Outline shaders (inverted hull, smooth-normal inflation) ────────────
-// Smooth normals are bound at location 1 instead of regular normals during the outline pass,
-// so vertices sharing the same position inflate in the same direction — eliminating gaps.
-
-export const OUTLINE_VERT = `#version 300 es
-precision highp float;
-
-layout(location = 0) in vec3 a_position;
-layout(location = 1) in vec3 a_normal;
-
-${OBJECT_BLOCK}
-
-uniform float u_outlineThickness;
-uniform mat4 u_viewProjection;
-
-void main() {
-  vec3 inflated = a_position + normalize(a_normal) * u_outlineThickness;
-  gl_Position = u_viewProjection * u_worldMatrix * vec4(inflated, 1.0);
-}
-`
-
-export const OUTLINE_SKINNED_VERT = `#version 300 es
-precision highp float;
-
-layout(location = 0) in vec3 a_position;
-layout(location = 1) in vec3 a_normal;
-layout(location = 2) in vec2 a_uv;
-layout(location = 3) in float a_materialIndex;
-layout(location = 4) in vec4 a_joints;
-layout(location = 5) in vec4 a_weights;
-
-${SKINNED_OBJECT_BLOCK}
-
-uniform float u_outlineThickness;
-uniform mat4 u_viewProjection;
-
-void main() {
-  mat4 skinMatrix =
-    a_weights.x * u_boneMatrices[int(a_joints.x)] +
-    a_weights.y * u_boneMatrices[int(a_joints.y)] +
-    a_weights.z * u_boneMatrices[int(a_joints.z)] +
-    a_weights.w * u_boneMatrices[int(a_joints.w)];
-
-  vec4 skinnedPos = skinMatrix * vec4(a_position, 1.0);
-  vec3 skinnedNorm = normalize((skinMatrix * vec4(a_normal, 0.0)).xyz);
-  vec3 inflated = skinnedPos.xyz + skinnedNorm * u_outlineThickness;
-  gl_Position = u_viewProjection * vec4(inflated, 1.0);
-}
-`
-
-export const OUTLINE_FRAG = `#version 300 es
-precision mediump float;
-
-uniform vec3 u_outlineColor;
-
-layout(location = 0) out vec4 fragColor;
-layout(location = 1) out vec4 fragEmissive;
-
-void main() {
-  fragColor = vec4(u_outlineColor, 1.0);
-  fragEmissive = vec4(0.0, 0.0, 0.0, 1.0);
 }
 `
 
