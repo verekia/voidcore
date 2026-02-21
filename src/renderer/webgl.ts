@@ -10,6 +10,10 @@
 // Dynamic geometry is supported via geometry.needsUpdate — position and normal buffers are
 // re-uploaded with DYNAMIC_DRAW when the flag is set (used by helpers and procedural meshes).
 //
+// Inverted hull outlines are supported per-mesh: a front-face-culled inflated copy of the mesh
+// is drawn before the main mesh to create a silhouette effect. The material `side` property
+// (front/back/double) controls per-material face culling.
+//
 // A GL state cache (_set* helpers) eliminates redundant state calls between consecutive draws.
 // The radix sort groups meshes by pipeline > material > depth, so the cache yields significant
 // savings — especially in the shadow pass (N draws with only 2 programs).
@@ -65,6 +69,9 @@ import {
   SHADOW_DEPTH_VERT,
   SHADOW_DEPTH_SKINNED_VERT,
   SHADOW_DEPTH_FRAG,
+  OUTLINE_VERT,
+  OUTLINE_SKINNED_VERT,
+  OUTLINE_FRAG,
   FULLSCREEN_VERT,
   BLOOM_DOWNSAMPLE_FRAG,
   BLOOM_UPSAMPLE_FRAG,
@@ -146,6 +153,11 @@ interface PostUniformLocs {
   u_srcTexture: WebGLUniformLocation | null
   u_texelSize: WebGLUniformLocation | null
   u_useKarisAverage: WebGLUniformLocation | null
+}
+
+interface OutlineUniformLocs {
+  u_outlineThickness: WebGLUniformLocation | null
+  u_outlineColor: WebGLUniformLocation | null
 }
 
 interface BlitUniformLocs {
@@ -472,6 +484,8 @@ export class WebGLRenderer implements Renderer {
   private basicSkinnedProgram: WebGLProgram
   private shadowDepthProgram: WebGLProgram
   private shadowDepthSkinnedProgram: WebGLProgram
+  private outlineProgram: WebGLProgram
+  private outlineSkinnedProgram: WebGLProgram
   private bloomDownsampleProgram: WebGLProgram
   private bloomUpsampleProgram: WebGLProgram
   private blitProgram: WebGLProgram
@@ -482,6 +496,10 @@ export class WebGLRenderer implements Renderer {
   private _basicLocs!: SceneUniformLocs
   private _lambertSkinnedLocs!: SceneUniformLocs
   private _basicSkinnedLocs!: SceneUniformLocs
+
+  // Outline uniform locations
+  private _outlineLocs!: OutlineUniformLocs
+  private _outlineSkinnedLocs!: OutlineUniformLocs
 
   // Texture map cache
   private _glTexCache = new WeakMap<Texture, WebGLTexture>()
@@ -638,6 +656,8 @@ export class WebGLRenderer implements Renderer {
     this.basicSkinnedProgram = createProgram(gl, BASIC_SKINNED_VERT, BASIC_FRAG)
     this.shadowDepthProgram = createProgram(gl, SHADOW_DEPTH_VERT, SHADOW_DEPTH_FRAG)
     this.shadowDepthSkinnedProgram = createProgram(gl, SHADOW_DEPTH_SKINNED_VERT, SHADOW_DEPTH_FRAG)
+    this.outlineProgram = createProgram(gl, OUTLINE_VERT, OUTLINE_FRAG)
+    this.outlineSkinnedProgram = createProgram(gl, OUTLINE_SKINNED_VERT, OUTLINE_FRAG)
     this.bloomDownsampleProgram = createProgram(gl, FULLSCREEN_VERT, BLOOM_DOWNSAMPLE_FRAG)
     this.bloomUpsampleProgram = createProgram(gl, FULLSCREEN_VERT, BLOOM_UPSAMPLE_FRAG)
     this.blitProgram = createProgram(gl, FULLSCREEN_VERT, BLIT_FRAG)
@@ -648,6 +668,14 @@ export class WebGLRenderer implements Renderer {
     this._basicLocs = cacheSceneLocs(gl, this.basicProgram)
     this._lambertSkinnedLocs = cacheSceneLocs(gl, this.lambertSkinnedProgram)
     this._basicSkinnedLocs = cacheSceneLocs(gl, this.basicSkinnedProgram)
+    this._outlineLocs = {
+      u_outlineThickness: gl.getUniformLocation(this.outlineProgram, 'u_outlineThickness'),
+      u_outlineColor: gl.getUniformLocation(this.outlineProgram, 'u_outlineColor'),
+    }
+    this._outlineSkinnedLocs = {
+      u_outlineThickness: gl.getUniformLocation(this.outlineSkinnedProgram, 'u_outlineThickness'),
+      u_outlineColor: gl.getUniformLocation(this.outlineSkinnedProgram, 'u_outlineColor'),
+    }
     this._bloomDownLocs = cachePostLocs(gl, this.bloomDownsampleProgram)
     this._bloomUpLocs = cachePostLocs(gl, this.bloomUpsampleProgram)
     this._blitLocs = cacheBlitLocs(gl, this.blitProgram)
@@ -677,6 +705,8 @@ export class WebGLRenderer implements Renderer {
     this._bindUBOBlocks(this.basicProgram, false)
     this._bindUBOBlocks(this.lambertSkinnedProgram, true)
     this._bindUBOBlocks(this.basicSkinnedProgram, true)
+    this._bindUBOBlocks(this.outlineProgram, false)
+    this._bindUBOBlocks(this.outlineSkinnedProgram, true)
     // Shadow UBO (binding 2, 64 bytes = mat4)
     this._shadowUBO = gl.createBuffer()!
     gl.bindBuffer(gl.UNIFORM_BUFFER, this._shadowUBO)
@@ -1350,9 +1380,62 @@ export class WebGLRenderer implements Renderer {
       triangles += mesh.geometry.indexCount / 3
     }
 
+    // ─── Outline draw helper ──────────────────────────────────────
+    const drawOutline = (mesh: Mesh) => {
+      const thickness = mesh._outlineThickness
+      if (thickness <= 0) return
+
+      const color = mesh._outlineColor
+
+      // Outline uses front-face culling (show back faces only)
+      this._setCullFace(true)
+      this._setCullMode(gl.FRONT)
+
+      const program = mesh._isSkinned ? this.outlineSkinnedProgram : this.outlineProgram
+      const locs = mesh._isSkinned ? this._outlineSkinnedLocs : this._outlineLocs
+      this._setProgram(program)
+      gl.uniform1f(locs.u_outlineThickness, thickness)
+      gl.uniform3f(locs.u_outlineColor, color[0], color[1], color[2])
+
+      ensureGPUBuffers(gl, mesh.geometry)
+      this._setVAO((mesh.geometry._gpuBuffers as GPUBuffers).vao!)
+
+      if (mesh._isSkinned) {
+        gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._skinnedDynBuf, mesh._batchIndex * this._alignedSkinnedSize, 2176)
+      } else {
+        gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 128)
+      }
+
+      const idxType = mesh.geometry.indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT
+      gl.drawElements(gl.TRIANGLES, mesh.geometry.indexCount, idxType, 0)
+      drawCalls++
+      triangles += mesh.geometry.indexCount / 3
+    }
+
+    // ─── Side (cull mode) helper ────────────────────────────────────
+    const applySide = (side: string, isTransparent: boolean) => {
+      if (side === 'double') {
+        this._setCullFace(false)
+      } else if (side === 'back') {
+        this._setCullFace(true)
+        this._setCullMode(gl.FRONT)
+      } else {
+        // 'front' — default
+        this._setCullFace(true)
+        this._setCullMode(gl.BACK)
+      }
+    }
+
     // ─── Opaque draw loop ────────────────────────────────────────
     for (let si = 0; si < transparentStart; si++) {
       const mesh = meshes[sortedIndices[si]!]!
+
+      // Draw outline first (behind the main mesh)
+      drawOutline(mesh)
+
+      // Apply material side (cull mode)
+      applySide(mesh.material.side, false)
+
       let program: WebGLProgram
       let locs: SceneUniformLocs
       if (mesh._isSkinned) {
@@ -1387,15 +1470,25 @@ export class WebGLRenderer implements Renderer {
       drawMesh(si, locs, programChanged, mesh)
     }
 
+    // Restore default cull state after opaque pass
+    this._setCullFace(true)
+    this._setCullMode(gl.BACK)
+
     // ─── Transparent draw loop (back-to-front, blend on, depth write off) ──
     if (transparentStart < meshes.length) {
       this._setBlend(true)
       gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
       this._setDepthMask(false)
-      this._setCullFace(false)
 
       for (let si = transparentStart; si < meshes.length; si++) {
         const mesh = meshes[sortedIndices[si]!]!
+
+        // Draw outline first
+        drawOutline(mesh)
+
+        // Apply material side
+        applySide(mesh.material.side, true)
+
         let program: WebGLProgram
         let locs: SceneUniformLocs
         if (mesh._isSkinned) {
@@ -1434,6 +1527,7 @@ export class WebGLRenderer implements Renderer {
       this._setBlend(false)
       this._setDepthMask(true)
       this._setCullFace(true)
+      this._setCullMode(gl.BACK)
     }
 
     this._setVAO(null)
@@ -1555,6 +1649,8 @@ export class WebGLRenderer implements Renderer {
     gl.deleteProgram(this.basicSkinnedProgram)
     gl.deleteProgram(this.shadowDepthProgram)
     gl.deleteProgram(this.shadowDepthSkinnedProgram)
+    gl.deleteProgram(this.outlineProgram)
+    gl.deleteProgram(this.outlineSkinnedProgram)
     gl.deleteProgram(this.bloomDownsampleProgram)
     gl.deleteProgram(this.bloomUpsampleProgram)
     gl.deleteProgram(this.blitProgram)
