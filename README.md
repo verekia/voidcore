@@ -16,6 +16,7 @@ A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 sup
 - **Shadow maps** – Single shadow map with PCF 3×3 filtering, light-owned configuration, shadow baking for static scenes
 - **Bloom post-processing** – Multi-level downsample/upsample with Karis average
 - **Frustum culling** – AABB-based visibility culling with Gribb-Hartmann plane extraction
+- **Distance culling** – Per-mesh `maxDistance` to hide meshes beyond a camera distance threshold
 - **Raycasting** – BVH-accelerated ray-mesh intersection for mouse picking
 - **DPR limiting** – Configurable max device pixel ratio (1.25 mobile / 1.5 desktop default)
 - **Priority scheduler** – Single rAF loop with priority-ordered callbacks and FPS capping

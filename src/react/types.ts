@@ -22,7 +22,6 @@ import { Mesh } from '../scene/mesh'
 import { Scene } from '../scene/scene'
 
 import type { Skeleton } from '../animation/skeleton'
-import type { MeshOutline } from '../scene/mesh'
 import type { Geometry } from '../geometry/geometry'
 import type {
   PlaneGeometryOptions,
@@ -36,6 +35,7 @@ import type {
 import type { Material, MaterialOptions, MaterialSide } from '../materials/material'
 import type { CameraOptions } from '../scene/camera'
 import type { AmbientLightOptions, DirectionalLightOptions } from '../scene/light'
+import type { MeshOutline } from '../scene/mesh'
 
 // ─── Catalogue ────────────────────────────────────────────────────────────────
 
@@ -102,6 +102,7 @@ export interface MeshProps extends NodeProps {
   material?: Material
   skeleton?: Skeleton
   outline?: MeshOutline | number
+  maxDistance?: number
 }
 
 export interface GroupProps extends NodeProps {}

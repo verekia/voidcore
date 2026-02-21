@@ -8,10 +8,12 @@
 //   found. Used to determine ambient color and intensity for the frame uniforms.
 //
 // collectMeshes() – Walks the scene graph in a single pass to:
-//   1. Collect camera-visible Mesh nodes (frustum culled against the camera frustum)
-//   2. Collect shadow-only casters (meshes outside camera frustum but inside the shadow
+//   1. Distance-cull meshes beyond their maxDistance from the camera (squared distance,
+//      no sqrt). Distance-culled meshes are excluded from both rendering and shadow casting.
+//   2. Collect camera-visible Mesh nodes (frustum culled against the camera frustum)
+//   3. Collect shadow-only casters (meshes outside camera frustum but inside the shadow
 //      frustum). This merges what used to be two separate traversals into one.
-//   3. Skip invisible nodes and meshes outside both frustums
+//   4. Skip invisible nodes and meshes outside both frustums
 //   All arrays use index-based writes instead of push/pop to minimize GC pressure.
 //
 // computeLightDir() – Extracts the light direction from a directional light's world matrix.
@@ -107,6 +109,7 @@ export const findAmbientLight = (root: Node, stack: Node[]): AmbientLight | null
 /**
  * Collect camera-visible meshes and shadow-only casters in a single traversal.
  * Uses index-based array writes to avoid push/pop GC overhead.
+ * Meshes with maxDistance > 0 are distance-culled using squared distance (no sqrt).
  * Returns the number of fully culled meshes (outside both camera and shadow frustums).
  */
 export const collectMeshes = (
@@ -117,6 +120,7 @@ export const collectMeshes = (
   meshes: Mesh[],
   shadowMeshes: Mesh[],
   stack: Node[],
+  cameraPosition: Vec3,
 ): number => {
   let meshCount = 0
   let shadowCount = 0
@@ -128,6 +132,23 @@ export const collectMeshes = (
     if (!node.visible) continue
     if (node.type === 'mesh') {
       const mesh = node as Mesh
+
+      // Distance culling: skip mesh entirely if beyond maxDistance
+      if (mesh.maxDistance > 0) {
+        const dx = mesh._worldMatrix[12]! - cameraPosition[0]!
+        const dy = mesh._worldMatrix[13]! - cameraPosition[1]!
+        const dz = mesh._worldMatrix[14]! - cameraPosition[2]!
+        if (dx * dx + dy * dy + dz * dz > mesh.maxDistance * mesh.maxDistance) {
+          culledCount++
+          // Still process children below — distance culling is per-mesh
+          const children = node.children
+          for (let i = children.length - 1; i >= 0; i--) {
+            stack[stackTop++] = children[i]!
+          }
+          continue
+        }
+      }
+
       if (mesh.frustumCulled) {
         aabbTransform(worldAABB, mesh.geometry.aabb, mesh._worldMatrix)
         if (frustumContainsAABB(cameraFrustum, worldAABB)) {

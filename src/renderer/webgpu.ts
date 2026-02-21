@@ -716,7 +716,10 @@ export class WebGPURenderer implements Renderer {
         color: { operation: 'add', srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
         alpha: { operation: 'add', srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
       }
-      targets = [{ format: 'rgba8unorm', blend }, { format: 'rgba16float', blend }]
+      targets = [
+        { format: 'rgba8unorm', blend },
+        { format: 'rgba16float', blend },
+      ]
     } else {
       targets = [{ format: 'rgba8unorm' }, { format: 'rgba16float' }]
     }
@@ -1722,6 +1725,7 @@ export class WebGPURenderer implements Renderer {
       meshes,
       shadowMeshes,
       this._traversalStack,
+      camera.position,
     )
 
     // Radix sort meshes by layer > pipeline > material > depth
