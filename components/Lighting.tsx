@@ -7,7 +7,7 @@ const Lighting = () => {
 
   return (
     <>
-      <ambientLight args={[{ color: [1, 1, 1], intensity: 0.6 }]} />
+      <ambientLight args={[{ color: [1, 1, 1], intensity: 0.8 }]} />
       <directionalLight
         ref={lightRef}
         args={[{ color: [1, 1, 1], intensity: 0.5 }]}

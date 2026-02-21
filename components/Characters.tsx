@@ -14,7 +14,7 @@ const ORBIT_SPEED = 3
 const GRID_SPACING = 5
 
 const megaxeMaterial = new LambertMaterial({
-  emissiveBrightness: 0.5,
+  emissiveBrightness: 0.3,
   palette: [
     { color: [0.95, 0.93, 0.9] },
     { color: [0.08, 0.08, 0.1] },
@@ -47,10 +47,15 @@ const Character = memo(
         const handBone = skeleton.getBone('Hand.R')
         if (handBone) {
           const axe = new Mesh(megaxeGeometry, megaxeMaterial)
+          axe.outline = 0.05
           axe.setRotation(0, 0, 1, 0)
           handBone.add(axe)
         }
       }
+
+      root.traverse(node => {
+        if (node instanceof Mesh) node.outline = 0.05
+      })
 
       return { root, skeleton }
     }, [playerGltf, megaxeGeometry])

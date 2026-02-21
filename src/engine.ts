@@ -14,6 +14,7 @@
 // engine.maxDpr       – Max device pixel ratio (default 1.25 on mobile, 1.5 on desktop).
 // engine.render()     – Renders a single frame (call this inside a registered callback).
 // engine.floatPrecision – The active float precision ('float16' or 'float32').
+// engine.compressedTextureFormats – GPU-compressed formats the device supports (for KTX2).
 // engine.dispose()    – Cleans up the scheduler and GPU resources.
 
 import { setFloatPrecision } from './float'
@@ -21,6 +22,7 @@ import { createRenderer, type Renderer, type RendererConfig, type FrameStats } f
 import { Scheduler, type SchedulerCallback, type SchedulerCallbackOptions } from './scheduler'
 
 import type { FloatPrecision } from './float'
+import type { CompressedTextureFormat } from './materials/texture'
 import type { ShadowConfig } from './renderer/renderer'
 import type { PerspectiveCamera } from './scene/camera'
 import type { Scene } from './scene/scene'
@@ -65,6 +67,11 @@ export class Engine {
 
   set maxDpr(dpr: number) {
     this.renderer.maxDpr = dpr
+  }
+
+  /** GPU-compressed texture formats supported by the active renderer, in priority order. */
+  get compressedTextureFormats(): readonly CompressedTextureFormat[] {
+    return this.renderer.compressedTextureFormats
   }
 
   /** When true, the shadow map is frozen and not re-rendered each frame. */

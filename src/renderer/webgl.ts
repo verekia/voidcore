@@ -80,7 +80,7 @@ import {
 
 import type { Geometry } from '../geometry/geometry'
 import type { Material, PaletteEntry } from '../materials/material'
-import type { Texture } from '../materials/texture'
+import type { CompressedTextureFormat, Texture, TextureFormat } from '../materials/texture'
 import type { AABB, Mat4, Vec3 } from '../math/index'
 import type { PerspectiveCamera } from '../scene/camera'
 import type { DirectionalLight } from '../scene/light'
@@ -464,8 +464,30 @@ const createRenderTargets = (
 
 export { type RendererConfig, type FrameStats } from './renderer'
 
+// WebGL2 internal format constants for compressed textures
+const GL_COMPRESSED_RGBA_ASTC_4x4_KHR = 0x93b0
+const GL_COMPRESSED_RGBA_BPTC_UNORM_EXT = 0x8e8c
+const GL_COMPRESSED_RGBA_S3TC_DXT5_EXT = 0x83f3
+const GL_COMPRESSED_RGBA8_ETC2_EAC = 0x9278
+
+const _toGLInternalFormat = (fmt: TextureFormat): number => {
+  switch (fmt) {
+    case 'astc-4x4':
+      return GL_COMPRESSED_RGBA_ASTC_4x4_KHR
+    case 'bc7':
+      return GL_COMPRESSED_RGBA_BPTC_UNORM_EXT
+    case 'bc3':
+      return GL_COMPRESSED_RGBA_S3TC_DXT5_EXT
+    case 'etc2-rgba8':
+      return GL_COMPRESSED_RGBA8_ETC2_EAC
+    default:
+      return 0
+  }
+}
+
 export class WebGLRenderer implements Renderer {
   readonly backend = 'webgl2' as const
+  readonly compressedTextureFormats: readonly CompressedTextureFormat[]
   gl: WebGL2RenderingContext
   canvas: HTMLCanvasElement
 
@@ -615,6 +637,15 @@ export class WebGLRenderer implements Renderer {
     // Check for required extensions
     gl.getExtension('EXT_color_buffer_float')
 
+    // Detect compressed texture support (priority: ASTC > BC7 > ETC2 > BC3)
+    const compressedFormats: CompressedTextureFormat[] = []
+    if (gl.getExtension('WEBGL_compressed_texture_astc')) compressedFormats.push('astc-4x4')
+    if (gl.getExtension('EXT_texture_compression_bptc')) compressedFormats.push('bc7')
+    // ETC2 is mandatory in WebGL2 — always available
+    compressedFormats.push('etc2-rgba8')
+    if (gl.getExtension('WEBGL_compressed_texture_s3tc')) compressedFormats.push('bc3')
+    this.compressedTextureFormats = compressedFormats
+
     this.gl = gl
     this.canvas = canvas
     this._maxDpr = config.maxDpr === false ? Infinity : (config.maxDpr ?? defaultMaxDpr())
@@ -761,7 +792,15 @@ export class WebGLRenderer implements Renderer {
     const gl = this.gl
     const glTex = gl.createTexture()!
     gl.bindTexture(gl.TEXTURE_2D, glTex)
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, tex.width, tex.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, tex.data)
+
+    if (tex.format !== 'rgba8') {
+      // Compressed texture: use compressedTexImage2D
+      const internalFormat = _toGLInternalFormat(tex.format)
+      gl.compressedTexImage2D(gl.TEXTURE_2D, 0, internalFormat, tex.width, tex.height, 0, tex.data)
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, tex.width, tex.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, tex.data)
+    }
+
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
