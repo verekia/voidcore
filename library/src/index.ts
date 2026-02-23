@@ -11,6 +11,7 @@ export { Scheduler, type SchedulerState, type SchedulerCallback, type SchedulerC
 export { Scene } from './scene/scene'
 export { Node } from './scene/node'
 export { Mesh, type MeshOutline } from './scene/mesh'
+export { Sprite } from './scene/sprite'
 export { Group } from './scene/group'
 export { PerspectiveCamera, type CameraOptions } from './scene/camera'
 export { AmbientLight, type AmbientLightOptions, DirectionalLight, type DirectionalLightOptions } from './scene/light'
@@ -37,6 +38,7 @@ export {
 
 // Materials
 export { BasicMaterial, LambertMaterial, Material, type MaterialSide, type PaletteEntry } from './materials/material'
+export { SpriteMaterial, type SpriteMaterialOptions } from './materials/sprite-material'
 export { Texture, type CompressedTextureFormat, type TextureFormat } from './materials/texture'
 
 // Controls
@@ -78,12 +80,14 @@ export { VoidContext, type VoidStore, type FrameCallback } from './react/context
 export type {
   NodeProps,
   MeshProps,
+  SpriteProps,
   GroupProps,
   AmbientLightProps,
   DirectionalLightProps,
   CameraProps,
   GeometryProps,
   MaterialProps,
+  SpriteMaterialProps,
   PrimitiveProps,
 } from './react/types'
 

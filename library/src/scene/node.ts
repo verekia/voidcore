@@ -1,6 +1,6 @@
 // Node – Base class for all objects in the scene graph (the tree of 3D objects).
 //
-// Every object in the scene (meshes, cameras, lights, groups) is a Node. Nodes form a
+// Every object in the scene (meshes, sprites, cameras, lights, groups) is a Node. Nodes form a
 // parent-child tree: moving a parent automatically moves all its children. Each node
 // stores a local transform (position, rotation, scale) and a computed world matrix.
 //
@@ -26,7 +26,7 @@ import { mat4Compose, mat4Copy, mat4Create, mat4Multiply, quatCreate, vec3Create
 
 import type { Mat4, Quat, Vec3 } from '../math/index'
 
-export type NodeType = 'group' | 'mesh' | 'camera' | 'directionalLight' | 'ambientLight'
+export type NodeType = 'group' | 'mesh' | 'sprite' | 'camera' | 'directionalLight' | 'ambientLight'
 
 // Scratch for lookAt — avoids per-call allocation
 const _lookAtFwd = vec3Create()

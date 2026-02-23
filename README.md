@@ -284,6 +284,14 @@ interface MeshOutline {
 }
 ```
 
+#### Sprite
+
+Extends `Mesh`. A billboard plane that always faces the camera. Uses a shared 1×1 `PlaneGeometry` and defaults to `SpriteMaterial`. Does not cast shadows by default.
+
+```ts
+new Sprite(material?: SpriteMaterial)
+```
+
 #### Group
 
 Extends `Node`. Empty container for grouping scene objects.
@@ -474,6 +482,26 @@ interface MaterialOptions {
 | `aoMap`              | `Texture \| undefined`          |
 | `aoIntensity`        | `number`                        |
 | `needsUpdate`        | `boolean`                       |
+
+#### SpriteMaterial
+
+Unlit material with defaults tuned for sprites (transparent, double-sided).
+
+```ts
+new SpriteMaterial(opts?: SpriteMaterialOptions)
+
+interface SpriteMaterialOptions extends MaterialOptions {
+  rotation?: number         // 2D rotation in radians (default: 0)
+  sizeAttenuation?: boolean // shrink with distance (default: true)
+}
+```
+
+| Property          | Type      | Description                                   |
+| ----------------- | --------- | --------------------------------------------- |
+| `rotation`        | `number`  | 2D rotation around the view axis (radians)    |
+| `sizeAttenuation` | `boolean` | When false, sprite keeps constant screen size |
+
+Inherits all `MaterialOptions` properties. `transparent` defaults to `true`, `side` defaults to `'double'`.
 
 #### Texture
 
@@ -809,6 +837,7 @@ Geometry and material elements are attached as children of `<mesh>` (the reconci
 | Element                    | Maps to                                           |
 | -------------------------- | ------------------------------------------------- |
 | `<mesh>`                   | `Mesh`                                            |
+| `<sprite>`                 | `Sprite`                                          |
 | `<group>`                  | `Group`                                           |
 | `<directionalLight>`       | `DirectionalLight`                                |
 | `<ambientLight>`           | `AmbientLight`                                    |
@@ -821,6 +850,7 @@ Geometry and material elements are attached as children of `<mesh>` (the reconci
 | `<circleGeometry>`         | `CircleGeometry`                                  |
 | `<basicMaterial>`          | `BasicMaterial`                                   |
 | `<lambertMaterial>`        | `LambertMaterial`                                 |
+| `<spriteMaterial>`         | `SpriteMaterial`                                  |
 | `<primitive object={...}>` | Insert any pre-built engine object into the scene |
 
 #### Hooks

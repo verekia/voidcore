@@ -54,6 +54,7 @@ import { Node } from '../scene/node'
 import { packColorsUnorm8, packEmissiveFloat16, packNormalsSnorm8, packUVsFloat16, packWeightsUnorm8 } from './pack'
 import {
   collectMeshes,
+  computeBillboardMatrix,
   computeLightDir,
   computeShadowMatrix,
   defaultMaxDpr,
@@ -1482,7 +1483,22 @@ export class WebGLRenderer implements Renderer {
         mesh._batchIndex = skinnedIdx++
       } else {
         const off = objIdx * alignedObjFloats
-        objBatch.set(mesh._worldMatrix, off)
+
+        // Sprites: compute billboard matrix (camera-facing orientation)
+        if (mesh.type === 'sprite') {
+          const mat = mesh.material as any
+          computeBillboardMatrix(
+            objBatch,
+            off,
+            mesh._worldMatrix,
+            camera,
+            mat.rotation ?? 0,
+            mat.sizeAttenuation ?? true,
+          )
+        } else {
+          objBatch.set(mesh._worldMatrix, off)
+        }
+
         if (mat4Invert(this._invWorldMatrix, mesh._worldMatrix)) {
           mat4Transpose(this._normalMatrix, this._invWorldMatrix)
         }
