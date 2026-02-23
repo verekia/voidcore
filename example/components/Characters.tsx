@@ -23,8 +23,9 @@ import type { AnimationClip, MeshOutline, PaletteEntry } from 'voidcore'
 
 const CLIP_DURATION = 2
 const CROSSFADE_DURATION = 0.3
-const ORBIT_RADIUS = 5
-const GRID_SPACING = 3
+const ORBIT_RADIUS = 2
+const ORBIT_SPEED = 1
+const GRID_SPACING = 5
 
 const bodyPalette: PaletteEntry[] = [{ color: [1, 1, 1] }, { color: [1, 1, 1] }]
 
@@ -43,6 +44,8 @@ interface CharacterProps {
 
 const characterMaterial = new LambertMaterial({ emissiveBrightness: 0.2 })
 const raycaster = new Raycaster()
+const rayOrigin = new Float32Array([0, 0, 200])
+const rayDir = new Float32Array([0, 0, -1])
 
 const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
   const { scene } = useEngine()
@@ -96,14 +99,13 @@ const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
     initialized: false,
     angle: startAngle,
     z: -50,
-    zResolved: false,
     currentClip: startClipIndex,
     nextSwitch: CLIP_DURATION - startTimeIntoClip,
     flashFramesLeft: 0,
     nextFlash: Math.random() * 3 + 1,
   })
 
-  useFrame(({ elapsed }) => {
+  useFrame(({ elapsed, dt }) => {
     const s = stateRef.current
 
     if (!s.initialized) {
@@ -115,18 +117,21 @@ const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
       }
     }
 
-    if (!s.zResolved) {
-      s.zResolved = true
-      const edenMesh = scene.getByName('eden') as Mesh | undefined
-      if (edenMesh) {
-        raycaster.set(new Float32Array([x, y, 200]), new Float32Array([0, 0, -1]))
-        const hits = raycaster.intersectObject(edenMesh)
-        if (hits.length > 0) s.z = hits[0]!.point[2]!
-      }
+    s.angle += ORBIT_SPEED * dt
+
+    const posX = x + Math.cos(s.angle) * ORBIT_RADIUS
+    const posY = y + Math.sin(s.angle) * ORBIT_RADIUS
+
+    const edenMesh = scene.getByName('eden') as Mesh | undefined
+    if (edenMesh) {
+      rayOrigin[0] = posX
+      rayOrigin[1] = posY
+      raycaster.set(rayOrigin, rayDir)
+      const hits = raycaster.intersectObject(edenMesh)
+      s.z = hits.length > 0 ? hits[0]!.point[2]! : -50
     }
 
-    // s.angle += ORBIT_SPEED * dt
-    root.setPosition(x + Math.cos(s.angle) * ORBIT_RADIUS, y + Math.sin(s.angle) * ORBIT_RADIUS, s.z)
+    root.setPosition(posX, posY, s.z)
     root.setScale(0.6)
 
     // Random red outline flash

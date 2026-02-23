@@ -28,7 +28,7 @@ const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
       { color: [0.15, 0.15, 0.18] },
       { color: [0.0, 0.75, 0.7], emissive: [0.0, 0.75, 0.7], emissiveIntensity: 1.5 },
       { color: [0.55, 0.5, 0.42], tiledAo: groundAoTexture, tiledAoIntensity: 0.3, tiledAoScale: 150 },
-      { color: [0.85, 0.35, 0.55], emissive: [0.85, 0.35, 0.55], emissiveIntensity: 1 },
+      { color: [0.85, 0.35, 0.55], emissive: [0.85, 0.35, 0.55], emissiveIntensity: 0.7 },
       { color: [0.95, 0.95, 0.95] },
       { color: [0.6, 0.3, 0.15] },
       { color: [0.65, 0.65, 0.62], tiledAo: groundAoTexture, tiledAoIntensity: 0.3, tiledAoScale: 150 },
@@ -54,16 +54,12 @@ const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
   const material = useMemo(() => {
     prebuildBVH(geometry)
     onReady?.()
-    return new LambertMaterial({
-      aoMap: aoTexture,
-      aoIntensity: 2,
-      emissiveBrightness: 0,
-    })
+    return new LambertMaterial({ aoMap: aoTexture, aoIntensity: 2, emissiveBrightness: 0 })
   }, [geometry, aoTexture, onReady])
 
   return (
     <Suspense fallback={null}>
-      <mesh geometry={geometry} material={material} name="eden" castShadow receiveShadow position={[-50, -70, 0]} />
+      <mesh geometry={geometry} material={material} castShadow receiveShadow position={[-50, -70, 0]} outline={0.04} />
       <BakeShadows />
     </Suspense>
   )
