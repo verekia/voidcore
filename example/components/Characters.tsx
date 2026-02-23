@@ -110,6 +110,8 @@ const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
     nextSwitch: CLIP_DURATION - startTimeIntoClip,
     flashFramesLeft: 0,
     nextFlash: Math.random() * 3 + 1,
+    disabled: false,
+    firstRaycastDone: false,
   })
 
   useFrame(({ elapsed, dt }) => {
@@ -129,6 +131,8 @@ const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
     const posX = x + Math.cos(s.angle) * ORBIT_RADIUS
     const posY = y + Math.sin(s.angle) * ORBIT_RADIUS
 
+    if (s.disabled) return
+
     const edenMesh = scene.getByName('eden') as Mesh | undefined
     if (edenMesh) {
       rayOrigin[0] = posX
@@ -137,7 +141,12 @@ const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
       const hits = raycaster.intersectObject(edenMesh)
       if (hits.length > 0) {
         s.z = hits[0]!.point[2]!
+        s.firstRaycastDone = true
         root.visible = true
+      } else if (!s.firstRaycastDone) {
+        s.disabled = true
+        root.visible = false
+        return
       } else {
         root.visible = false
       }
