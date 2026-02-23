@@ -40,11 +40,10 @@ const EDEN_PALETTE = EDEN_COLORS.map((color, i) => ({
 }))
 
 const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
-  const gltf = useGLTF(staticBundleSrc)
+  const edenMesh = useGLTF(staticBundleSrc, { meshName: 'Eden' })
   const aoTexture = useKTX2(cityAoSrc)
 
   const { geometry, material } = useMemo(() => {
-    const edenMesh = gltf.meshes.find(m => m.name === 'Eden')!
     const geometry = bakePalette(edenMesh.geometry, EDEN_PALETTE)
     prebuildBVH(geometry)
     onReady?.()
@@ -56,7 +55,7 @@ const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
         emissiveBrightness: 0.5,
       }),
     }
-  }, [gltf, aoTexture, onReady])
+  }, [edenMesh, aoTexture, onReady])
 
   return (
     <Suspense fallback={null}>
