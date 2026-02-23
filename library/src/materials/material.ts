@@ -43,6 +43,9 @@ export interface PaletteEntry {
   tiledAo?: Texture
   tiledAoIntensity?: number
   tiledAoScale?: number
+  tiledNormal?: Texture
+  tiledNormalIntensity?: number
+  tiledNormalScale?: number
 }
 
 export type MaterialType = 'basic' | 'lambert'

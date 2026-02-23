@@ -30,7 +30,9 @@
 //   Vertex colors – Meshes with baked vertex colors use separate VC pipelines.
 //                    Color (unorm8x4) and emissive (float16x4) are vertex attributes.
 //                    VC pipelines also support per-material tiled AO via a 2D array
-//                    texture sampled with world-space XY coordinates (repeat wrapping).
+//                    texture sampled with world-space XY coordinates (repeat wrapping),
+//                    and per-material tiled normal maps via a second 2D array texture
+//                    with per-vertex data in a float16x4 attribute (location 7).
 //   Vertex packing – Normals use snorm8x4, UVs use float16x2, bone weights use unorm8x4,
 //                    vertex colors use unorm8x4, emissive uses float16x4.
 //
@@ -115,6 +117,7 @@ interface GeoBufs {
   baseIndexCount?: number
   color?: GPUBuffer
   emissive?: GPUBuffer
+  tiledNormal?: GPUBuffer
   joints?: GPUBuffer
   weights?: GPUBuffer
 }
@@ -178,20 +181,22 @@ const SKINNED_VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
   { arrayStride: 4, attributes: [{ shaderLocation: 4, offset: 0, format: 'unorm8x4' as GPUVertexFormat }] },
 ]
 
-// Vertex-color Lambert: pos + normal + uv + color + emissive
+// Vertex-color Lambert: pos + normal + uv + color + emissive + tiledNormal
 const VC_VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
   ...VERTEX_BUFFER_LAYOUT,
   { arrayStride: 4, attributes: [{ shaderLocation: 3, offset: 0, format: 'unorm8x4' as GPUVertexFormat }] },
   { arrayStride: 8, attributes: [{ shaderLocation: 6, offset: 0, format: 'float16x4' as GPUVertexFormat }] },
+  { arrayStride: 8, attributes: [{ shaderLocation: 7, offset: 0, format: 'float16x4' as GPUVertexFormat }] },
 ]
 
-// Vertex-color Lambert skinned: pos + normal + uv + color + joints + weights + emissive
+// Vertex-color Lambert skinned: pos + normal + uv + color + joints + weights + emissive + tiledNormal
 const VC_SKINNED_VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
   ...VERTEX_BUFFER_LAYOUT,
   { arrayStride: 4, attributes: [{ shaderLocation: 3, offset: 0, format: 'unorm8x4' as GPUVertexFormat }] },
   { arrayStride: 4, attributes: [{ shaderLocation: 4, offset: 0, format: 'uint8x4' as GPUVertexFormat }] },
   { arrayStride: 4, attributes: [{ shaderLocation: 5, offset: 0, format: 'unorm8x4' as GPUVertexFormat }] },
   { arrayStride: 8, attributes: [{ shaderLocation: 6, offset: 0, format: 'float16x4' as GPUVertexFormat }] },
+  { arrayStride: 8, attributes: [{ shaderLocation: 7, offset: 0, format: 'float16x4' as GPUVertexFormat }] },
 ]
 
 // Shadow depth pass: position only
@@ -323,6 +328,8 @@ export class WebGPURenderer implements Renderer {
   private _dummyScalesBuffer!: GPUBuffer
   private _vcTexBGCache = new WeakMap<Geometry, GPUBindGroup>()
   private _tiledAoCache = new WeakMap<Geometry, { arrayTexView: GPUTextureView; scalesBuffer: GPUBuffer }>()
+  private _tiledNormalCache = new WeakMap<Geometry, GPUTextureView>()
+  private _dummyNormalArrayTexView!: GPUTextureView
   private _lastMaterial: Material | null = null
 
   // Dynamic uniform buffers
@@ -688,6 +695,21 @@ export class WebGPURenderer implements Renderer {
     )
     this._dummyArrayTexView = dummyArrayTex.createView({ dimension: '2d-array', arrayLayerCount: 1 })
 
+    // Dummy 1-layer array texture (1x1 flat normal: 128,128,255,255) for when no tiled normals exist
+    const dummyNormalArrayTex = device.createTexture({
+      size: [1, 1, 1],
+      format: 'rgba8unorm',
+      dimension: '2d',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    })
+    device.queue.writeTexture(
+      { texture: dummyNormalArrayTex },
+      new Uint8Array([128, 128, 255, 255]),
+      { bytesPerRow: 4 },
+      [1, 1, 1],
+    )
+    this._dummyNormalArrayTexView = dummyNormalArrayTex.createView({ dimension: '2d-array', arrayLayerCount: 1 })
+
     // Dummy scales uniform buffer (16 floats = 64 bytes)
     this._dummyScalesBuffer = device.createBuffer({
       size: 64,
@@ -699,7 +721,7 @@ export class WebGPURenderer implements Renderer {
   private _initVCPipelines() {
     const device = this.device
 
-    // VC bind group layout with tiled AO bindings (group 3)
+    // VC bind group layout with tiled AO + tiled normal bindings (group 3)
     this.vcTextureBGL = device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
@@ -712,6 +734,11 @@ export class WebGPURenderer implements Renderer {
         },
         { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
         { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+        {
+          binding: 6,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: 'float', viewDimension: '2d-array' },
+        },
       ],
     })
 
@@ -978,6 +1005,50 @@ export class WebGPURenderer implements Renderer {
     return entry
   }
 
+  private _ensureTiledNormalResources(geometry: Geometry): GPUTextureView {
+    const cached = this._tiledNormalCache.get(geometry)
+    if (cached) return cached
+
+    const textures = geometry.tiledNormalTextures!
+    const layerCount = textures.length
+    const firstTex = textures[0]!
+    const w = firstTex.width
+    const h = firstTex.height
+    const gpuFormat = _toGPUTextureFormat(firstTex.format)
+    const isCompressed = firstTex.format !== 'rgba8'
+
+    const arrayTex = this.device.createTexture({
+      size: [w, h, layerCount],
+      format: gpuFormat,
+      dimension: '2d',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    })
+
+    for (let i = 0; i < layerCount; i++) {
+      const tex = textures[i]!
+      if (isCompressed) {
+        const blocksX = Math.ceil(tex.width / 4)
+        this.device.queue.writeTexture(
+          { texture: arrayTex, origin: [0, 0, i] },
+          tex.data.buffer as ArrayBuffer,
+          { bytesPerRow: blocksX * 16, rowsPerImage: tex.height },
+          [tex.width, tex.height, 1],
+        )
+      } else {
+        this.device.queue.writeTexture(
+          { texture: arrayTex, origin: [0, 0, i] },
+          tex.data.buffer as ArrayBuffer,
+          { bytesPerRow: tex.width * 4, rowsPerImage: tex.height },
+          [tex.width, tex.height, 1],
+        )
+      }
+    }
+
+    const view = arrayTex.createView({ dimension: '2d-array', arrayLayerCount: layerCount })
+    this._tiledNormalCache.set(geometry, view)
+    return view
+  }
+
   private _ensureVCTextureBindGroup(material: Material, geometry: Geometry): GPUBindGroup {
     // Cache per-geometry since tiled AO data is on the geometry
     const cached = this._vcTexBGCache.get(geometry)
@@ -997,6 +1068,11 @@ export class WebGPURenderer implements Renderer {
       scalesBuffer = this._dummyScalesBuffer
     }
 
+    const normalArrayTexView =
+      geometry.tiledNormalTextures && geometry.tiledNormalTextures.length > 0
+        ? this._ensureTiledNormalResources(geometry)
+        : this._dummyNormalArrayTexView
+
     const bg = this.device.createBindGroup({
       layout: this.vcTextureBGL,
       entries: [
@@ -1006,6 +1082,7 @@ export class WebGPURenderer implements Renderer {
         { binding: 3, resource: arrayTexView },
         { binding: 4, resource: this._repeatSampler },
         { binding: 5, resource: { buffer: scalesBuffer } },
+        { binding: 6, resource: normalArrayTexView },
       ],
     })
     this._vcTexBGCache.set(geometry, bg)
@@ -1666,6 +1743,7 @@ export class WebGPURenderer implements Renderer {
     // Vertex colors (unorm8x4) and emissive (float16x4) — only for baked-palette meshes
     let colorBuf: GPUBuffer | undefined
     let emissiveBuf: GPUBuffer | undefined
+    let tiledNormalBuf: GPUBuffer | undefined
     if (geometry.colors) {
       const packedColors = packColorsUnorm8(geometry.colors, geometry.vertexCount)
       colorBuf = d.createBuffer({
@@ -1683,6 +1761,23 @@ export class WebGPURenderer implements Renderer {
         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
       })
       d.queue.writeBuffer(emissiveBuf, 0, packedEmissive.buffer, packedEmissive.byteOffset, packedEmissive.byteLength)
+
+      // Tiled normal data (float16x4) — per-vertex [layerIdx/255, intensity, scale, 0]
+      const packedTiledNormal = packEmissiveFloat16(
+        geometry.tiledNormalData ?? new Float32Array(geometry.vertexCount * 4),
+        geometry.vertexCount,
+      )
+      tiledNormalBuf = d.createBuffer({
+        size: Math.max(packedTiledNormal.byteLength, 4),
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      })
+      d.queue.writeBuffer(
+        tiledNormalBuf,
+        0,
+        packedTiledNormal.buffer,
+        packedTiledNormal.byteOffset,
+        packedTiledNormal.byteLength,
+      )
     }
 
     // Index buffer (size must be 4-byte aligned for WebGPU writeBuffer)
@@ -1733,6 +1828,7 @@ export class WebGPURenderer implements Renderer {
       cached.index.destroy()
       if (cached.color) cached.color.destroy()
       if (cached.emissive) cached.emissive.destroy()
+      if (cached.tiledNormal) cached.tiledNormal.destroy()
       if (cached.joints) cached.joints.destroy()
       if (cached.weights) cached.weights.destroy()
     }
@@ -1746,6 +1842,7 @@ export class WebGPURenderer implements Renderer {
       indexCount: geometry.indexCount,
       color: colorBuf,
       emissive: emissiveBuf,
+      tiledNormal: tiledNormalBuf,
       joints: jointsBuf,
       weights: weightsBuf,
     }
@@ -1801,9 +1898,10 @@ export class WebGPURenderer implements Renderer {
     })
     d.queue.writeBuffer(uvBuf, 0, combinedUV.buffer, combinedUV.byteOffset, combinedUV.byteLength)
 
-    // Combined vertex colors and emissive: [original, duplicated]
+    // Combined vertex colors, emissive, and tiled normal: [original, duplicated]
     let colorBuf: GPUBuffer | undefined
     let emissiveBuf: GPUBuffer | undefined
+    let tiledNormalBuf: GPUBuffer | undefined
     if (geometry.colors) {
       const baseColors = packColorsUnorm8(geometry.colors, vc)
       const combinedColors = new Uint8Array(vc * 2 * 4)
@@ -1829,6 +1927,22 @@ export class WebGPURenderer implements Renderer {
         combinedEmissive.buffer,
         combinedEmissive.byteOffset,
         combinedEmissive.byteLength,
+      )
+
+      const baseTiledNormal = packEmissiveFloat16(geometry.tiledNormalData ?? new Float32Array(vc * 4), vc)
+      const combinedTiledNormal = new Uint16Array(vc * 2 * 4)
+      combinedTiledNormal.set(baseTiledNormal, 0)
+      combinedTiledNormal.set(baseTiledNormal, vc * 4)
+      tiledNormalBuf = d.createBuffer({
+        size: combinedTiledNormal.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      })
+      d.queue.writeBuffer(
+        tiledNormalBuf,
+        0,
+        combinedTiledNormal.buffer,
+        combinedTiledNormal.byteOffset,
+        combinedTiledNormal.byteLength,
       )
     }
 
@@ -1886,6 +2000,7 @@ export class WebGPURenderer implements Renderer {
       cached.index.destroy()
       if (cached.color) cached.color.destroy()
       if (cached.emissive) cached.emissive.destroy()
+      if (cached.tiledNormal) cached.tiledNormal.destroy()
       if (cached.joints) cached.joints.destroy()
       if (cached.weights) cached.weights.destroy()
     }
@@ -1900,6 +2015,7 @@ export class WebGPURenderer implements Renderer {
       baseIndexCount: ic,
       color: colorBuf,
       emissive: emissiveBuf,
+      tiledNormal: tiledNormalBuf,
       joints: jointsBuf,
       weights: weightsBuf,
     }
@@ -2378,8 +2494,10 @@ export class WebGPURenderer implements Renderer {
           pass.setVertexBuffer(4, geoBufs.joints)
           pass.setVertexBuffer(5, geoBufs.weights)
           pass.setVertexBuffer(6, geoBufs.emissive!)
+          pass.setVertexBuffer(7, geoBufs.tiledNormal!)
         } else {
           pass.setVertexBuffer(4, geoBufs.emissive!)
+          pass.setVertexBuffer(5, geoBufs.tiledNormal!)
         }
       } else if (mesh._isSkinned && geoBufs.joints && geoBufs.weights) {
         pass.setVertexBuffer(3, geoBufs.joints)

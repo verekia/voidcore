@@ -15,7 +15,10 @@
 // tiled AO textures — bakePalette() packs the layer index into colors.a (unorm8) and
 // the tiled AO intensity into emissiveColors.a (float16). Unique textures are collected
 // into tiledAoTextures/tiledAoScales arrays on the result geometry, which renderers
-// upload as a 2D array texture for world-space tiled AO sampling.
+// upload as a 2D array texture for world-space tiled AO sampling. Similarly, per-material
+// tiled normal maps are packed into tiledNormalData (float16x4: layerIndex/255, intensity,
+// scale, 0) and tiledNormalTextures, uploaded as a second 2D array texture. Tiled normals
+// use a cotangent-frame technique (screen-space derivatives) so no tangent attribute is needed.
 //
 // new Geometry(data)                  – Wraps raw arrays into a Geometry object.
 // bakePalette(geometry, palette)      – Bakes palette entries into vertex colors/emissiveColors (cached by reference).
@@ -60,6 +63,8 @@ export class Geometry {
 
   tiledAoTextures?: import('../materials/texture').Texture[]
   tiledAoScales?: Float32Array
+  tiledNormalData?: Float32Array
+  tiledNormalTextures?: import('../materials/texture').Texture[]
 
   _smoothNormals?: Float32Array
   _gpuBuffers: unknown = null
@@ -141,9 +146,21 @@ export const bakePalette = (geometry: Geometry, palette: PaletteEntry[]): Geomet
     }
   }
 
+  // Collect unique tiled normal textures and assign 1-based layer indices
+  const tiledNormalTextureMap = new Map<import('../materials/texture').Texture, number>()
+  const tiledNormalTextures: import('../materials/texture').Texture[] = []
+  for (const entry of palette) {
+    if (entry.tiledNormal && !tiledNormalTextureMap.has(entry.tiledNormal)) {
+      const layerIndex = tiledNormalTextures.length + 1 // 1-based (0 = none)
+      tiledNormalTextureMap.set(entry.tiledNormal, layerIndex)
+      tiledNormalTextures.push(entry.tiledNormal)
+    }
+  }
+
   const vc = geometry.vertexCount
   const colors = new Float32Array(vc * 4)
   const emissiveColors = new Float32Array(vc * 4)
+  const tiledNormalData = tiledNormalTextures.length > 0 ? new Float32Array(vc * 4) : undefined
   const matIndices = geometry.materialIndices
 
   for (let i = 0; i < vc; i++) {
@@ -162,6 +179,14 @@ export const bakePalette = (geometry: Geometry, palette: PaletteEntry[]): Geomet
     emissiveColors[o + 2] = (entry.emissive?.[2] ?? 0) * intensity
     // Pack tiled AO intensity into emissiveColors.a (float16, 0 = no tiled AO)
     emissiveColors[o + 3] = entry.tiledAo ? (entry.tiledAoIntensity ?? 1.0) : 0
+    // Pack tiled normal data: [layerIndex/255, intensity, scale, 0]
+    if (tiledNormalData) {
+      const nLayerIndex = entry.tiledNormal ? (tiledNormalTextureMap.get(entry.tiledNormal) ?? 0) : 0
+      tiledNormalData[o] = nLayerIndex / 255
+      tiledNormalData[o + 1] = entry.tiledNormal ? (entry.tiledNormalIntensity ?? 1.0) : 0
+      tiledNormalData[o + 2] = entry.tiledNormal ? (entry.tiledNormalScale ?? 1.0) : 0
+      tiledNormalData[o + 3] = 0
+    }
   }
 
   const result = new Geometry({
@@ -179,6 +204,12 @@ export const bakePalette = (geometry: Geometry, palette: PaletteEntry[]): Geomet
   if (tiledAoTextures.length > 0) {
     result.tiledAoTextures = tiledAoTextures
     result.tiledAoScales = new Float32Array(tiledAoScalesList)
+  }
+
+  // Attach tiled normal data if any textures were found
+  if (tiledNormalTextures.length > 0 && tiledNormalData) {
+    result.tiledNormalTextures = tiledNormalTextures
+    result.tiledNormalData = tiledNormalData
   }
 
   if (!byPalette) {
@@ -200,12 +231,14 @@ export const mergeGeometries = (geometries: Geometry[]): Geometry => {
   let hasUVs = false
   let hasColors = false
   let hasMaterialIndices = false
+  let hasTiledNormalData = false
   for (const geo of geometries) {
     totalVertices += geo.vertexCount
     totalIndices += geo.indexCount
     if (geo.uvs) hasUVs = true
     if (geo.colors) hasColors = true
     if (geo.materialIndices) hasMaterialIndices = true
+    if (geo.tiledNormalData) hasTiledNormalData = true
   }
 
   const positions = new Float32Array(totalVertices * 3)
@@ -215,6 +248,7 @@ export const mergeGeometries = (geometries: Geometry[]): Geometry => {
   const colors = hasColors ? new Float32Array(totalVertices * 4) : undefined
   const emissiveColors = hasColors ? new Float32Array(totalVertices * 4) : undefined
   const materialIndices = hasMaterialIndices ? new Uint8Array(totalVertices) : undefined
+  const tiledNormalData = hasTiledNormalData ? new Float32Array(totalVertices * 4) : undefined
 
   let vOff = 0
   let iOff = 0
@@ -247,6 +281,9 @@ export const mergeGeometries = (geometries: Geometry[]): Geometry => {
         }
       }
     }
+    if (tiledNormalData && geo.tiledNormalData) {
+      tiledNormalData.set(geo.tiledNormalData, vOff * 4)
+    }
     if (materialIndices && geo.materialIndices) {
       materialIndices.set(geo.materialIndices, vOff)
     }
@@ -265,6 +302,17 @@ export const mergeGeometries = (geometries: Geometry[]): Geometry => {
       result.tiledAoTextures = geo.tiledAoTextures
       result.tiledAoScales = geo.tiledAoScales
       break
+    }
+  }
+
+  // Propagate tiled normal data
+  if (tiledNormalData) {
+    result.tiledNormalData = tiledNormalData
+    for (const geo of geometries) {
+      if (geo.tiledNormalTextures) {
+        result.tiledNormalTextures = geo.tiledNormalTextures
+        break
+      }
     }
   }
 
@@ -426,6 +474,18 @@ export const mergeStaticIntoSkinned = (
   if (tiledSrc) {
     result.tiledAoTextures = tiledSrc.tiledAoTextures
     result.tiledAoScales = tiledSrc.tiledAoScales
+  }
+
+  // Merge tiled normal data
+  if (skinned.tiledNormalData || static_.tiledNormalData) {
+    const merged = new Float32Array(totalVerts * 4)
+    if (skinned.tiledNormalData) merged.set(skinned.tiledNormalData)
+    if (static_.tiledNormalData) merged.set(static_.tiledNormalData, skinnedVerts * 4)
+    result.tiledNormalData = merged
+    const normalSrc = skinned.tiledNormalTextures ? skinned : static_.tiledNormalTextures ? static_ : null
+    if (normalSrc) {
+      result.tiledNormalTextures = normalSrc.tiledNormalTextures
+    }
   }
 
   return result
