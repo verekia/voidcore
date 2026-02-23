@@ -8,18 +8,22 @@
 //   .setDecoderPath  – Set global default Draco/KTX2 decoder path.
 // useKTX2(url)      – Load a KTX2 texture (wrapper around useLoader).
 //   .setTranscoderPath – Set global default Basis transcoder path.
+// useColoredGeometry(geometry, palette) – Memoized bakePalette for vertex-colored geometry.
 // useAnimations()   – Create an AnimationMixer and return action map.
 
 import { useContext, useEffect, useRef, useMemo } from 'react'
 
 import { AnimationMixer } from '../animation/index'
+import { bakePalette } from '../geometry/geometry'
 import { loadGLTF } from '../loaders/gltf'
 import { loadKTX2 } from '../loaders/ktx2'
 import { VoidContext } from './context'
 
 import type { AnimationClip } from '../animation/index'
 import type { Skeleton } from '../animation/skeleton'
+import type { Geometry } from '../geometry/geometry'
 import type { GLTFResult, LoadOptions } from '../loaders/gltf'
+import type { PaletteEntry } from '../materials/material'
 import type { CompressedTextureFormat } from '../materials/texture'
 import type { Texture } from '../materials/texture'
 import type { Mesh } from '../scene/mesh'
@@ -163,6 +167,12 @@ export const useKTX2: UseKTX2 = (url: string, transcoderPath?: string): Texture 
 
 useKTX2.setTranscoderPath = (transcoderPath: string) => {
   _defaultTranscoderPath = transcoderPath
+}
+
+// ─── useColoredGeometry ───────────────────────────────────────────────────────
+
+export const useColoredGeometry = (geometry: Geometry, palette: PaletteEntry[]): Geometry => {
+  return useMemo(() => bakePalette(geometry, palette), [geometry, palette])
 }
 
 // ─── useAnimations ────────────────────────────────────────────────────────────
