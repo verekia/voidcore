@@ -40,8 +40,8 @@ const EDEN_PALETTE = EDEN_COLORS.map((color, i) => ({
 }))
 
 const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
-  const gltf = useGLTF(staticBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
-  const aoTexture = useKTX2(cityAoSrc, '/basis-1.50/')
+  const gltf = useGLTF(staticBundleSrc)
+  const aoTexture = useKTX2(cityAoSrc)
 
   const { geometry, material } = useMemo(() => {
     const edenMesh = gltf.meshes.find(m => m.name === 'Eden')!

@@ -149,8 +149,8 @@ const Character = memo(
 )
 
 const Characters = ({ count }: { count: number }) => {
-  const megaxeGltf = useGLTF(staticBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
-  const playerGltf = useGLTF(playerBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
+  const megaxeGltf = useGLTF(staticBundleSrc)
+  const playerGltf = useGLTF(playerBundleSrc)
 
   const megaxeGeometry = useMemo(() => {
     for (const mesh of megaxeGltf.meshes) {

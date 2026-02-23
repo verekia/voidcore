@@ -4,7 +4,9 @@
 // useFrame(cb)      – Register a callback that runs every frame (before render).
 // useLoader(fn,url) – Suspense-compatible asset loader with caching.
 // useGLTF(url)      – Load a glTF/GLB model (wrapper around useLoader).
+//   .setDecoderPath  – Set global default Draco/KTX2 decoder path.
 // useKTX2(url)      – Load a KTX2 texture (wrapper around useLoader).
+//   .setTranscoderPath – Set global default Basis transcoder path.
 // useAnimations()   – Create an AnimationMixer and return action map.
 
 import { useContext, useEffect, useRef, useMemo } from 'react'
@@ -82,19 +84,33 @@ export function useLoader<T>(loaderFn: (url: string, ...args: any[]) => Promise<
 
 // ─── useGLTF ──────────────────────────────────────────────────────────────────
 
-export const useGLTF = (url: string, options?: LoadOptions): GLTFResult => {
-  return useLoader((u: string, opts?: LoadOptions) => loadGLTF(u, opts), url, options)
+let _defaultGLTFOptions: LoadOptions | undefined
+
+interface UseGLTF {
+  (url: string, options?: LoadOptions): GLTFResult
+  /** Set global default decoder path (Draco + KTX2) for all useGLTF calls. */
+  setDecoderPath: (decoderPath: string) => void
+  /** Preload a glTF/GLB into the cache so useGLTF won't suspend. */
+  preload: (url: string, options?: LoadOptions) => void
 }
 
-// Preload a glTF/GLB into the cache so useGLTF won't suspend.
-// Call at module level to start parallel downloads before components render.
+export const useGLTF: UseGLTF = (url: string, options?: LoadOptions): GLTFResult => {
+  const resolved = options ?? _defaultGLTFOptions
+  return useLoader((u: string, opts?: LoadOptions) => loadGLTF(u, opts), url, resolved)
+}
+
+useGLTF.setDecoderPath = (decoderPath: string) => {
+  _defaultGLTFOptions = { draco: { decoderPath }, ktx2: { transcoderPath: decoderPath } }
+}
+
 useGLTF.preload = (url: string, options?: LoadOptions) => {
   if (typeof window === 'undefined') return
+  const resolved = options ?? _defaultGLTFOptions
   const cacheKey = url
   if (loaderCache.has(cacheKey)) return
   const entry: CacheEntry<GLTFResult> = {}
   loaderCache.set(cacheKey, entry)
-  const promise = loadGLTF(url, options)
+  const promise = loadGLTF(url, resolved)
     .then(result => {
       entry.result = result
     })
@@ -106,16 +122,31 @@ useGLTF.preload = (url: string, options?: LoadOptions) => {
 
 // ─── useKTX2 ─────────────────────────────────────────────────────────────────
 
-export const useKTX2 = (url: string, transcoderPath: string): Texture => {
+let _defaultTranscoderPath: string | undefined
+
+interface UseKTX2 {
+  (url: string, transcoderPath?: string): Texture
+  /** Set global default Basis transcoder path for all useKTX2 calls. */
+  setTranscoderPath: (transcoderPath: string) => void
+}
+
+export const useKTX2: UseKTX2 = (url: string, transcoderPath?: string): Texture => {
+  const resolved = transcoderPath ?? _defaultTranscoderPath
+  if (!resolved)
+    throw new Error('useKTX2 requires a transcoderPath — pass it directly or call useKTX2.setTranscoderPath()')
   const store = useContext(VoidContext)
   if (!store) throw new Error('useKTX2 must be used inside <Canvas>')
   const formats = store.engine.compressedTextureFormats
   return useLoader(
     (u: string, tp: string, fmts: readonly CompressedTextureFormat[]) => loadKTX2(u, tp, fmts),
     url,
-    transcoderPath,
+    resolved,
     formats,
   )
+}
+
+useKTX2.setTranscoderPath = (transcoderPath: string) => {
+  _defaultTranscoderPath = transcoderPath
 }
 
 // ─── useAnimations ────────────────────────────────────────────────────────────

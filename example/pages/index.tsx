@@ -1,8 +1,7 @@
 import { Suspense, useCallback, useEffect, useState } from 'react'
 
-import { Canvas, useGLTF } from 'voidcore'
+import { Canvas } from 'voidcore'
 
-import { staticBundleSrc, playerBundleSrc } from '../components/assets'
 import BackendSwitch from '../components/BackendSwitch'
 import CameraControls from '../components/CameraControls'
 import Characters from '../components/Characters'
@@ -14,11 +13,6 @@ import RotatingCube from '../components/RotatingCube'
 import StatsOverlay from '../components/StatsOverlay'
 
 import type { Engine } from 'voidcore'
-
-// ─── Preload GLBs in parallel (avoids Suspense waterfall) ────────────────────
-
-useGLTF.preload(staticBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
-useGLTF.preload(playerBundleSrc, { draco: { decoderPath: '/draco-1.5.7/' } })
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
