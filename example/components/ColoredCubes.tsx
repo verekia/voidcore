@@ -57,6 +57,9 @@ const ColoredCubes = ({ count }: { count: number }) => (
     {Array.from({ length: count }, (_, i) => (
       <ColoredCube key={i} index={i} />
     ))}
+    <sprite position={[0, 0, COLORED_Z + 5]} scale={[8, 8, 1]}>
+      <spriteMaterial args={[{ color: [0, 0, 0] }]} />
+    </sprite>
   </>
 )
 
