@@ -12,6 +12,7 @@ Audit of the Voidcore specs vs current implementation.
 | Geometry                | ✓ Implemented |
 | Controls (Orbit)        | ✓ Implemented |
 | glTF Loader (core)      | ✓ Implemented |
+| KTX2 / Texture Compress | ✓ Implemented |
 | Engine Core / Lifecycle | ✓ Implemented |
 | Shadows                 | ✓ Implemented |
 | Raycasting / BVH        | ✓ Implemented |
@@ -19,7 +20,6 @@ Audit of the Voidcore specs vs current implementation.
 | HTML Overlay            | ✓ Implemented |
 | React Bindings          | ✓ Implemented |
 | Bloom                   | ✓ Implemented |
-| Textures/KTX2           | ❌ Not done   |
 | Animation               | ⚠️ Partial    |
 | Renderer Core           | ⚠️ Partial    |
 
@@ -33,8 +33,9 @@ Audit of the Voidcore specs vs current implementation.
 - **Materials**: BasicMaterial, LambertMaterial, color/opacity/transparent/vertexColors, index palette system (32-entry max)
 - **Geometry**: All parametric primitives (Plane, Box, Sphere, Cone, Cylinder, Capsule, Circle), Z-up, custom geometry factory, lazy GPU upload, `needsUpdate`
 - **Animation**: Skeleton (32-bone limit), keyframe tracks, mixer with actions, fade in/out, crossfade, weight blending, loop modes, timeScale
-- **Orbit Controls**: Target, damping, distance constraints, elevation constraints, mouse + touch input, callbacks, `dispose()`
+- **Orbit Controls**: Target, damping, distance constraints, elevation constraints, mouse + touch input, `onChange` callback, `dispose()`
 - **glTF Loader**: GLB parsing, mesh/skeleton/animation extraction, flat result lists (`meshes`, `skeletons`, `animations`, `textures`), `dispose()`
+- **KTX2 / Basis Universal**: `loadKTX2` loader implemented in `loaders/ktx2.ts`. Selects best GPU-native format (ASTC 4×4 > BC7 > BC3 > ETC2 > RGBA8) from `engine.compressedTextureFormats`. Integrated into the glTF loader and exposed as `useKTX2` hook in React.
 - **Renderer**: WebGPU + WebGL2 backends, draw call sorting by pipeline→material→depth (32-bit radix sort), MSAA, frame stats API. All shader pipelines compiled eagerly at init (no first-frame hitching). Camera frustum culling via AABB-frustum testing in `collectMeshes()`.
 - **Shaders**: Dual WGSL + GLSL maintained separately
 - **Raycasting / BVH**: Two-level BVH (scene mesh + triangle level), binned SAH with 12 bins, slab ray-AABB, Möller-Trumbore ray-triangle, `Raycaster` class with `set`, `setFromCamera`, `intersectObject`, `intersectObjects`. Geometry BVH cached via `WeakMap`, invalidated on `needsUpdate`.
@@ -61,6 +62,14 @@ Audit of the Voidcore specs vs current implementation.
 
 4. **Bind group organization**: Main opaque/transparent passes correctly use 3 groups (per-frame, per-material, per-object with dynamic offsets). Shadow pass uses a separate `shadowBGL` layout instead of reusing the unified per-frame group. Post-processing passes use custom single-purpose layouts (reasonable deviation).
 
+5. **Transparency approach changed**: The spec originally described Weighted Blended OIT (WBOIT) with a separate transparent pass and OIT composite step. The actual implementation uses sorted alpha-blend (back-to-front in the same render pass as opaques). `TRANSPARENCY.md` was updated to reflect this. `RENDERER.md` still contains stale WBOIT references (render target table, render pass pipeline steps).
+
+6. **Project folder structure**: `ARCHITECTURE.md` described a separate `device/` GPU abstraction layer with its own `types.ts`, `webgpu.ts`, `webgl2.ts`. The actual implementation skips that indirection — WebGPU and WebGL2 renderers live directly in `renderer/webgpu.ts` and `renderer/webgl.ts` and own the GPU resource management themselves. The layered dependency flow is correct; only the physical module boundaries differ.
+
+7. **Orbit controls — missing programmatic API**: `CONTROLS.md` specced `controls.setTarget([x,y,z], { animate: true, duration: 0.5 })`, `controls.setPosition(...)`, and `onStart`/`onEnd` event callbacks. The implementation only has `onChange`. The `target` property can be set directly (immediate, no animation). Animated transitions and the start/end callbacks were never built.
+
+8. **Animation mixer blending**: Spec describes accumulating normalized weights per-bone across all active actions. Implementation uses incremental blending (`t = nw / accWeight` at each step) which is mathematically equivalent for two actions but avoids a separate accumulation pass. Result is identical; code path differs.
+
 ---
 
 ## Remaining Renderer Improvements
@@ -70,6 +79,8 @@ Audit of the Voidcore specs vs current implementation.
 2. **Bind Group Organization** — Shadow pass uses separate bind group layouts rather than the unified approach the spec describes.
 
 3. **WebGL2 Pipeline as State Bundle** — WebGPU correctly uses `GPURenderPipeline` objects, but the WebGL2 backend sets blend/depth/cull state ad-hoc during rendering rather than using pre-built state bundles.
+
+4. **RENDERER.md cleanup** — The spec still describes the old WBOIT pipeline (OIT Accumulation/Revealage render targets, OIT composite pass, RGBA16F+R8 targets). These no longer exist. The spec needs a rewrite to match the sorted alpha-blend approach before it can be considered accurate.
 
 ## Priority Order
 
