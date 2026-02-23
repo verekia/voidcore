@@ -11,9 +11,8 @@ const StatsOverlay = ({ engine }: { engine: Engine | null }) => {
       const stats = engine.getStats()
       const shadowSuffix = stats.shadowDrawCalls > 0 ? ` (+${stats.shadowDrawCalls} for shadows)` : ''
       const dpr = Math.min(window.devicePixelRatio, engine.maxDpr)
-      const floatLabel = engine.floatPrecision === 'float16' ? 'F16' : 'F32'
       setStatsText(
-        `${engine.backend.toUpperCase()} | ${floatLabel} | ${Math.round(stats.fps)} FPS | DPR: ${dpr.toFixed(2)} | Draw calls: ${stats.drawCalls}${shadowSuffix}`,
+        `${engine.backend.toUpperCase()} | ${Math.round(stats.fps)} FPS | DPR: ${dpr.toFixed(2)} | Draw calls: ${stats.drawCalls}${shadowSuffix}`,
       )
     }, 500)
     return () => clearInterval(interval)

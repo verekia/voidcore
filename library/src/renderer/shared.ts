@@ -45,7 +45,6 @@ import {
 } from '../math/index'
 import { Mesh } from '../scene/mesh'
 
-import type { FloatArray } from '../float'
 import type { AABB, Mat4, Vec3 } from '../math/index'
 import type { AmbientLight, DirectionalLight } from '../scene/light'
 import type { Node } from '../scene/node'
@@ -114,8 +113,8 @@ export const findAmbientLight = (root: Node, stack: Node[]): AmbientLight | null
  */
 export const collectMeshes = (
   root: Node,
-  cameraFrustum: FloatArray,
-  shadowFrustum: FloatArray | null,
+  cameraFrustum: Float32Array,
+  shadowFrustum: Float32Array | null,
   worldAABB: AABB,
   meshes: Mesh[],
   shadowMeshes: Mesh[],
