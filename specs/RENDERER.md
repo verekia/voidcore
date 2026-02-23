@@ -44,11 +44,11 @@ The shadow pass currently uses a separate `shadowBGL` bind group layout instead 
 
 The three-slot layout:
 
-| Slot | Name         | Update Frequency               | Contents                                                            |
-| ---- | ------------ | ------------------------------ | ------------------------------------------------------------------- |
+| Slot | Name         | Update Frequency               | Contents                                                             |
+| ---- | ------------ | ------------------------------ | -------------------------------------------------------------------- |
 | 0    | Per-frame    | Once per frame                 | Camera VP matrix, light data, ambient, shadow VP matrix, bias params |
-| 1    | Per-material | Per material switch            | Material UBO, color/AO textures, samplers                           |
-| 2    | Per-object   | Per draw call (dynamic offset) | World matrix, optional bone matrices                                |
+| 1    | Per-material | Per material switch            | Material UBO, color/AO textures, samplers                            |
+| 2    | Per-object   | Per draw call (dynamic offset) | World matrix, optional bone matrices                                 |
 
 Currently the shadow pass duplicates slot 0 with its own layout. Unifying them would reduce bind group creation overhead and simplify the renderer code.
 
