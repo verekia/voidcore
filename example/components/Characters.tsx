@@ -9,6 +9,7 @@ import {
   useGLTF,
   useAnimations,
   useColoredGeometry,
+  useColoredStaticGeometry,
   mergeStaticIntoSkinned,
   mat4Create,
   mat4Compose,
@@ -16,7 +17,7 @@ import {
   VEC3_ONE,
 } from 'voidcore'
 
-import { staticBundleSrc, playerBundleSrc } from './assets'
+import { playerBundleSrc } from './assets'
 
 import type { AnimationClip, MeshOutline, PaletteEntry } from 'voidcore'
 
@@ -43,8 +44,7 @@ interface CharacterProps {
 const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
   const { scene } = useEngine()
 
-  const megaxeMesh = useGLTF(staticBundleSrc, { meshName: 'megaxe' })
-  const bakedAxe = useColoredGeometry(megaxeMesh.geometry, megaxePalette)
+  const axeGeometry = useColoredStaticGeometry('megaxe', megaxePalette)
 
   const {
     root,
@@ -80,11 +80,11 @@ const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
       if (handBoneIndex >= 0) {
         const ibm = skeleton.boneInverseBindMatrices[handBoneIndex]!
         const axeLocal = mat4Compose(mat4Create(), VEC3_ZERO, new Float32Array([0, 0, 1, 0]), VEC3_ONE)
-        bodyMesh.geometry = mergeStaticIntoSkinned(bakedBody, bakedAxe, handBoneIndex, ibm, axeLocal)
+        bodyMesh.geometry = mergeStaticIntoSkinned(bakedBody, axeGeometry, handBoneIndex, ibm, axeLocal)
         bodyMesh.material = new LambertMaterial({ emissiveBrightness: 0.3 })
       }
     }
-  }, [bodyMesh, skeleton, bakedBody, bakedAxe])
+  }, [bodyMesh, skeleton, bakedBody, axeGeometry])
 
   const { actions } = useAnimations(clips, skeleton)
   const actionList = useMemo(() => clips.map(c => actions[c.name]!), [clips, actions])

@@ -10,6 +10,8 @@
 // useKTX2(url)      – Load a KTX2 texture (wrapper around useLoader).
 //   .setTranscoderPath – Set global default Basis transcoder path.
 // useColoredGeometry(geometry, palette) – Memoized bakePalette for vertex-colored geometry.
+// useColoredStaticGeometry(name, palette) – Load a named mesh from the static bundle and bake palette.
+//   .setStaticBundlePath – Set global static bundle GLB path.
 // useAnimations()   – Create an AnimationMixer and return action map.
 
 import { useContext, useEffect, useRef, useMemo } from 'react'
@@ -199,6 +201,32 @@ useKTX2.setTranscoderPath = (transcoderPath: string) => {
 
 export const useColoredGeometry = (geometry: Geometry, palette: PaletteEntry[]): Geometry => {
   return useMemo(() => bakePalette(geometry, palette), [geometry, palette])
+}
+
+// ─── useColoredStaticGeometry ─────────────────────────────────────────────────────
+
+let _staticBundlePath: string | undefined
+
+interface UseColoredStaticMesh {
+  (meshName: string, palette: PaletteEntry[]): Geometry
+  /** Set the global static bundle GLB path for all useColoredStaticGeometry calls. */
+  setStaticBundlePath: (path: string) => void
+}
+
+export const useColoredStaticGeometry: UseColoredStaticMesh = ((
+  meshName: string,
+  palette: PaletteEntry[],
+): Geometry => {
+  if (!_staticBundlePath)
+    throw new Error(
+      'useColoredStaticGeometry requires a static bundle path — call useColoredStaticGeometry.setStaticBundlePath() first',
+    )
+  const mesh = useGLTF(_staticBundlePath, { meshName }) as Mesh
+  return useColoredGeometry(mesh.geometry, palette)
+}) as UseColoredStaticMesh
+
+useColoredStaticGeometry.setStaticBundlePath = (path: string) => {
+  _staticBundlePath = path
 }
 
 // ─── useAnimations ────────────────────────────────────────────────────────────
