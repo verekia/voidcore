@@ -1,6 +1,6 @@
 # voidcore
 
-A minimal purpose-built 3D graphics engine written in TypeScript with WebGPU and WebGL2 support. The goal of this engine is to replace Three.js and React Three Fiber (love them both!) with a minimal subset of feature that my game needs, with better performance.
+A minimal purpose-built 3D graphics engine written in TypeScript with WebGPU and WebGL2 support. The goal of this engine is to replace Three.js and React Three Fiber (love them both!) with a minimal subset of features that my game needs, and with better performance.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/verekia/voidcore/refs/heads/main/logo.webp" width="160">
