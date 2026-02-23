@@ -872,6 +872,12 @@ useColoredGeometry(geometry: Geometry, palette: PaletteEntry[]): Geometry
 ```
 
 ```ts
+// Load a named mesh from the static bundle GLB and bake a palette onto its geometry.
+useColoredStaticGeometry(meshName: string, palette: PaletteEntry[]): Geometry
+useColoredStaticGeometry.setStaticBundlePath(path: string): void // set global bundle GLB path
+```
+
+```ts
 // Creates an AnimationMixer and returns named actions. Calls mixer.update(dt) each frame.
 useAnimations(
   animations: AnimationClip[],
