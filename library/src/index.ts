@@ -37,7 +37,14 @@ export {
 } from './geometry/primitives'
 
 // Materials
-export { BasicMaterial, LambertMaterial, Material, type MaterialSide, type PaletteEntry } from './materials/material'
+export {
+  BasicMaterial,
+  LambertMaterial,
+  Material,
+  type CustomShader,
+  type MaterialSide,
+  type PaletteEntry,
+} from './materials/material'
 export { SpriteMaterial, type SpriteMaterialOptions } from './materials/sprite-material'
 export { Texture, type CompressedTextureFormat, type TextureFormat } from './materials/texture'
 

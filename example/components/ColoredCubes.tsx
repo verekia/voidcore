@@ -1,6 +1,6 @@
 import { useMemo, useRef } from 'react'
 
-import { quatFromAxisAngle, useFrame } from 'voidcore'
+import { type CustomShader, quatFromAxisAngle, useFrame } from 'voidcore'
 
 const CUBE_COLORS: [number, number, number][] = [
   [1.0, 0.2, 0.2],
@@ -52,14 +52,42 @@ const ColoredCube = ({ index }: { index: number }) => {
   )
 }
 
+const ringShader = {
+  uniforms: { time: 0 },
+  fragmentWGSL: /* wgsl */ `
+    let centered = in.uv - vec2<f32>(0.5, 0.5);
+    let dist = length(centered);
+    let ring = smoothstep(0.35, 0.36, dist) * (1.0 - smoothstep(0.46, 0.47, dist));
+    finalColor = vec3<f32>(1.0, 0.15, 0.1);
+    alpha = ring * (0.5 + 0.5 * sin(uniforms.time * 3.0));
+  `,
+  fragmentGLSL: /* glsl */ `
+    vec2 centered = v_uv - vec2(0.5);
+    float dist = length(centered);
+    float ring = smoothstep(0.35, 0.36, dist) * (1.0 - smoothstep(0.46, 0.47, dist));
+    finalColor = vec3(1.0, 0.15, 0.1);
+    alpha = ring * (0.5 + 0.5 * sin(uniforms.time * 3.0));
+  `,
+} satisfies CustomShader
+
+const PulsingRingSprite = () => {
+  useFrame(({ elapsed }) => {
+    ringShader.uniforms.time = elapsed
+  })
+
+  return (
+    <sprite position={[0, 0, COLORED_Z + 5]} scale={[20, 20, 1]}>
+      <spriteMaterial args={[{ customShader: ringShader }]} />
+    </sprite>
+  )
+}
+
 const ColoredCubes = ({ count }: { count: number }) => (
   <>
     {Array.from({ length: count }, (_, i) => (
       <ColoredCube key={i} index={i} />
     ))}
-    <sprite position={[0, 0, COLORED_Z + 5]} scale={[8, 8, 1]}>
-      <spriteMaterial args={[{ color: [0, 0, 0] }]} />
-    </sprite>
+    <PulsingRingSprite />
   </>
 )
 

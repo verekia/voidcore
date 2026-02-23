@@ -36,6 +36,11 @@
 // coordinates (repeat wrapping), and per-material tiled normal maps via a second
 // 2D array texture with per-vertex data in a float16x4 attribute (location 7).
 //
+// Custom shaders: materials with customShader get dedicated WebGL programs (cached per-material
+// via WeakMap). Custom shader snippets are injected into the standard lambert/basic shaders
+// at vertex and fragment hook points. Custom uniforms (float-only) are passed via a std140
+// UBO (CustomBlock at binding point 2), accessible as `uniforms.xxx` in shader code.
+//
 // WebGLRenderer.render()  – Draws one frame.
 // WebGLRenderer.dispose() – Releases all GPU resources.
 
@@ -84,6 +89,13 @@ import {
   BLOOM_DOWNSAMPLE_FRAG,
   BLOOM_UPSAMPLE_FRAG,
   BLIT_FRAG,
+  buildLambertVert,
+  buildLambertSkinnedVert,
+  buildLambertCustomFrag,
+  buildLambertSkinnedCustomFrag,
+  buildBasicVert,
+  buildBasicSkinnedVert,
+  buildBasicCustomFrag,
 } from './webgl-shaders'
 
 import type { Geometry } from '../geometry/geometry'
@@ -785,6 +797,11 @@ export class WebGLRenderer implements Renderer {
   private _dummyTiledNormalArrayTex!: WebGLTexture
   private _tiledAoArrayCache = new WeakMap<Geometry, { glTex: WebGLTexture; scales: Float32Array }>()
   private _tiledNormalArrayCache = new WeakMap<Geometry, WebGLTexture>()
+  private _customProgramCache = new WeakMap<Material, Map<number, { program: WebGLProgram; locs: SceneUniformLocs }>>()
+
+  // Per-material custom uniform GPU resources (UBO + CPU staging array)
+  private _customUniformCache = new WeakMap<Material, { ubo: WebGLBuffer; data: Float32Array; names: string[] }>()
+
   private _bloomDownLocs!: PostUniformLocs
   private _bloomUpLocs!: PostUniformLocs
   private _blitLocs!: BlitUniformLocs
@@ -1239,6 +1256,92 @@ export class WebGLRenderer implements Renderer {
     const objName = skinned ? 'SkinnedObjectBlock' : 'ObjectBlock'
     const objIdx = gl.getUniformBlockIndex(program, objName)
     if (objIdx !== gl.INVALID_INDEX) gl.uniformBlockBinding(program, objIdx, 1)
+  }
+
+  /**
+   * Returns a cached WebGL program for a material with custom shaders.
+   * Config key: isSkinned ? 1 : 0
+   */
+  private _getCustomProgram(material: Material, isSkinned: boolean): { program: WebGLProgram; locs: SceneUniformLocs } {
+    const configKey = isSkinned ? 1 : 0
+
+    let matCache = this._customProgramCache.get(material)
+    if (!matCache) {
+      matCache = new Map()
+      this._customProgramCache.set(material, matCache)
+    }
+    const cached = matCache.get(configKey)
+    if (cached) return cached
+
+    const cs = material.customShader!
+    const hasUniforms = cs.uniforms && Object.keys(cs.uniforms).length > 0
+
+    // Generate GLSL declaration for custom uniforms
+    let glslDecl: string | undefined
+    if (hasUniforms) {
+      const names = Object.keys(cs.uniforms!).sort()
+      glslDecl = `layout(std140) uniform CustomBlock {\n  ${names.map(n => `float ${n};`).join('\n  ')}\n} uniforms;`
+    }
+
+    let vertSrc: string
+    let fragSrc: string
+
+    if (material.type === 'lambert') {
+      vertSrc = isSkinned ? buildLambertSkinnedVert(cs.vertexGLSL, glslDecl) : buildLambertVert(cs.vertexGLSL, glslDecl)
+      fragSrc = isSkinned
+        ? buildLambertSkinnedCustomFrag(cs.fragmentGLSL, glslDecl)
+        : buildLambertCustomFrag(cs.fragmentGLSL, glslDecl)
+    } else {
+      vertSrc = isSkinned ? buildBasicSkinnedVert(cs.vertexGLSL, glslDecl) : buildBasicVert(cs.vertexGLSL, glslDecl)
+      fragSrc = buildBasicCustomFrag(cs.fragmentGLSL, glslDecl)
+    }
+
+    const program = createProgram(this.gl, vertSrc, fragSrc)
+    this._bindUBOBlocks(program, isSkinned)
+
+    // Bind CustomBlock UBO to binding point 2
+    if (hasUniforms) {
+      const gl = this.gl
+      const blockIdx = gl.getUniformBlockIndex(program, 'CustomBlock')
+      if (blockIdx !== gl.INVALID_INDEX) gl.uniformBlockBinding(program, blockIdx, 2)
+    }
+
+    const locs = cacheSceneLocs(this.gl, program)
+
+    const entry = { program, locs }
+    matCache.set(configKey, entry)
+    return entry
+  }
+
+  /**
+   * Lazily creates the UBO and uploads current custom uniform values for a material.
+   */
+  private _bindCustomUniforms(material: Material): void {
+    const gl = this.gl
+    const uniformValues = material.customShader!.uniforms!
+    let entry = this._customUniformCache.get(material)
+
+    if (!entry) {
+      const names = Object.keys(uniformValues).sort()
+      const numFloats = names.length
+      // std140: each float occupies 16 bytes (vec4 alignment)
+      const bufferSize = numFloats * 16
+      const ubo = gl.createBuffer()!
+      gl.bindBuffer(gl.UNIFORM_BUFFER, ubo)
+      gl.bufferData(gl.UNIFORM_BUFFER, bufferSize, gl.DYNAMIC_DRAW)
+      // Staging array: one float per 4 floats (16 bytes) to match std140 layout
+      entry = { ubo, data: new Float32Array(numFloats * 4), names }
+      this._customUniformCache.set(material, entry)
+    }
+
+    // Pack current values into staging array (std140: each float at 16-byte stride)
+    const { ubo, data, names } = entry
+    for (let i = 0; i < names.length; i++) {
+      data[i * 4] = uniformValues[names[i]!]!
+    }
+    gl.bindBuffer(gl.UNIFORM_BUFFER, ubo)
+    gl.bufferSubData(gl.UNIFORM_BUFFER, 0, data)
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, 2, ubo)
   }
 
   private _bindShadowUBOBlocks(program: WebGLProgram, skinned: boolean) {
@@ -1892,13 +1995,18 @@ export class WebGLRenderer implements Renderer {
       const mesh = meshes[sortedIndices[si]!]!
       const isOutlined = mesh._outlineThickness > 0 && mesh.material.type === 'lambert'
       const hasVC = !!mesh.geometry.colors && mesh.material.type === 'lambert'
+      const hasCustom = !hasVC && mesh.material._hasCustomShader
 
       // Apply material side (cull mode), considering outlines
       applySide(mesh.material.side, isOutlined)
 
       let program: WebGLProgram
       let locs: SceneUniformLocs
-      if (hasVC) {
+      if (hasCustom) {
+        const entry = this._getCustomProgram(mesh.material, mesh._isSkinned)
+        program = entry.program
+        locs = entry.locs
+      } else if (hasVC) {
         if (mesh._isSkinned) {
           program = this.lambertSkinnedVCProgram
           locs = this._lambertSkinnedVCLocs
@@ -1931,8 +2039,15 @@ export class WebGLRenderer implements Renderer {
       if (programChanged && mesh.material.type === 'lambert') {
         gl.uniform1i(locs.u_shadowMap, 2)
       }
-      if (hasVC || (mesh.material._hasTextures && !mesh._isSkinned)) {
+      if (hasVC || (!hasCustom && mesh.material._hasTextures && !mesh._isSkinned)) {
         this._bindMaterialTextures(mesh.material, locs, hasVC ? mesh.geometry : undefined)
+      }
+      if (
+        hasCustom &&
+        mesh.material.customShader?.uniforms &&
+        Object.keys(mesh.material.customShader.uniforms).length > 0
+      ) {
+        this._bindCustomUniforms(mesh.material)
       }
 
       drawMesh(si, locs, programChanged, mesh)
@@ -1952,13 +2067,18 @@ export class WebGLRenderer implements Renderer {
         const mesh = meshes[sortedIndices[si]!]!
         const isOutlined = mesh._outlineThickness > 0 && mesh.material.type === 'lambert'
         const hasVC = !!mesh.geometry.colors && mesh.material.type === 'lambert'
+        const hasCustom = !hasVC && mesh.material._hasCustomShader
 
         // Apply material side (cull mode), considering outlines
         applySide(mesh.material.side, isOutlined)
 
         let program: WebGLProgram
         let locs: SceneUniformLocs
-        if (hasVC) {
+        if (hasCustom) {
+          const entry = this._getCustomProgram(mesh.material, mesh._isSkinned)
+          program = entry.program
+          locs = entry.locs
+        } else if (hasVC) {
           if (mesh._isSkinned) {
             program = this.lambertSkinnedVCProgram
             locs = this._lambertSkinnedVCLocs
@@ -1991,8 +2111,15 @@ export class WebGLRenderer implements Renderer {
         if (programChanged && mesh.material.type === 'lambert') {
           gl.uniform1i(locs.u_shadowMap, 2)
         }
-        if (hasVC || (mesh.material._hasTextures && !mesh._isSkinned)) {
+        if (hasVC || (!hasCustom && mesh.material._hasTextures && !mesh._isSkinned)) {
           this._bindMaterialTextures(mesh.material, locs, hasVC ? mesh.geometry : undefined)
+        }
+        if (
+          hasCustom &&
+          mesh.material.customShader?.uniforms &&
+          Object.keys(mesh.material.customShader.uniforms).length > 0
+        ) {
+          this._bindCustomUniforms(mesh.material)
         }
 
         drawMesh(si, locs, programChanged, mesh)

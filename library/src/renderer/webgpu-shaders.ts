@@ -36,6 +36,11 @@
 // texture (group 3, binding 6) with per-vertex data in a float16x4 attribute (location 7):
 // layerIndex/255 in x, intensity in y, scale in z. Normal mapping uses a cotangent frame
 // (screen-space derivatives) for static meshes and triplanar projection for skinned meshes.
+//
+// Custom shader builders (buildLambertWGSL, buildBasicWGSL, etc.) generate shader source
+// with user-provided WGSL code injected at hook points. Variables at hook points use `var`
+// instead of `let` so the user code can mutate them. Custom uniforms are declared as a
+// struct at @group(3) @binding(0), accessible as `uniforms.xxx` in both vertex and fragment.
 
 // ─── Shared WGSL blocks ──────────────────────────────────────────────
 
@@ -810,6 +815,310 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
   var out: FragmentOutput;
   out.color = vec4<f32>(material.baseColor * material.opacity, material.opacity);
   out.emissive = vec4<f32>(0.0, 0.0, 0.0, material.opacity);
+  return out;
+}
+`
+
+// ─── Custom shader builders ──────────────────────────────────────────
+//
+// These functions inject user-provided WGSL code snippets into the standard material shaders.
+// Vertex hook: runs after worldPos/normal/uv computation, before clip-space projection.
+//   Available mutable variables: out.worldPos (vec3f), out.normal (vec3f), out.uv (vec2f).
+// Fragment hook: runs after finalColor/alpha computation, before output.
+//   Available mutable variables: finalColor (vec3f), alpha (f32).
+
+export const buildLambertWGSL = (
+  customVertex?: string,
+  customFragment?: string,
+  customUniformsDecl?: string,
+) => /* wgsl */ `
+${FRAME_UNIFORMS}
+${MATERIAL_UNIFORMS}
+${OBJECT_UNIFORMS}
+
+${FRAME_BINDINGS}
+${MATERIAL_BINDING}
+${OBJECT_BINDING}
+${customUniformsDecl ?? ''}
+
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldPos: vec3<f32>,
+  @location(1) normal: vec3<f32>,
+  @location(2) uv: vec2<f32>,
+  @location(3) @interpolate(flat) outlineFlag: f32,
+};
+
+@vertex
+fn vs_main(
+  @location(0) a_position: vec3<f32>,
+  @location(1) a_normal: vec4<f32>,
+  @location(2) a_uv: vec2<f32>,
+) -> VertexOutput {
+  var out: VertexOutput;
+  let flag = a_normal.w;
+  out.outlineFlag = flag;
+  var pos = a_position;
+  if (flag > 0.5) {
+    pos = pos + normalize(a_normal.xyz) * object.outlineColorAndThickness.w;
+  }
+  let worldPos = object.worldMatrix * vec4<f32>(pos, 1.0);
+  out.worldPos = worldPos.xyz;
+  out.normal = normalize((object.normalMatrix * vec4<f32>(a_normal.xyz, 0.0)).xyz);
+  out.uv = a_uv;
+  ${customVertex ?? ''}
+  out.position = frame.viewProjection * vec4<f32>(out.worldPos, 1.0);
+  return out;
+}
+
+${PCF_AND_SHADOW}
+
+struct FragmentOutput {
+  @location(0) color: vec4<f32>,
+  @location(1) emissive: vec4<f32>,
+};
+
+@fragment
+fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
+  var out: FragmentOutput;
+
+  if (in.outlineFlag > 0.5) {
+    if (front_facing || object.outlineColorAndThickness.w <= 0.0) { discard; }
+    out.color = vec4<f32>(object.outlineColorAndThickness.xyz, 1.0);
+    out.emissive = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    return out;
+  }
+
+  let normal = normalize(in.normal);
+  var baseColor = material.baseColor;
+  var alpha = material.opacity;
+
+  let ambient = frame.ambientColor * frame.ambientIntensity;
+  let NdotL = max(dot(normal, frame.lightDir), 0.0);
+  var shadow = 1.0;
+  if (material.receiveShadow > 0.5) {
+    shadow = sampleShadow(in.worldPos, NdotL);
+  }
+  let diffuse = frame.lightColor * frame.lightIntensity * NdotL * shadow;
+
+  var finalColor = baseColor * (ambient + diffuse);
+  ${customFragment ?? ''}
+
+  out.color = vec4<f32>(finalColor * alpha, alpha);
+  out.emissive = vec4<f32>(0.0, 0.0, 0.0, alpha);
+  return out;
+}
+`
+
+export const buildLambertSkinnedWGSL = (
+  customVertex?: string,
+  customFragment?: string,
+  customUniformsDecl?: string,
+) => /* wgsl */ `
+${FRAME_UNIFORMS}
+${MATERIAL_UNIFORMS}
+${SKINNED_OBJECT_UNIFORMS}
+
+${FRAME_BINDINGS}
+${MATERIAL_BINDING}
+${OBJECT_BINDING}
+${customUniformsDecl ?? ''}
+
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldPos: vec3<f32>,
+  @location(1) normal: vec3<f32>,
+  @location(2) uv: vec2<f32>,
+  @location(3) @interpolate(flat) outlineFlag: f32,
+};
+
+@vertex
+fn vs_main(
+  @location(0) a_position: vec3<f32>,
+  @location(1) a_normal: vec4<f32>,
+  @location(2) a_uv: vec2<f32>,
+  @location(3) a_joints: vec4<u32>,
+  @location(4) a_weights: vec4<f32>,
+) -> VertexOutput {
+  var out: VertexOutput;
+  let flag = a_normal.w;
+  out.outlineFlag = flag;
+
+  let skinMatrix =
+    a_weights.x * object.boneMatrices[a_joints.x] +
+    a_weights.y * object.boneMatrices[a_joints.y] +
+    a_weights.z * object.boneMatrices[a_joints.z] +
+    a_weights.w * object.boneMatrices[a_joints.w];
+
+  let skinnedPos = skinMatrix * vec4<f32>(a_position, 1.0);
+  let skinnedNorm = normalize((skinMatrix * vec4<f32>(a_normal.xyz, 0.0)).xyz);
+
+  var worldPos = skinnedPos.xyz;
+  if (flag > 0.5) {
+    worldPos = worldPos + skinnedNorm * object.outlineColorAndThickness.w;
+  }
+  out.worldPos = worldPos;
+  out.normal = skinnedNorm;
+  out.uv = a_uv;
+  ${customVertex ?? ''}
+  out.position = frame.viewProjection * vec4<f32>(out.worldPos, 1.0);
+  return out;
+}
+
+${PCF_AND_SHADOW}
+
+struct FragmentOutput {
+  @location(0) color: vec4<f32>,
+  @location(1) emissive: vec4<f32>,
+};
+
+@fragment
+fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
+  var out: FragmentOutput;
+
+  if (in.outlineFlag > 0.5) {
+    if (front_facing || object.outlineColorAndThickness.w <= 0.0) { discard; }
+    out.color = vec4<f32>(object.outlineColorAndThickness.xyz, 1.0);
+    out.emissive = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    return out;
+  }
+
+  let normal = normalize(in.normal);
+  var baseColor = material.baseColor;
+  var alpha = material.opacity;
+
+  let ambient = frame.ambientColor * frame.ambientIntensity;
+  let NdotL = max(dot(normal, frame.lightDir), 0.0);
+  var shadow = 1.0;
+  if (material.receiveShadow > 0.5) {
+    shadow = sampleShadow(in.worldPos, NdotL);
+  }
+  let diffuse = frame.lightColor * frame.lightIntensity * NdotL * shadow;
+
+  var finalColor = baseColor * (ambient + diffuse);
+  ${customFragment ?? ''}
+
+  out.color = vec4<f32>(finalColor * alpha, alpha);
+  out.emissive = vec4<f32>(0.0, 0.0, 0.0, alpha);
+  return out;
+}
+`
+
+export const buildBasicWGSL = (
+  customVertex?: string,
+  customFragment?: string,
+  customUniformsDecl?: string,
+) => /* wgsl */ `
+${FRAME_UNIFORMS}
+${MATERIAL_UNIFORMS}
+${OBJECT_UNIFORMS}
+
+${FRAME_BINDINGS}
+${MATERIAL_BINDING}
+${OBJECT_BINDING}
+${customUniformsDecl ?? ''}
+
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldPos: vec3<f32>,
+  @location(1) normal: vec3<f32>,
+  @location(2) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(
+  @location(0) a_position: vec3<f32>,
+  @location(1) a_normal: vec4<f32>,
+  @location(2) a_uv: vec2<f32>,
+) -> VertexOutput {
+  var out: VertexOutput;
+  let worldPos = object.worldMatrix * vec4<f32>(a_position, 1.0);
+  out.worldPos = worldPos.xyz;
+  out.normal = normalize((object.normalMatrix * vec4<f32>(a_normal.xyz, 0.0)).xyz);
+  out.uv = a_uv;
+  ${customVertex ?? ''}
+  out.position = frame.viewProjection * vec4<f32>(out.worldPos, 1.0);
+  return out;
+}
+
+struct FragmentOutput {
+  @location(0) color: vec4<f32>,
+  @location(1) emissive: vec4<f32>,
+};
+
+@fragment
+fn fs_main(in: VertexOutput) -> FragmentOutput {
+  var out: FragmentOutput;
+  var baseColor = material.baseColor;
+  var alpha = material.opacity;
+  var finalColor = baseColor;
+  ${customFragment ?? ''}
+  out.color = vec4<f32>(finalColor * alpha, alpha);
+  out.emissive = vec4<f32>(0.0, 0.0, 0.0, alpha);
+  return out;
+}
+`
+
+export const buildBasicSkinnedWGSL = (
+  customVertex?: string,
+  customFragment?: string,
+  customUniformsDecl?: string,
+) => /* wgsl */ `
+${FRAME_UNIFORMS}
+${MATERIAL_UNIFORMS}
+${SKINNED_OBJECT_UNIFORMS}
+
+${FRAME_BINDINGS}
+${MATERIAL_BINDING}
+${OBJECT_BINDING}
+${customUniformsDecl ?? ''}
+
+struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldPos: vec3<f32>,
+  @location(1) normal: vec3<f32>,
+  @location(2) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(
+  @location(0) a_position: vec3<f32>,
+  @location(1) a_normal: vec4<f32>,
+  @location(2) a_uv: vec2<f32>,
+  @location(3) a_joints: vec4<u32>,
+  @location(4) a_weights: vec4<f32>,
+) -> VertexOutput {
+  var out: VertexOutput;
+
+  let skinMatrix =
+    a_weights.x * object.boneMatrices[a_joints.x] +
+    a_weights.y * object.boneMatrices[a_joints.y] +
+    a_weights.z * object.boneMatrices[a_joints.z] +
+    a_weights.w * object.boneMatrices[a_joints.w];
+
+  let skinnedPos = skinMatrix * vec4<f32>(a_position, 1.0);
+  out.worldPos = skinnedPos.xyz;
+  out.normal = normalize((skinMatrix * vec4<f32>(a_normal.xyz, 0.0)).xyz);
+  out.uv = a_uv;
+  ${customVertex ?? ''}
+  out.position = frame.viewProjection * vec4<f32>(out.worldPos, 1.0);
+  return out;
+}
+
+struct FragmentOutput {
+  @location(0) color: vec4<f32>,
+  @location(1) emissive: vec4<f32>,
+};
+
+@fragment
+fn fs_main(in: VertexOutput) -> FragmentOutput {
+  var out: FragmentOutput;
+  var baseColor = material.baseColor;
+  var alpha = material.opacity;
+  var finalColor = baseColor;
+  ${customFragment ?? ''}
+  out.color = vec4<f32>(finalColor * alpha, alpha);
+  out.emissive = vec4<f32>(0.0, 0.0, 0.0, alpha);
   return out;
 }
 `
