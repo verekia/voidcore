@@ -9,6 +9,9 @@
 //   - sizeAttenuation   – When true (default), sprites shrink with distance like normal geometry.
 //                          When false, sprites maintain constant screen size regardless of distance.
 //
+// SpriteMaterial inherits customShader support from Material — custom WGSL/GLSL snippets
+// are injected into the basic shader pipeline that sprites use.
+//
 // new SpriteMaterial() – Creates a sprite material with default settings.
 
 import { Material } from './material'
