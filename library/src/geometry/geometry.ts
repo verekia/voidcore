@@ -14,7 +14,8 @@
 // per-vertex colors and emissiveColors arrays.
 //
 // new Geometry(data)                  – Wraps raw arrays into a Geometry object.
-// bakePalette(geometry, palette)      – Bakes palette entries into vertex colors/emissiveColors.
+// bakePalette(geometry, palette)      – Bakes palette entries into vertex colors/emissiveColors (cached by reference).
+// clearColoredGeometryCache(geo?)     – Clears cached baked geometries (all, or for a specific geometry).
 // mergeGeometries(geos)               – Merges multiple geometries into one (preserves vertex colors).
 // mergeStaticIntoSkinned(skinned, …)  – Merges a static geometry into a skinned one, binding vertices to a bone.
 // computeSmoothNormals(geometry)      – Computes position-averaged normals for gap-free inverted hull outlines.
@@ -103,7 +104,23 @@ export class Geometry {
  * and writes RGBA colors and RGBA emissiveColors (RGB pre-multiplied by intensity, A=1).
  * Returns a new Geometry without materialIndices.
  */
+let coloredGeometryCache = new WeakMap<Geometry, WeakMap<PaletteEntry[], Geometry>>()
+
+export const clearColoredGeometryCache = (geometry?: Geometry) => {
+  if (geometry) {
+    coloredGeometryCache.delete(geometry)
+  } else {
+    coloredGeometryCache = new WeakMap()
+  }
+}
+
 export const bakePalette = (geometry: Geometry, palette: PaletteEntry[]): Geometry => {
+  let byPalette = coloredGeometryCache.get(geometry)
+  if (byPalette) {
+    const cached = byPalette.get(palette)
+    if (cached) return cached
+  }
+
   const vc = geometry.vertexCount
   const colors = new Float32Array(vc * 4)
   const emissiveColors = new Float32Array(vc * 4)
@@ -124,7 +141,7 @@ export const bakePalette = (geometry: Geometry, palette: PaletteEntry[]): Geomet
     emissiveColors[o + 3] = 1.0
   }
 
-  return new Geometry({
+  const result = new Geometry({
     positions: geometry.positions,
     normals: geometry.normals,
     indices: geometry.indices,
@@ -134,6 +151,14 @@ export const bakePalette = (geometry: Geometry, palette: PaletteEntry[]): Geomet
     joints: geometry.joints,
     weights: geometry.weights,
   })
+
+  if (!byPalette) {
+    byPalette = new WeakMap()
+    coloredGeometryCache.set(geometry, byPalette)
+  }
+  byPalette.set(palette, result)
+
+  return result
 }
 
 /**

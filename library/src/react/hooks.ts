@@ -5,6 +5,7 @@
 // useLoader(fn,url) – Suspense-compatible asset loader with caching.
 // useGLTF(url)      – Load a glTF/GLB model (wrapper around useLoader).
 //   With { meshName } – Returns a single Mesh by name instead of the full result.
+//   With { meshName, clone: true } – Returns a ClonedMesh with its own bone hierarchy.
 //   .setDecoderPath  – Set global default Draco/KTX2 decoder path.
 // useKTX2(url)      – Load a KTX2 texture (wrapper around useLoader).
 //   .setTranscoderPath – Set global default Basis transcoder path.
@@ -17,6 +18,8 @@ import { AnimationMixer } from '../animation/index'
 import { bakePalette } from '../geometry/geometry'
 import { loadGLTF } from '../loaders/gltf'
 import { loadKTX2 } from '../loaders/ktx2'
+import { cloneScene } from '../scene/clone'
+import { Mesh } from '../scene/mesh'
 import { VoidContext } from './context'
 
 import type { AnimationClip } from '../animation/index'
@@ -26,7 +29,7 @@ import type { GLTFResult, LoadOptions } from '../loaders/gltf'
 import type { PaletteEntry } from '../materials/material'
 import type { CompressedTextureFormat } from '../materials/texture'
 import type { Texture } from '../materials/texture'
-import type { Mesh } from '../scene/mesh'
+import type { Node } from '../scene/node'
 import type { FrameCallback } from './context'
 
 // ─── useEngine ────────────────────────────────────────────────────────────────
@@ -95,9 +98,20 @@ let _defaultGLTFOptions: LoadOptions | undefined
 export interface UseGLTFOptions extends LoadOptions {
   /** When set, useGLTF returns the first Mesh whose name matches instead of the full GLTFResult. */
   meshName?: string
+  /** When set together with meshName, returns a ClonedMesh with its own bone hierarchy and skeleton. */
+  clone?: boolean
+}
+
+export interface ClonedMesh {
+  root: Node
+  mesh: Mesh
+  skeleton: Skeleton
+  nodeMap: Map<Node, Node>
+  animations: AnimationClip[]
 }
 
 interface UseGLTF {
+  (url: string, options: UseGLTFOptions & { meshName: string; clone: true }): ClonedMesh
   (url: string, options: UseGLTFOptions & { meshName: string }): Mesh
   (url: string, options?: UseGLTFOptions): GLTFResult
   /** Set global default decoder path (Draco + KTX2) for all useGLTF calls. */
@@ -106,9 +120,21 @@ interface UseGLTF {
   preload: (url: string, options?: LoadOptions) => void
 }
 
-export const useGLTF: UseGLTF = ((url: string, options?: UseGLTFOptions): GLTFResult | Mesh => {
+export const useGLTF: UseGLTF = ((url: string, options?: UseGLTFOptions): GLTFResult | Mesh | ClonedMesh => {
   const resolved: UseGLTFOptions = { ..._defaultGLTFOptions, ...options }
   const gltf = useLoader((u: string, opts?: LoadOptions) => loadGLTF(u, opts), url, resolved)
+
+  const cloned = useMemo(() => {
+    if (!resolved.clone || !resolved.meshName) return null
+    const { root, skeletons, nodeMap } = cloneScene(gltf.scene, gltf.skeletons, {
+      meshFilter: m => m.name === resolved.meshName,
+    })
+    const mesh = Array.from(nodeMap.values()).find((n): n is Mesh => n instanceof Mesh)
+    if (!mesh) throw new Error(`useGLTF: mesh "${resolved.meshName}" not found in clone of ${url}`)
+    return { root, mesh, skeleton: skeletons[0]!, nodeMap, animations: gltf.animations } as ClonedMesh
+  }, [gltf, resolved.clone, resolved.meshName])
+
+  if (cloned) return cloned
 
   if (resolved.meshName) {
     const mesh = gltf.meshes.find(m => m.name === resolved.meshName)

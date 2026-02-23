@@ -20,6 +20,7 @@ export { cloneScene, type CloneOptions, type CloneResult } from './scene/clone'
 export {
   Geometry,
   bakePalette,
+  clearColoredGeometryCache,
   mergeGeometries,
   mergeStaticIntoSkinned,
   computeSmoothNormals,
@@ -70,6 +71,7 @@ export {
   useColoredGeometry,
   useAnimations,
   type UseGLTFOptions,
+  type ClonedMesh,
 } from './react/hooks'
 export { VoidContext, type VoidStore, type FrameCallback } from './react/context'
 export type {
