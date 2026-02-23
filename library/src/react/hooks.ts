@@ -4,23 +4,29 @@
 // useFrame(cb)      – Register a callback that runs every frame (before render).
 // useLoader(fn,url) – Suspense-compatible asset loader with caching.
 // useGLTF(url)      – Load a glTF/GLB model (wrapper around useLoader).
+//   With { meshName } – Returns a single Mesh by name instead of the full result.
 //   .setDecoderPath  – Set global default Draco/KTX2 decoder path.
 // useKTX2(url)      – Load a KTX2 texture (wrapper around useLoader).
 //   .setTranscoderPath – Set global default Basis transcoder path.
+// useColoredGeometry(geometry, palette) – Memoized bakePalette for vertex-colored geometry.
 // useAnimations()   – Create an AnimationMixer and return action map.
 
 import { useContext, useEffect, useRef, useMemo } from 'react'
 
 import { AnimationMixer } from '../animation/index'
+import { bakePalette } from '../geometry/geometry'
 import { loadGLTF } from '../loaders/gltf'
 import { loadKTX2 } from '../loaders/ktx2'
 import { VoidContext } from './context'
 
 import type { AnimationClip } from '../animation/index'
 import type { Skeleton } from '../animation/skeleton'
+import type { Geometry } from '../geometry/geometry'
 import type { GLTFResult, LoadOptions } from '../loaders/gltf'
+import type { PaletteEntry } from '../materials/material'
 import type { CompressedTextureFormat } from '../materials/texture'
 import type { Texture } from '../materials/texture'
+import type { Mesh } from '../scene/mesh'
 import type { FrameCallback } from './context'
 
 // ─── useEngine ────────────────────────────────────────────────────────────────
@@ -86,18 +92,32 @@ export function useLoader<T>(loaderFn: (url: string, ...args: any[]) => Promise<
 
 let _defaultGLTFOptions: LoadOptions | undefined
 
+export interface UseGLTFOptions extends LoadOptions {
+  /** When set, useGLTF returns the first Mesh whose name matches instead of the full GLTFResult. */
+  meshName?: string
+}
+
 interface UseGLTF {
-  (url: string, options?: LoadOptions): GLTFResult
+  (url: string, options: UseGLTFOptions & { meshName: string }): Mesh
+  (url: string, options?: UseGLTFOptions): GLTFResult
   /** Set global default decoder path (Draco + KTX2) for all useGLTF calls. */
   setDecoderPath: (decoderPath: string) => void
   /** Preload a glTF/GLB into the cache so useGLTF won't suspend. */
   preload: (url: string, options?: LoadOptions) => void
 }
 
-export const useGLTF: UseGLTF = (url: string, options?: LoadOptions): GLTFResult => {
-  const resolved = options ?? _defaultGLTFOptions
-  return useLoader((u: string, opts?: LoadOptions) => loadGLTF(u, opts), url, resolved)
-}
+export const useGLTF: UseGLTF = ((url: string, options?: UseGLTFOptions): GLTFResult | Mesh => {
+  const resolved: UseGLTFOptions = { ..._defaultGLTFOptions, ...options }
+  const gltf = useLoader((u: string, opts?: LoadOptions) => loadGLTF(u, opts), url, resolved)
+
+  if (resolved.meshName) {
+    const mesh = gltf.meshes.find(m => m.name === resolved.meshName)
+    if (!mesh) throw new Error(`useGLTF: mesh "${resolved.meshName}" not found in ${url}`)
+    return mesh
+  }
+
+  return gltf
+}) as UseGLTF
 
 useGLTF.setDecoderPath = (decoderPath: string) => {
   _defaultGLTFOptions = { draco: { decoderPath }, ktx2: { transcoderPath: decoderPath } }
@@ -147,6 +167,12 @@ export const useKTX2: UseKTX2 = (url: string, transcoderPath?: string): Texture 
 
 useKTX2.setTranscoderPath = (transcoderPath: string) => {
   _defaultTranscoderPath = transcoderPath
+}
+
+// ─── useColoredGeometry ───────────────────────────────────────────────────────
+
+export const useColoredGeometry = (geometry: Geometry, palette: PaletteEntry[]): Geometry => {
+  return useMemo(() => bakePalette(geometry, palette), [geometry, palette])
 }
 
 // ─── useAnimations ────────────────────────────────────────────────────────────

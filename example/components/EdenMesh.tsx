@@ -1,6 +1,6 @@
 import { Suspense, useMemo } from 'react'
 
-import { LambertMaterial, bakePalette, prebuildBVH, BakeShadows, useGLTF, useKTX2 } from 'voidcore'
+import { LambertMaterial, prebuildBVH, BakeShadows, useGLTF, useKTX2, useColoredGeometry } from 'voidcore'
 
 import { staticBundleSrc, cityAoSrc } from './assets'
 
@@ -40,23 +40,22 @@ const EDEN_PALETTE = EDEN_COLORS.map((color, i) => ({
 }))
 
 const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
-  const gltf = useGLTF(staticBundleSrc)
+  const edenMesh = useGLTF(staticBundleSrc, { meshName: 'Eden' })
   const aoTexture = useKTX2(cityAoSrc)
+  const coloredGeometry = useColoredGeometry(edenMesh.geometry, EDEN_PALETTE)
 
   const { geometry, material } = useMemo(() => {
-    const edenMesh = gltf.meshes.find(m => m.name === 'Eden')!
-    const geometry = bakePalette(edenMesh.geometry, EDEN_PALETTE)
-    prebuildBVH(geometry)
+    prebuildBVH(coloredGeometry)
     onReady?.()
     return {
-      geometry,
+      geometry: coloredGeometry,
       material: new LambertMaterial({
         aoMap: aoTexture,
         aoIntensity: 2,
         emissiveBrightness: 0.5,
       }),
     }
-  }, [gltf, aoTexture, onReady])
+  }, [coloredGeometry, aoTexture, onReady])
 
   return (
     <Suspense fallback={null}>

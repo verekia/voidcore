@@ -61,7 +61,16 @@ export { createOverlayManager, type OverlayHandle, type OverlayOptions } from '.
 export { BakeShadows } from './react/BakeShadows'
 export { Canvas, type CanvasProps } from './react/Canvas'
 export { Html, type HtmlProps } from './react/Html'
-export { useEngine, useFrame, useLoader, useGLTF, useKTX2, useAnimations } from './react/hooks'
+export {
+  useEngine,
+  useFrame,
+  useLoader,
+  useGLTF,
+  useKTX2,
+  useColoredGeometry,
+  useAnimations,
+  type UseGLTFOptions,
+} from './react/hooks'
 export { VoidContext, type VoidStore, type FrameCallback } from './react/context'
 export type {
   NodeProps,
