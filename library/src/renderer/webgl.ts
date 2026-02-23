@@ -31,7 +31,9 @@
 //
 // Vertex packing: normals → snorm8, UVs → float16, vertex colors → unorm8,
 // emissive → float16, joints → uint8, bone weights → unorm8. Meshes with
-// baked vertex colors use separate VC shader programs.
+// baked vertex colors use separate VC shader programs. VC shaders also support
+// per-material tiled AO via a 2D array texture sampled with world-space XY
+// coordinates (repeat wrapping).
 //
 // WebGLRenderer.render()  – Draws one frame.
 // WebGLRenderer.dispose() – Releases all GPU resources.
@@ -155,6 +157,8 @@ interface SceneUniformLocs {
   u_colorMap: WebGLUniformLocation | null
   u_aoMap: WebGLUniformLocation | null
   u_aoIntensity: WebGLUniformLocation | null
+  u_tiledAoArray: WebGLUniformLocation | null
+  u_tiledAoScales: WebGLUniformLocation | null
 }
 
 interface PostUniformLocs {
@@ -178,6 +182,8 @@ const cacheSceneLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): Scen
   u_colorMap: gl.getUniformLocation(program, 'u_colorMap'),
   u_aoMap: gl.getUniformLocation(program, 'u_aoMap'),
   u_aoIntensity: gl.getUniformLocation(program, 'u_aoIntensity'),
+  u_tiledAoArray: gl.getUniformLocation(program, 'u_tiledAoArray'),
+  u_tiledAoScales: gl.getUniformLocation(program, 'u_tiledAoScales'),
 })
 
 const cachePostLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): PostUniformLocs => ({
@@ -740,6 +746,8 @@ export class WebGLRenderer implements Renderer {
   // Texture map cache
   private _glTexCache = new WeakMap<Texture, WebGLTexture>()
   private _dummyWhiteTex!: WebGLTexture
+  private _dummyTiledAoArrayTex!: WebGLTexture
+  private _tiledAoArrayCache = new WeakMap<Geometry, { glTex: WebGLTexture; scales: Float32Array }>()
   private _bloomDownLocs!: PostUniformLocs
   private _bloomUpLocs!: PostUniformLocs
   private _blitLocs!: BlitUniformLocs
@@ -983,6 +991,27 @@ export class WebGLRenderer implements Renderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
     gl.bindTexture(gl.TEXTURE_2D, null)
 
+    // 1x1x1 white dummy array texture for when no tiled AO exists
+    this._dummyTiledAoArrayTex = gl.createTexture()!
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, this._dummyTiledAoArrayTex)
+    gl.texImage3D(
+      gl.TEXTURE_2D_ARRAY,
+      0,
+      gl.RGBA8,
+      1,
+      1,
+      1,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      new Uint8Array([255, 255, 255, 255]),
+    )
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.REPEAT)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.REPEAT)
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, null)
+
     // Cache canvas dimensions
     this._displayW = canvas.clientWidth
     this._displayH = canvas.clientHeight
@@ -1019,7 +1048,53 @@ export class WebGLRenderer implements Renderer {
     return glTex
   }
 
-  private _bindMaterialTextures(material: Material, locs: SceneUniformLocs) {
+  private _ensureTiledAoArrayTexture(geometry: Geometry): { glTex: WebGLTexture; scales: Float32Array } {
+    const cached = this._tiledAoArrayCache.get(geometry)
+    if (cached) return cached
+
+    const gl = this.gl
+    const textures = geometry.tiledAoTextures!
+    const geoScales = geometry.tiledAoScales!
+    const layerCount = textures.length
+    const firstTex = textures[0]!
+    const w = firstTex.width
+    const h = firstTex.height
+    const isCompressed = firstTex.format !== 'rgba8'
+
+    const glTex = gl.createTexture()!
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, glTex)
+
+    if (isCompressed) {
+      const internalFormat = _toGLInternalFormat(firstTex.format)
+      // Allocate immutable storage for all layers, then upload each layer
+      gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, internalFormat, w, h, layerCount)
+      for (let i = 0; i < layerCount; i++) {
+        gl.compressedTexSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, i, w, h, 1, internalFormat, textures[i]!.data)
+      }
+    } else {
+      gl.texImage3D(gl.TEXTURE_2D_ARRAY, 0, gl.RGBA8, w, h, layerCount, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+      for (let i = 0; i < layerCount; i++) {
+        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, i, w, h, 1, gl.RGBA, gl.UNSIGNED_BYTE, textures[i]!.data)
+      }
+    }
+
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.REPEAT)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.REPEAT)
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, null)
+
+    const scales = new Float32Array(16)
+    for (let i = 0; i < geoScales.length && i < 16; i++) {
+      scales[i] = geoScales[i]!
+    }
+
+    const entry = { glTex, scales }
+    this._tiledAoArrayCache.set(geometry, entry)
+    return entry
+  }
+
+  private _bindMaterialTextures(material: Material, locs: SceneUniformLocs, geometry?: Geometry) {
     const gl = this.gl
 
     // Color map → texture unit 3
@@ -1033,6 +1108,20 @@ export class WebGLRenderer implements Renderer {
     gl.uniform1i(locs.u_aoMap, 4)
 
     gl.uniform1f(locs.u_aoIntensity, material.aoIntensity)
+
+    // Tiled AO array texture → texture unit 5
+    if (locs.u_tiledAoArray !== null) {
+      gl.activeTexture(gl.TEXTURE5)
+      if (geometry?.tiledAoTextures && geometry.tiledAoTextures.length > 0) {
+        const { glTex, scales } = this._ensureTiledAoArrayTexture(geometry)
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, glTex)
+        gl.uniform1i(locs.u_tiledAoArray, 5)
+        gl.uniform1fv(locs.u_tiledAoScales, scales)
+      } else {
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, this._dummyTiledAoArrayTex)
+        gl.uniform1i(locs.u_tiledAoArray, 5)
+      }
+    }
   }
 
   private _bindUBOBlocks(program: WebGLProgram, skinned: boolean) {
@@ -1720,7 +1809,7 @@ export class WebGLRenderer implements Renderer {
         gl.uniform1i(locs.u_shadowMap, 2)
       }
       if (hasVC || (mesh.material._hasTextures && !mesh._isSkinned)) {
-        this._bindMaterialTextures(mesh.material, locs)
+        this._bindMaterialTextures(mesh.material, locs, hasVC ? mesh.geometry : undefined)
       }
 
       drawMesh(si, locs, programChanged, mesh)
@@ -1780,7 +1869,7 @@ export class WebGLRenderer implements Renderer {
           gl.uniform1i(locs.u_shadowMap, 2)
         }
         if (hasVC || (mesh.material._hasTextures && !mesh._isSkinned)) {
-          this._bindMaterialTextures(mesh.material, locs)
+          this._bindMaterialTextures(mesh.material, locs, hasVC ? mesh.geometry : undefined)
         }
 
         drawMesh(si, locs, programChanged, mesh)

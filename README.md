@@ -430,6 +430,9 @@ interface PaletteEntry {
   color: [number, number, number]
   emissive?: [number, number, number]
   emissiveIntensity?: number
+  tiledAo?: Texture              // per-material tiled AO texture (world-space XY repeat)
+  tiledAoIntensity?: number      // default 1.0, supports HDR values
+  tiledAoScale?: number          // default 1.0, world-space tiling frequency
 }
 ```
 

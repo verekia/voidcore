@@ -11,7 +11,11 @@
 // Vertex colors replace the palette system for per-vertex coloring. Instead of material
 // uniforms, colors and emissive values are baked directly into the geometry as vertex
 // attributes. The bakePalette() utility resolves materialIndices + palette entries into
-// per-vertex colors and emissiveColors arrays.
+// per-vertex colors and emissiveColors arrays. Palette entries can include per-material
+// tiled AO textures — bakePalette() packs the layer index into colors.a (unorm8) and
+// the tiled AO intensity into emissiveColors.a (float16). Unique textures are collected
+// into tiledAoTextures/tiledAoScales arrays on the result geometry, which renderers
+// upload as a 2D array texture for world-space tiled AO sampling.
 //
 // new Geometry(data)                  – Wraps raw arrays into a Geometry object.
 // bakePalette(geometry, palette)      – Bakes palette entries into vertex colors/emissiveColors (cached by reference).
@@ -53,6 +57,9 @@ export class Geometry {
   vertexCount: number
   indexCount: number
   aabb: AABB
+
+  tiledAoTextures?: import('../materials/texture').Texture[]
+  tiledAoScales?: Float32Array
 
   _smoothNormals?: Float32Array
   _gpuBuffers: unknown = null
@@ -121,6 +128,19 @@ export const bakePalette = (geometry: Geometry, palette: PaletteEntry[]): Geomet
     if (cached) return cached
   }
 
+  // Collect unique tiled AO textures and assign 1-based layer indices
+  const tiledAoTextureMap = new Map<import('../materials/texture').Texture, number>()
+  const tiledAoTextures: import('../materials/texture').Texture[] = []
+  const tiledAoScalesList: number[] = []
+  for (const entry of palette) {
+    if (entry.tiledAo && !tiledAoTextureMap.has(entry.tiledAo)) {
+      const layerIndex = tiledAoTextures.length + 1 // 1-based (0 = none)
+      tiledAoTextureMap.set(entry.tiledAo, layerIndex)
+      tiledAoTextures.push(entry.tiledAo)
+      tiledAoScalesList.push(entry.tiledAoScale ?? 1.0)
+    }
+  }
+
   const vc = geometry.vertexCount
   const colors = new Float32Array(vc * 4)
   const emissiveColors = new Float32Array(vc * 4)
@@ -133,12 +153,15 @@ export const bakePalette = (geometry: Geometry, palette: PaletteEntry[]): Geomet
     colors[o] = entry.color[0]
     colors[o + 1] = entry.color[1]
     colors[o + 2] = entry.color[2]
-    colors[o + 3] = 1.0
+    // Pack tiled AO layer index into colors.a (unorm8: 0=none, 1-255=layer)
+    const layerIndex = entry.tiledAo ? (tiledAoTextureMap.get(entry.tiledAo) ?? 0) : 0
+    colors[o + 3] = layerIndex / 255
     const intensity = entry.emissiveIntensity ?? 0
     emissiveColors[o] = (entry.emissive?.[0] ?? 0) * intensity
     emissiveColors[o + 1] = (entry.emissive?.[1] ?? 0) * intensity
     emissiveColors[o + 2] = (entry.emissive?.[2] ?? 0) * intensity
-    emissiveColors[o + 3] = 1.0
+    // Pack tiled AO intensity into emissiveColors.a (float16, 0 = no tiled AO)
+    emissiveColors[o + 3] = entry.tiledAo ? (entry.tiledAoIntensity ?? 1.0) : 0
   }
 
   const result = new Geometry({
@@ -151,6 +174,12 @@ export const bakePalette = (geometry: Geometry, palette: PaletteEntry[]): Geomet
     joints: geometry.joints,
     weights: geometry.weights,
   })
+
+  // Attach tiled AO data if any textures were found
+  if (tiledAoTextures.length > 0) {
+    result.tiledAoTextures = tiledAoTextures
+    result.tiledAoScales = new Float32Array(tiledAoScalesList)
+  }
 
   if (!byPalette) {
     byPalette = new WeakMap()
@@ -228,7 +257,18 @@ export const mergeGeometries = (geometries: Geometry[]): Geometry => {
     iOff += geo.indexCount
   }
 
-  return new Geometry({ positions, normals, indices, uvs, colors, emissiveColors, materialIndices })
+  const result = new Geometry({ positions, normals, indices, uvs, colors, emissiveColors, materialIndices })
+
+  // Propagate tiled AO data (all source geometries must share the same arrays by reference)
+  for (const geo of geometries) {
+    if (geo.tiledAoTextures) {
+      result.tiledAoTextures = geo.tiledAoTextures
+      result.tiledAoScales = geo.tiledAoScales
+      break
+    }
+  }
+
+  return result
 }
 
 /**
@@ -379,7 +419,16 @@ export const mergeStaticIntoSkinned = (
     if (static_.uvs) uvs.set(static_.uvs, skinnedVerts * 2)
   }
 
-  return new Geometry({ positions, normals, indices, joints, weights, uvs, colors, emissiveColors })
+  const result = new Geometry({ positions, normals, indices, joints, weights, uvs, colors, emissiveColors })
+
+  // Propagate tiled AO data from either source geometry
+  const tiledSrc = skinned.tiledAoTextures ? skinned : static_.tiledAoTextures ? static_ : null
+  if (tiledSrc) {
+    result.tiledAoTextures = tiledSrc.tiledAoTextures
+    result.tiledAoScales = tiledSrc.tiledAoScales
+  }
+
+  return result
 }
 
 /**

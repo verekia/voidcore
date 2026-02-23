@@ -28,7 +28,11 @@
 // attributes, replacing the old palette uniform system. Non-VC shaders use material.baseColor
 // directly with no emissive. The bakePalette() utility resolves palette entries into vertex
 // attributes before rendering. VC variants also sample the AO map (group 3) so that meshes
-// using bakePalette() can still benefit from ambient occlusion textures.
+// using bakePalette() can still benefit from ambient occlusion textures. VC shaders also
+// support per-material tiled AO via a 2D array texture (group 3, bindings 3-5): the layer
+// index is packed in color.a, intensity in emissive.a, and per-layer tiling scales in a
+// uniform buffer. Tiling uses world-space XY coordinates; the tiled AO multiplies the
+// world AO for a combined result.
 
 // ─── Shared WGSL blocks ──────────────────────────────────────────────
 
@@ -335,6 +339,9 @@ ${OBJECT_BINDING}
 @group(3) @binding(0) var colorMapTexture: texture_2d<f32>;
 @group(3) @binding(1) var aoMapTexture: texture_2d<f32>;
 @group(3) @binding(2) var mapSampler: sampler;
+@group(3) @binding(3) var tiledAoArray: texture_2d_array<f32>;
+@group(3) @binding(4) var tiledAoSampler: sampler;
+@group(3) @binding(5) var<uniform> tiledAoScales: array<vec4<f32>, 4>;
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
@@ -373,6 +380,10 @@ fn vs_main(
 
 ${PCF_AND_SHADOW}
 
+fn getTiledAoScale(index: u32) -> f32 {
+  return tiledAoScales[index / 4u][index % 4u];
+}
+
 struct FragmentOutput {
   @location(0) color: vec4<f32>,
   @location(1) emissive: vec4<f32>,
@@ -384,6 +395,15 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
 
   // Sample textures before any non-uniform branching (WGSL requires uniform control flow for textureSample)
   let aoSample = textureSample(aoMapTexture, mapSampler, in.uv).r;
+
+  // Tiled AO: decode layer index from color.a, sample array texture using mesh UVs
+  let tiledAoLayerRaw = u32(round(in.color.a * 255.0));
+  let tiledAoIntensity = in.vcEmissive.a;
+  // Sample at layer 0 for uniform control flow, result discarded when layer=0
+  let tiledAoLayer = select(0u, tiledAoLayerRaw - 1u, tiledAoLayerRaw > 0u);
+  let tiledAoScale = getTiledAoScale(tiledAoLayer);
+  let tiledAoSample = textureSample(tiledAoArray, tiledAoSampler, in.uv * tiledAoScale, tiledAoLayer).r;
+  let tiledAo = select(1.0, mix(1.0, tiledAoSample, tiledAoIntensity), tiledAoLayerRaw > 0u);
 
   if (in.outlineFlag > 0.5) {
     if (front_facing || object.outlineColorAndThickness.w <= 0.0) { discard; }
@@ -397,7 +417,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let alpha = material.opacity;
   let emissive = in.vcEmissive.rgb;
 
-  let ao = mix(1.0, aoSample, material.aoIntensity);
+  let ao = mix(1.0, aoSample, material.aoIntensity) * tiledAo;
   let ambient = frame.ambientColor * frame.ambientIntensity * ao;
   let NdotL = max(dot(normal, frame.lightDir), 0.0);
   var shadow = 1.0;
@@ -428,6 +448,9 @@ ${OBJECT_BINDING}
 @group(3) @binding(0) var colorMapTexture: texture_2d<f32>;
 @group(3) @binding(1) var aoMapTexture: texture_2d<f32>;
 @group(3) @binding(2) var mapSampler: sampler;
+@group(3) @binding(3) var tiledAoArray: texture_2d_array<f32>;
+@group(3) @binding(4) var tiledAoSampler: sampler;
+@group(3) @binding(5) var<uniform> tiledAoScales: array<vec4<f32>, 4>;
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
@@ -477,6 +500,10 @@ fn vs_main(
 
 ${PCF_AND_SHADOW}
 
+fn getTiledAoScale(index: u32) -> f32 {
+  return tiledAoScales[index / 4u][index % 4u];
+}
+
 struct FragmentOutput {
   @location(0) color: vec4<f32>,
   @location(1) emissive: vec4<f32>,
@@ -488,6 +515,19 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
 
   // Sample textures before any non-uniform branching (WGSL requires uniform control flow for textureSample)
   let aoSample = textureSample(aoMapTexture, mapSampler, in.uv).r;
+
+  // Tiled AO: decode layer index from color.a, triplanar sample array texture
+  let tiledAoLayerRaw = u32(round(in.color.a * 255.0));
+  let tiledAoIntensity = in.vcEmissive.a;
+  let tiledAoLayer = select(0u, tiledAoLayerRaw - 1u, tiledAoLayerRaw > 0u);
+  let tiledAoScale = getTiledAoScale(tiledAoLayer);
+  // Triplanar sampling: project from all 3 axes to avoid stretching on vertical surfaces
+  let taoXY = textureSample(tiledAoArray, tiledAoSampler, in.worldPos.xy * tiledAoScale, tiledAoLayer).r;
+  let taoXZ = textureSample(tiledAoArray, tiledAoSampler, in.worldPos.xz * tiledAoScale, tiledAoLayer).r;
+  let taoYZ = textureSample(tiledAoArray, tiledAoSampler, in.worldPos.yz * tiledAoScale, tiledAoLayer).r;
+  let triN = abs(normalize(in.normal));
+  let tiledAoSample = taoXY * triN.z + taoXZ * triN.y + taoYZ * triN.x;
+  let tiledAo = select(1.0, mix(1.0, tiledAoSample, tiledAoIntensity), tiledAoLayerRaw > 0u);
 
   if (in.outlineFlag > 0.5) {
     if (front_facing || object.outlineColorAndThickness.w <= 0.0) { discard; }
@@ -501,7 +541,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let alpha = material.opacity;
   let emissive = in.vcEmissive.rgb;
 
-  let ao = mix(1.0, aoSample, material.aoIntensity);
+  let ao = mix(1.0, aoSample, material.aoIntensity) * tiledAo;
   let ambient = frame.ambientColor * frame.ambientIntensity * ao;
   let NdotL = max(dot(normal, frame.lightDir), 0.0);
   var shadow = 1.0;

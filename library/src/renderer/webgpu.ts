@@ -29,6 +29,8 @@
 //   MRT           – Multiple render targets: color and emissive are written simultaneously.
 //   Vertex colors – Meshes with baked vertex colors use separate VC pipelines.
 //                    Color (unorm8x4) and emissive (float16x4) are vertex attributes.
+//                    VC pipelines also support per-material tiled AO via a 2D array
+//                    texture sampled with world-space XY coordinates (repeat wrapping).
 //   Vertex packing – Normals use snorm8x4, UVs use float16x2, bone weights use unorm8x4,
 //                    vertex colors use unorm8x4, emissive uses float16x4.
 //
@@ -260,6 +262,7 @@ export class WebGPURenderer implements Renderer {
   private postProcessBGL: GPUBindGroupLayout
   private blitBGL: GPUBindGroupLayout
   private textureBGL!: GPUBindGroupLayout
+  private vcTextureBGL!: GPUBindGroupLayout
 
   // Per-frame resources
   private frameUB: GPUBuffer
@@ -315,6 +318,11 @@ export class WebGPURenderer implements Renderer {
   private _texBGCache = new WeakMap<Material, GPUBindGroup>()
   private _dummyWhiteTexView!: GPUTextureView
   private _linearSampler!: GPUSampler
+  private _repeatSampler!: GPUSampler
+  private _dummyArrayTexView!: GPUTextureView
+  private _dummyScalesBuffer!: GPUBuffer
+  private _vcTexBGCache = new WeakMap<Geometry, GPUBindGroup>()
+  private _tiledAoCache = new WeakMap<Geometry, { arrayTexView: GPUTextureView; scalesBuffer: GPUBuffer }>()
   private _lastMaterial: Material | null = null
 
   // Dynamic uniform buffers
@@ -656,19 +664,65 @@ export class WebGPURenderer implements Renderer {
       addressModeU: 'clamp-to-edge',
       addressModeV: 'clamp-to-edge',
     })
+
+    // Repeat sampler for tiled AO
+    this._repeatSampler = device.createSampler({
+      magFilter: 'linear',
+      minFilter: 'linear',
+      addressModeU: 'repeat',
+      addressModeV: 'repeat',
+    })
+
+    // Dummy 1-layer array texture (1x1 white) for when no tiled AO exists
+    const dummyArrayTex = device.createTexture({
+      size: [1, 1, 1],
+      format: 'rgba8unorm',
+      dimension: '2d',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    })
+    device.queue.writeTexture(
+      { texture: dummyArrayTex },
+      new Uint8Array([255, 255, 255, 255]),
+      { bytesPerRow: 4 },
+      [1, 1, 1],
+    )
+    this._dummyArrayTexView = dummyArrayTex.createView({ dimension: '2d-array', arrayLayerCount: 1 })
+
+    // Dummy scales uniform buffer (16 floats = 64 bytes)
+    this._dummyScalesBuffer = device.createBuffer({
+      size: 64,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
+    device.queue.writeBuffer(this._dummyScalesBuffer, 0, new Float32Array(16).fill(1.0))
   }
 
   private _initVCPipelines() {
     const device = this.device
 
+    // VC bind group layout with tiled AO bindings (group 3)
+    this.vcTextureBGL = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        {
+          binding: 3,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: 'float', viewDimension: '2d-array' },
+        },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+      ],
+    })
+
     const vcModule = device.createShaderModule({ code: LAMBERT_VC_WGSL })
     const vcSkinnedModule = device.createShaderModule({ code: LAMBERT_SKINNED_VC_WGSL })
 
     const vcPipelineLayout = device.createPipelineLayout({
-      bindGroupLayouts: [this.frameBGL, this.materialBGL, this.objectBGL, this.textureBGL],
+      bindGroupLayouts: [this.frameBGL, this.materialBGL, this.objectBGL, this.vcTextureBGL],
     })
     const vcSkinnedPipelineLayout = device.createPipelineLayout({
-      bindGroupLayouts: [this.frameBGL, this.materialBGL, this.skinnedObjectBGL, this.textureBGL],
+      bindGroupLayouts: [this.frameBGL, this.materialBGL, this.skinnedObjectBGL, this.vcTextureBGL],
     })
 
     const opaqueTargets: GPUColorTargetState[] = [{ format: 'rgba8unorm' }, { format: 'rgba16float' }]
@@ -761,9 +815,10 @@ export class WebGPURenderer implements Renderer {
     }
 
     // Pipeline layout
+    const group3BGL = isVC ? this.vcTextureBGL : this.textureBGL
     const bindGroupLayouts =
       isTextured || isVC
-        ? [this.frameBGL, this.materialBGL, isSkinned ? this.skinnedObjectBGL : this.objectBGL, this.textureBGL]
+        ? [this.frameBGL, this.materialBGL, isSkinned ? this.skinnedObjectBGL : this.objectBGL, group3BGL]
         : [this.frameBGL, this.materialBGL, isSkinned ? this.skinnedObjectBGL : this.objectBGL]
     const layout = device.createPipelineLayout({ bindGroupLayouts })
 
@@ -860,6 +915,100 @@ export class WebGPURenderer implements Renderer {
       ],
     })
     this._texBGCache.set(material, bg)
+    return bg
+  }
+
+  private _ensureTiledAoResources(geometry: Geometry): { arrayTexView: GPUTextureView; scalesBuffer: GPUBuffer } {
+    const cached = this._tiledAoCache.get(geometry)
+    if (cached) return cached
+
+    const textures = geometry.tiledAoTextures!
+    const scales = geometry.tiledAoScales!
+    const layerCount = textures.length
+    const firstTex = textures[0]!
+    const w = firstTex.width
+    const h = firstTex.height
+    const gpuFormat = _toGPUTextureFormat(firstTex.format)
+    const isCompressed = firstTex.format !== 'rgba8'
+
+    // Create 2D array texture
+    const arrayTex = this.device.createTexture({
+      size: [w, h, layerCount],
+      format: gpuFormat,
+      dimension: '2d',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    })
+
+    // Upload each layer
+    for (let i = 0; i < layerCount; i++) {
+      const tex = textures[i]!
+      if (isCompressed) {
+        const blocksX = Math.ceil(tex.width / 4)
+        this.device.queue.writeTexture(
+          { texture: arrayTex, origin: [0, 0, i] },
+          tex.data.buffer as ArrayBuffer,
+          { bytesPerRow: blocksX * 16, rowsPerImage: tex.height },
+          [tex.width, tex.height, 1],
+        )
+      } else {
+        this.device.queue.writeTexture(
+          { texture: arrayTex, origin: [0, 0, i] },
+          tex.data.buffer as ArrayBuffer,
+          { bytesPerRow: tex.width * 4, rowsPerImage: tex.height },
+          [tex.width, tex.height, 1],
+        )
+      }
+    }
+
+    const arrayTexView = arrayTex.createView({ dimension: '2d-array', arrayLayerCount: layerCount })
+
+    // Create scales uniform buffer (16 floats packed into vec4 array)
+    const scalesData = new Float32Array(16)
+    for (let i = 0; i < scales.length && i < 16; i++) {
+      scalesData[i] = scales[i]!
+    }
+    const scalesBuffer = this.device.createBuffer({
+      size: 64,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
+    this.device.queue.writeBuffer(scalesBuffer, 0, scalesData)
+
+    const entry = { arrayTexView, scalesBuffer }
+    this._tiledAoCache.set(geometry, entry)
+    return entry
+  }
+
+  private _ensureVCTextureBindGroup(material: Material, geometry: Geometry): GPUBindGroup {
+    // Cache per-geometry since tiled AO data is on the geometry
+    const cached = this._vcTexBGCache.get(geometry)
+    if (cached) return cached
+
+    const colorView = material.colorMap ? this._ensureGPUTexture(material.colorMap).view : this._dummyWhiteTexView
+    const aoView = material.aoMap ? this._ensureGPUTexture(material.aoMap).view : this._dummyWhiteTexView
+
+    let arrayTexView: GPUTextureView
+    let scalesBuffer: GPUBuffer
+    if (geometry.tiledAoTextures && geometry.tiledAoTextures.length > 0) {
+      const resources = this._ensureTiledAoResources(geometry)
+      arrayTexView = resources.arrayTexView
+      scalesBuffer = resources.scalesBuffer
+    } else {
+      arrayTexView = this._dummyArrayTexView
+      scalesBuffer = this._dummyScalesBuffer
+    }
+
+    const bg = this.device.createBindGroup({
+      layout: this.vcTextureBGL,
+      entries: [
+        { binding: 0, resource: colorView },
+        { binding: 1, resource: aoView },
+        { binding: 2, resource: this._linearSampler },
+        { binding: 3, resource: arrayTexView },
+        { binding: 4, resource: this._repeatSampler },
+        { binding: 5, resource: { buffer: scalesBuffer } },
+      ],
+    })
+    this._vcTexBGCache.set(geometry, bg)
     return bg
   }
 
@@ -2298,7 +2447,9 @@ export class WebGPURenderer implements Renderer {
           pipeline = mesh.material.type === 'lambert' ? this.lambertPipeline : this.basicPipeline
         }
       }
-      if (hasVC || (mesh.material._hasTextures && !mesh._isSkinned)) {
+      if (hasVC) {
+        scenePass.setBindGroup(3, this._ensureVCTextureBindGroup(mesh.material, mesh.geometry))
+      } else if (mesh.material._hasTextures && !mesh._isSkinned) {
         scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))
       }
       drawMeshGPU(scenePass, mesh, pipeline)
@@ -2346,7 +2497,9 @@ export class WebGPURenderer implements Renderer {
           pipeline = mesh.material.type === 'lambert' ? this.lambertTransparentPipeline : this.basicTransparentPipeline
         }
       }
-      if (hasVC || (mesh.material._hasTextures && !mesh._isSkinned)) {
+      if (hasVC) {
+        scenePass.setBindGroup(3, this._ensureVCTextureBindGroup(mesh.material, mesh.geometry))
+      } else if (mesh.material._hasTextures && !mesh._isSkinned) {
         scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))
       }
       drawMeshGPU(scenePass, mesh, pipeline)

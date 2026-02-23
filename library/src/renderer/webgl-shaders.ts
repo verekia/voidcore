@@ -8,7 +8,8 @@
 //   Lambert          – Diffuse lighting (ambient + directional light × surface normal)
 //                      with shadow map sampling (PCF 3×3).
 //   Lambert VC       – Same as Lambert but reads per-vertex color and emissive attributes
-//                      (baked from palette via bakePalette()). Also samples the AO map.
+//                      (baked from palette via bakePalette()). Also samples the AO map and
+//                      per-material tiled AO via a 2D array texture (world-space XY tiling).
 //   Lambert Textured – Same as Lambert but also samples color map and AO map textures.
 //   Lambert Skinned  – Same lighting + shadows, but vertices are deformed by bone matrices.
 //   Lambert Skinned VC – Skinned variant with vertex colors and emissive.
@@ -357,6 +358,8 @@ uniform bool u_receiveShadow;
 uniform float u_emissiveBrightness;
 uniform sampler2D u_aoMap;
 uniform float u_aoIntensity;
+uniform highp sampler2DArray u_tiledAoArray;
+uniform float u_tiledAoScales[16];
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
@@ -375,7 +378,18 @@ void main() {
   vec3 baseColor = u_baseColor * v_color.rgb;
   vec3 emissive = v_emissive.rgb;
 
-  float ao = mix(1.0, texture(u_aoMap, v_uv).r, u_aoIntensity);
+  // Tiled AO: decode layer index from color.a, sample array texture using mesh UVs
+  uint tiledAoLayerRaw = uint(round(v_color.a * 255.0));
+  float tiledAoIntensity = v_emissive.a;
+  float tiledAo = 1.0;
+  if (tiledAoLayerRaw > 0u) {
+    uint layer = tiledAoLayerRaw - 1u;
+    float scale = u_tiledAoScales[layer];
+    float tiledSample = texture(u_tiledAoArray, vec3(v_uv * scale, float(layer))).r;
+    tiledAo = mix(1.0, tiledSample, tiledAoIntensity);
+  }
+
+  float ao = mix(1.0, texture(u_aoMap, v_uv).r, u_aoIntensity) * tiledAo;
   vec3 ambient = u_ambientColor * u_ambientIntensity * ao;
   float NdotL = max(dot(normal, u_lightDirection), 0.0);
   float shadow = u_receiveShadow ? sampleShadow(v_worldPos, NdotL) : 1.0;

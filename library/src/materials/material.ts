@@ -6,7 +6,10 @@
 //
 // Materials can define a palette: an array of color entries used with bakePalette() to bake
 // per-vertex colors into the geometry. The palette is data only — the renderer reads vertex
-// colors directly from geometry attributes, not from material uniforms.
+// colors directly from geometry attributes, not from material uniforms. Palette entries can
+// include per-material tiled AO textures (tiledAo, tiledAoIntensity, tiledAoScale) that
+// repeat across surfaces using world-space XY coordinates, combining multiplicatively with
+// the world AO map.
 //
 // Texture maps add per-pixel detail from images:
 //   - colorMap – Multiplies the base color by a texture sample (diffuse/albedo map).
@@ -37,6 +40,9 @@ export interface PaletteEntry {
   color: [number, number, number]
   emissive?: [number, number, number]
   emissiveIntensity?: number
+  tiledAo?: Texture
+  tiledAoIntensity?: number
+  tiledAoScale?: number
 }
 
 export type MaterialType = 'basic' | 'lambert'
