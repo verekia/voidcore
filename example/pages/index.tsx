@@ -43,12 +43,12 @@ const IndexPage = () => {
         antialias
         maxFps={60}
         backend={forceWebGL ? 'webgl2' : 'auto'}
-        camera={{ fov: 55, near: 0.1, far: 500, position: [0, -230, 60] }}
+        camera={{ fov: 55, near: 0.1, far: 2000, position: [0, -230, 60] }}
         onCreated={({ engine }) => setEngine(engine)}
         className="fixed top-0 left-0 h-screen w-screen"
       >
         <mesh>
-          <sphereGeometry args={[{ radius: 400 }]} />
+          <sphereGeometry args={[{ radius: 300 }]} />
           <basicMaterial color={[0.2, 0.5, 1]} side="back" />
         </mesh>
         <Lighting />
