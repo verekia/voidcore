@@ -6,7 +6,6 @@
 
 import { instanceMap } from './reconciler'
 
-import type { FloatArray } from '../float'
 import type { RaycastHit } from '../raycasting/index'
 import type { Mesh } from '../scene/mesh'
 import type { Node } from '../scene/node'
@@ -15,10 +14,10 @@ import type { VoidInstance } from './reconciler'
 
 export interface VoidEvent {
   object: any
-  point: FloatArray
-  normal: FloatArray
+  point: Float32Array
+  normal: Float32Array
   distance: number
-  uv: FloatArray | null
+  uv: Float32Array | null
   nativeEvent: PointerEvent | MouseEvent
   stopPropagation: () => void
 }

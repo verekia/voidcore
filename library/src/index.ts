@@ -4,9 +4,6 @@
 export { Engine, type EngineConfig } from './engine'
 export { type Renderer, type RendererConfig, type FrameStats, type ShadowConfig } from './renderer/renderer'
 
-// Float precision
-export { type FloatPrecision, type FloatArray, isFloat16Supported, setFloatPrecision, getFloatPrecision } from './float'
-
 // Scheduler
 export { Scheduler, type SchedulerState, type SchedulerCallback, type SchedulerCallbackOptions } from './scheduler'
 
