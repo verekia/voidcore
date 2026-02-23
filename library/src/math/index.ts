@@ -715,8 +715,7 @@ export const quatConjugate = (out: Quat, a: Quat): Quat => {
 
 // ─── AABB ─────────────────────────────────────────────────────────────
 
-export const aabbCreate = (): AABB =>
-  new Float32Array([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity])
+export const aabbCreate = (): AABB => new Float32Array([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity])
 
 export const aabbFromPoints = (out: AABB, positions: Float32Array, count: number): AABB => {
   out[0] = Infinity
