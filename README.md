@@ -17,10 +17,10 @@ A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 sup
 - **Procedural geometry** – Box, sphere, plane, cone, cylinder, capsule, circle
 - **glTF/GLB loading** – Import 3D models with Draco compression support
 - **KTX2 textures** – Load Basis Universal compressed textures (ETC1S/UASTC) via WASM transcoder, with automatic transcoding to GPU-native formats (ASTC, BC7, BC3, ETC2) based on device support
-- **Material system** – Basic (unlit) and Lambert (diffuse) shading with palette support, opacity, transparency, color maps, AO maps, and per-material face culling (`side: 'front'`/`'back'`/`'double'`)
+- **Material system** – Basic and Lambert shading with vertex colors, bloom, transparency, color and AO maps
 - **Mesh outlines** – Shader-based inverted hull outlines via `outline` option (thickness + color)
 - **Sorted alpha blending** – Back-to-front transparent mesh rendering with premultiplied alpha (WebGPU)
-- **Shadow maps** – Single shadow map with PCF 3×3 filtering, light-owned configuration, shadow baking for static scenes
+- **Shadow maps** – Single shadow map with PCF 3×3 filtering, shadow baking for static scenes
 - **Bloom post-processing** – Multi-level downsample/upsample with Karis average
 - **Frustum culling** – AABB-based visibility culling with Gribb-Hartmann plane extraction
 - **Distance culling** – Per-mesh `maxDistance` to hide meshes beyond a camera distance threshold
