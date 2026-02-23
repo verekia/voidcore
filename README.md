@@ -138,22 +138,22 @@ bun run all        # Lint + format check + test + typecheck
 Engine.create(canvas: HTMLCanvasElement, config?: EngineConfig): Promise<Engine>
 ```
 
-| Property / Method | Description |
-| --- | --- |
-| `canvas` | The `HTMLCanvasElement` |
-| `renderer` | The active `Renderer` instance |
-| `backend` | `'webgpu'` or `'webgl2'` |
-| `scheduler` | The underlying `Scheduler` |
-| `maxFps` | Global FPS cap (0 = uncapped) |
-| `maxDpr` | Max device pixel ratio |
-| `compressedTextureFormats` | GPU-compressed formats supported by the device (for KTX2) |
-| `shadowsBaked` | When true, the shadow map is frozen and not re-rendered each frame |
-| `register(callback, options?)` | Register a per-frame callback; returns an unsubscribe function |
-| `start()` | Begin the scheduler loop |
-| `stop()` | Pause the scheduler loop |
-| `render(scene, camera)` | Render a single frame (call inside a registered callback) |
-| `getStats(): FrameStats` | Return current frame statistics |
-| `dispose()` | Clean up the scheduler and GPU resources |
+| Property / Method              | Description                                                        |
+| ------------------------------ | ------------------------------------------------------------------ |
+| `canvas`                       | The `HTMLCanvasElement`                                            |
+| `renderer`                     | The active `Renderer` instance                                     |
+| `backend`                      | `'webgpu'` or `'webgl2'`                                           |
+| `scheduler`                    | The underlying `Scheduler`                                         |
+| `maxFps`                       | Global FPS cap (0 = uncapped)                                      |
+| `maxDpr`                       | Max device pixel ratio                                             |
+| `compressedTextureFormats`     | GPU-compressed formats supported by the device (for KTX2)          |
+| `shadowsBaked`                 | When true, the shadow map is frozen and not re-rendered each frame |
+| `register(callback, options?)` | Register a per-frame callback; returns an unsubscribe function     |
+| `start()`                      | Begin the scheduler loop                                           |
+| `stop()`                       | Pause the scheduler loop                                           |
+| `render(scene, camera)`        | Render a single frame (call inside a registered callback)          |
+| `getStats(): FrameStats`       | Return current frame statistics                                    |
+| `dispose()`                    | Clean up the scheduler and GPU resources                           |
 
 ```ts
 interface EngineConfig {
@@ -186,24 +186,24 @@ interface FrameStats {
 new Scheduler()
 ```
 
-| Property / Method | Description |
-| --- | --- |
-| `maxFps` | Global FPS cap (0 = uncapped) |
+| Property / Method                          | Description                                     |
+| ------------------------------------------ | ----------------------------------------------- |
+| `maxFps`                                   | Global FPS cap (0 = uncapped)                   |
 | `register(callback, options?): () => void` | Add a callback; returns an unsubscribe function |
-| `start()` | Begin the rAF loop |
-| `stop()` | Pause the rAF loop |
-| `destroy()` | Stop and clear all callbacks |
+| `start()`                                  | Begin the rAF loop                              |
+| `stop()`                                   | Pause the rAF loop                              |
+| `destroy()`                                | Stop and clear all callbacks                    |
 
 ```ts
 interface SchedulerState {
-  dt: number      // delta time in seconds (capped at 0.1)
+  dt: number // delta time in seconds (capped at 0.1)
   elapsed: number // total elapsed seconds since start
-  frame: number   // frame counter
+  frame: number // frame counter
 }
 
 interface SchedulerCallbackOptions {
   priority?: number // execution order; lower runs first (default: 0, may be negative)
-  fps?: number      // per-callback FPS throttle (0 = every frame)
+  fps?: number // per-callback FPS throttle (0 = every frame)
 }
 ```
 
@@ -217,34 +217,34 @@ Base class for all scene objects.
 new Node()
 ```
 
-| Property | Type | Description |
-| --- | --- | --- |
-| `name` | `string` | |
-| `type` | `'group' \| 'mesh' \| 'camera' \| 'directionalLight' \| 'ambientLight'` | |
-| `position` | `Vec3` | Local position (`Float32Array[3]`) |
-| `rotation` | `Quat` | Local rotation as quaternion `[x, y, z, w]` |
-| `scale` | `Vec3` | Local scale |
-| `parent` | `Node \| null` | |
-| `children` | `Node[]` | |
-| `visible` | `boolean` | |
-| `frustumCulled` | `boolean` | |
-| `castShadow` | `boolean` | |
-| `receiveShadow` | `boolean` | |
-| `_localMatrix` | `Mat4` | Computed local transform matrix |
-| `_worldMatrix` | `Mat4` | Computed world transform matrix |
+| Property        | Type                                                                    | Description                                 |
+| --------------- | ----------------------------------------------------------------------- | ------------------------------------------- |
+| `name`          | `string`                                                                |                                             |
+| `type`          | `'group' \| 'mesh' \| 'camera' \| 'directionalLight' \| 'ambientLight'` |                                             |
+| `position`      | `Vec3`                                                                  | Local position (`Float32Array[3]`)          |
+| `rotation`      | `Quat`                                                                  | Local rotation as quaternion `[x, y, z, w]` |
+| `scale`         | `Vec3`                                                                  | Local scale                                 |
+| `parent`        | `Node \| null`                                                          |                                             |
+| `children`      | `Node[]`                                                                |                                             |
+| `visible`       | `boolean`                                                               |                                             |
+| `frustumCulled` | `boolean`                                                               |                                             |
+| `castShadow`    | `boolean`                                                               |                                             |
+| `receiveShadow` | `boolean`                                                               |                                             |
+| `_localMatrix`  | `Mat4`                                                                  | Computed local transform matrix             |
+| `_worldMatrix`  | `Mat4`                                                                  | Computed world transform matrix             |
 
-| Method | Description |
-| --- | --- |
-| `add(...nodes)` | Attach child nodes (reparents if already attached) |
-| `remove(child)` | Detach a child node |
-| `traverse(callback)` | Walk the subtree depth-first |
-| `lookAt(target)` | Orient to face a target point (Z-up convention) |
-| `setPosition(x, y, z)` | |
-| `setPositionX(v)` / `setPositionY(v)` / `setPositionZ(v)` | |
-| `setRotation(x, y, z, w)` | Set quaternion rotation |
-| `setScale(s)` / `setScale(x, y, z)` | Uniform or per-axis scale |
-| `setScaleX(v)` / `setScaleY(v)` / `setScaleZ(v)` | |
-| `markTransformDirty()` | Mark for recalculation after writing directly to Float32Arrays |
+| Method                                                    | Description                                                    |
+| --------------------------------------------------------- | -------------------------------------------------------------- |
+| `add(...nodes)`                                           | Attach child nodes (reparents if already attached)             |
+| `remove(child)`                                           | Detach a child node                                            |
+| `traverse(callback)`                                      | Walk the subtree depth-first                                   |
+| `lookAt(target)`                                          | Orient to face a target point (Z-up convention)                |
+| `setPosition(x, y, z)`                                    |                                                                |
+| `setPositionX(v)` / `setPositionY(v)` / `setPositionZ(v)` |                                                                |
+| `setRotation(x, y, z, w)`                                 | Set quaternion rotation                                        |
+| `setScale(s)` / `setScale(x, y, z)`                       | Uniform or per-axis scale                                      |
+| `setScaleX(v)` / `setScaleY(v)` / `setScaleZ(v)`          |                                                                |
+| `markTransformDirty()`                                    | Mark for recalculation after writing directly to Float32Arrays |
 
 Module-level: `updateWorldMatrices(node, parentDirty?)` — recursively recompute dirty world matrices top-down.
 
@@ -256,10 +256,10 @@ Extends `Node`. Root of the scene graph.
 new Scene()
 ```
 
-| Method | Description |
-| --- | --- |
-| `getByName(name: string): Node \| undefined` | O(1) lookup by name |
-| `updateGraph(): void` | Recompute all dirty world matrices |
+| Method                                       | Description                        |
+| -------------------------------------------- | ---------------------------------- |
+| `getByName(name: string): Node \| undefined` | O(1) lookup by name                |
+| `updateGraph(): void`                        | Recompute all dirty world matrices |
 
 #### Mesh
 
@@ -269,13 +269,13 @@ Extends `Node`. A renderable object.
 new Mesh(geometry?: Geometry, material?: Material)
 ```
 
-| Property | Type | Description |
-| --- | --- | --- |
-| `geometry` | `Geometry` | |
-| `material` | `Material` | |
-| `skeleton` | `Skeleton \| undefined` | For skinned meshes |
-| `outline` | `MeshOutline \| number \| undefined` | Inverted hull outline |
-| `maxDistance` | `number` | Hide when camera exceeds this distance (0 = disabled) |
+| Property      | Type                                 | Description                                           |
+| ------------- | ------------------------------------ | ----------------------------------------------------- |
+| `geometry`    | `Geometry`                           |                                                       |
+| `material`    | `Material`                           |                                                       |
+| `skeleton`    | `Skeleton \| undefined`              | For skinned meshes                                    |
+| `outline`     | `MeshOutline \| number \| undefined` | Inverted hull outline                                 |
+| `maxDistance` | `number`                             | Hide when camera exceeds this distance (0 = disabled) |
 
 ```ts
 interface MeshOutline {
@@ -306,15 +306,15 @@ interface CameraOptions {
 }
 ```
 
-| Property | Type |
-| --- | --- |
-| `fov` | `number` |
-| `near` | `number` |
-| `far` | `number` |
-| `aspect` | `number` |
-| `_projectionMatrix` | `Mat4` |
-| `_viewMatrix` | `Mat4` |
-| `_viewProjectionMatrix` | `Mat4` |
+| Property                | Type     |
+| ----------------------- | -------- |
+| `fov`                   | `number` |
+| `near`                  | `number` |
+| `far`                   | `number` |
+| `aspect`                | `number` |
+| `_projectionMatrix`     | `Mat4`   |
+| `_viewMatrix`           | `Mat4`   |
+| `_viewProjectionMatrix` | `Mat4`   |
 
 #### DirectionalLight
 
@@ -384,34 +384,34 @@ interface GeometryData {
 }
 ```
 
-| Property | Type | Description |
-| --- | --- | --- |
-| `positions` | `Float32Array` | 3 floats per vertex |
-| `normals` | `Float32Array` | 3 floats per vertex |
-| `indices` | `Uint16Array \| Uint32Array` | |
-| `uvs` | `Float32Array \| undefined` | 2 floats per vertex |
-| `colors` | `Float32Array \| undefined` | Per-vertex colors (unorm8x4) |
-| `emissiveColors` | `Float32Array \| undefined` | Per-vertex HDR emissive (float16x4) |
-| `materialIndices` | `Uint8Array \| undefined` | Per-vertex palette index |
-| `joints` | `Uint8Array \| Uint16Array \| undefined` | Bone indices for skinning |
-| `weights` | `Float32Array \| undefined` | Bone weights for skinning |
-| `aabb` | `AABB` | Axis-aligned bounding box |
-| `needsUpdate` | `boolean` | Set to re-upload vertex data to the GPU |
-| `dispose()` | | Release GPU buffers |
+| Property          | Type                                     | Description                             |
+| ----------------- | ---------------------------------------- | --------------------------------------- |
+| `positions`       | `Float32Array`                           | 3 floats per vertex                     |
+| `normals`         | `Float32Array`                           | 3 floats per vertex                     |
+| `indices`         | `Uint16Array \| Uint32Array`             |                                         |
+| `uvs`             | `Float32Array \| undefined`              | 2 floats per vertex                     |
+| `colors`          | `Float32Array \| undefined`              | Per-vertex colors (unorm8x4)            |
+| `emissiveColors`  | `Float32Array \| undefined`              | Per-vertex HDR emissive (float16x4)     |
+| `materialIndices` | `Uint8Array \| undefined`                | Per-vertex palette index                |
+| `joints`          | `Uint8Array \| Uint16Array \| undefined` | Bone indices for skinning               |
+| `weights`         | `Float32Array \| undefined`              | Bone weights for skinning               |
+| `aabb`            | `AABB`                                   | Axis-aligned bounding box               |
+| `needsUpdate`     | `boolean`                                | Set to re-upload vertex data to the GPU |
+| `dispose()`       |                                          | Release GPU buffers                     |
 
 #### Procedural Primitives
 
 All extend `Geometry`, Z-up, centered at origin.
 
-| Class | Options (all optional, defaults in parentheses) |
-| --- | --- |
-| `new BoxGeometry(opts?)` | `width` (1), `height` (1), `depth` (1) |
-| `new SphereGeometry(opts?)` | `radius` (1), `widthSegments` (32), `heightSegments` (16) |
-| `new PlaneGeometry(opts?)` | `width` (1), `height` (1), `widthSegments` (1), `heightSegments` (1) |
-| `new ConeGeometry(opts?)` | `radius` (1), `height` (1), `radialSegments` (32) |
+| Class                         | Options (all optional, defaults in parentheses)                                                |
+| ----------------------------- | ---------------------------------------------------------------------------------------------- |
+| `new BoxGeometry(opts?)`      | `width` (1), `height` (1), `depth` (1)                                                         |
+| `new SphereGeometry(opts?)`   | `radius` (1), `widthSegments` (32), `heightSegments` (16)                                      |
+| `new PlaneGeometry(opts?)`    | `width` (1), `height` (1), `widthSegments` (1), `heightSegments` (1)                           |
+| `new ConeGeometry(opts?)`     | `radius` (1), `height` (1), `radialSegments` (32)                                              |
 | `new CylinderGeometry(opts?)` | `radiusTop` (1), `radiusBottom` (1), `height` (1), `radialSegments` (32), `heightSegments` (1) |
-| `new CapsuleGeometry(opts?)` | `radius` (1), `height` (1), `radialSegments` (16), `heightSegments` (1) |
-| `new CircleGeometry(opts?)` | `radius` (1), `segments` (32) |
+| `new CapsuleGeometry(opts?)`  | `radius` (1), `height` (1), `radialSegments` (16), `heightSegments` (1)                        |
+| `new CircleGeometry(opts?)`   | `radius` (1), `segments` (32)                                                                  |
 
 #### Geometry Utilities
 
@@ -458,19 +458,19 @@ interface MaterialOptions {
 }
 ```
 
-| Property | Type |
-| --- | --- |
-| `color` | `[number, number, number]` |
-| `vertexColors` | `boolean` |
-| `opacity` | `number` |
-| `transparent` | `boolean` |
-| `side` | `'front' \| 'back' \| 'double'` |
-| `receiveShadow` | `boolean` |
-| `emissiveBrightness` | `number` |
-| `colorMap` | `Texture \| undefined` |
-| `aoMap` | `Texture \| undefined` |
-| `aoIntensity` | `number` |
-| `needsUpdate` | `boolean` |
+| Property             | Type                            |
+| -------------------- | ------------------------------- |
+| `color`              | `[number, number, number]`      |
+| `vertexColors`       | `boolean`                       |
+| `opacity`            | `number`                        |
+| `transparent`        | `boolean`                       |
+| `side`               | `'front' \| 'back' \| 'double'` |
+| `receiveShadow`      | `boolean`                       |
+| `emissiveBrightness` | `number`                        |
+| `colorMap`           | `Texture \| undefined`          |
+| `aoMap`              | `Texture \| undefined`          |
+| `aoIntensity`        | `number`                        |
+| `needsUpdate`        | `boolean`                       |
 
 #### Texture
 
@@ -498,32 +498,32 @@ Plays and blends skeletal animations on a `Skeleton`.
 new AnimationMixer(skeleton: Skeleton)
 ```
 
-| Method | Description |
-| --- | --- |
-| `clipAction(clip: AnimationClip): AnimationAction` | Create an action for the given clip |
-| `update(dt: number): void` | Advance all playing actions and apply the blended pose to bones |
+| Method                                             | Description                                                     |
+| -------------------------------------------------- | --------------------------------------------------------------- |
+| `clipAction(clip: AnimationClip): AnimationAction` | Create an action for the given clip                             |
+| `update(dt: number): void`                         | Advance all playing actions and apply the blended pose to bones |
 
 #### AnimationAction
 
 Returned by `mixer.clipAction(clip)`.
 
-| Property | Type | Description |
-| --- | --- | --- |
-| `clip` | `AnimationClip` | |
-| `loop` | `'repeat' \| 'once' \| 'pingpong'` | default `'repeat'` |
-| `timeScale` | `number` | default 1 |
-| `weight` | `number` | blend weight (0–1) |
-| `time` | `number` | current playback time in seconds |
-| `paused` | `boolean` | |
-| `playing` | `boolean` | |
+| Property    | Type                               | Description                      |
+| ----------- | ---------------------------------- | -------------------------------- |
+| `clip`      | `AnimationClip`                    |                                  |
+| `loop`      | `'repeat' \| 'once' \| 'pingpong'` | default `'repeat'`               |
+| `timeScale` | `number`                           | default 1                        |
+| `weight`    | `number`                           | blend weight (0–1)               |
+| `time`      | `number`                           | current playback time in seconds |
+| `paused`    | `boolean`                          |                                  |
+| `playing`   | `boolean`                          |                                  |
 
-| Method | Returns | Description |
-| --- | --- | --- |
-| `play()` | `this` | Start playback from time 0 |
-| `stop()` | `this` | Stop and reset |
-| `fadeIn(duration)` | `this` | Fade weight 0 → 1 over duration |
-| `fadeOut(duration)` | `this` | Fade weight to 0, then stop |
-| `crossFadeTo(target, duration)` | `this` | Fade this out while fading target in |
+| Method                          | Returns | Description                          |
+| ------------------------------- | ------- | ------------------------------------ |
+| `play()`                        | `this`  | Start playback from time 0           |
+| `stop()`                        | `this`  | Stop and reset                       |
+| `fadeIn(duration)`              | `this`  | Fade weight 0 → 1 over duration      |
+| `fadeOut(duration)`             | `this`  | Fade weight to 0, then stop          |
+| `crossFadeTo(target, duration)` | `this`  | Fade this out while fading target in |
 
 #### Skeleton
 
@@ -531,15 +531,15 @@ Returned by `mixer.clipAction(clip)`.
 new Skeleton(bones: Node[], inverseBindMatrices: Mat4[])
 ```
 
-| Property | Type |
-| --- | --- |
-| `bones` | `Node[]` |
+| Property       | Type           |
+| -------------- | -------------- |
+| `bones`        | `Node[]`       |
 | `boneMatrices` | `Float32Array` |
 
-| Method | Description |
-| --- | --- |
-| `getBone(name: string): Node \| undefined` | Look up a bone by name |
-| `update(): void` | Recompute bone matrices |
+| Method                                     | Description             |
+| ------------------------------------------ | ----------------------- |
+| `getBone(name: string): Node \| undefined` | Look up a bone by name  |
+| `update(): void`                           | Recompute bone matrices |
 
 #### AnimationClip / KeyframeTrack
 
@@ -579,20 +579,20 @@ interface OrbitControlsOptions {
 }
 ```
 
-| Property | Type |
-| --- | --- |
-| `target` | `Vec3` |
-| `enabled` | `boolean` |
-| `dampingFactor` | `number` |
-| `azimuth` | `number` |
-| `elevation` | `number` |
-| `distance` | `number` |
+| Property        | Type      |
+| --------------- | --------- |
+| `target`        | `Vec3`    |
+| `enabled`       | `boolean` |
+| `dampingFactor` | `number`  |
+| `azimuth`       | `number`  |
+| `elevation`     | `number`  |
+| `distance`      | `number`  |
 
-| Method | Description |
-| --- | --- |
-| `update(dt: number): void` | Apply damping and recompute camera position |
-| `onChange(callback: () => void): void` | Register a change listener |
-| `dispose(): void` | Remove all event listeners |
+| Method                                 | Description                                 |
+| -------------------------------------- | ------------------------------------------- |
+| `update(dt: number): void`             | Apply damping and recompute camera position |
+| `onChange(callback: () => void): void` | Register a change listener                  |
+| `dispose(): void`                      | Remove all event listeners                  |
 
 ### Raycasting
 
@@ -600,21 +600,21 @@ interface OrbitControlsOptions {
 new Raycaster()
 ```
 
-| Method | Description |
-| --- | --- |
-| `set(origin, direction)` | Set ray from world-space origin and direction |
-| `setFromCamera(coords: { x: number; y: number }, camera)` | Build ray from NDC screen coordinates (−1 to 1) |
-| `intersectObject(object, recursive?): RaycastHit[]` | Raycast against a mesh (and optionally its children) |
-| `intersectObjects(objects, recursive?): RaycastHit[]` | Raycast against multiple meshes |
+| Method                                                    | Description                                          |
+| --------------------------------------------------------- | ---------------------------------------------------- |
+| `set(origin, direction)`                                  | Set ray from world-space origin and direction        |
+| `setFromCamera(coords: { x: number; y: number }, camera)` | Build ray from NDC screen coordinates (−1 to 1)      |
+| `intersectObject(object, recursive?): RaycastHit[]`       | Raycast against a mesh (and optionally its children) |
+| `intersectObjects(objects, recursive?): RaycastHit[]`     | Raycast against multiple meshes                      |
 
 Results are sorted by ascending distance.
 
 ```ts
 interface RaycastHit {
-  distance: number      // world-space distance from ray origin
-  point: Vec3           // intersection point in world space
-  normal: Vec3          // interpolated surface normal (world space)
-  uv: Vec2 | null       // interpolated UV (if geometry has UVs)
+  distance: number // world-space distance from ray origin
+  point: Vec3 // intersection point in world space
+  normal: Vec3 // interpolated surface normal (world space)
+  uv: Vec2 | null // interpolated UV (if geometry has UVs)
   triangleIndex: number
   object: Mesh
 }
@@ -673,12 +673,12 @@ interface OverlayOptions {
 }
 ```
 
-| OverlayManager method | Description |
-| --- | --- |
-| `add(opts: OverlayOptions): OverlayHandle` | Begin tracking a DOM element |
-| `remove(handle: OverlayHandle): void` | Stop tracking |
+| OverlayManager method                                 | Description                         |
+| ----------------------------------------------------- | ----------------------------------- |
+| `add(opts: OverlayOptions): OverlayHandle`            | Begin tracking a DOM element        |
+| `remove(handle: OverlayHandle): void`                 | Stop tracking                       |
 | `update(camera, width, height, scene?, frame?): void` | Call each frame to update positions |
-| `dispose(): void` | Remove all tracked elements |
+| `dispose(): void`                                     | Remove all tracked elements         |
 
 ### Helpers
 
@@ -690,23 +690,23 @@ Visualizes the shadow frustum of a `DirectionalLight`.
 new DirectionalLightHelper(opts?: { color?: [number, number, number]; opacity?: number })
 ```
 
-| Member | Description |
-| --- | --- |
-| `mesh: Mesh` | Add to the scene to display the frustum wireframe |
-| `update(light: DirectionalLight): void` | Sync with the light each frame |
-| `dispose(): void` | Release geometry |
+| Member                                  | Description                                       |
+| --------------------------------------- | ------------------------------------------------- |
+| `mesh: Mesh`                            | Add to the scene to display the frustum wireframe |
+| `update(light: DirectionalLight): void` | Sync with the light each frame                    |
+| `dispose(): void`                       | Release geometry                                  |
 
 ### Math
 
 All types are `Float32Array` views. All functions use a "write into output" pattern for zero allocation.
 
 ```ts
-type Vec2 = Float32Array  // [x, y]
-type Vec3 = Float32Array  // [x, y, z]
-type Vec4 = Float32Array  // [x, y, z, w]
-type Quat = Float32Array  // [x, y, z, w]
-type Mat4 = Float32Array  // 16 elements, column-major
-type AABB = Float32Array  // [minX, minY, minZ, maxX, maxY, maxZ]
+type Vec2 = Float32Array // [x, y]
+type Vec3 = Float32Array // [x, y, z]
+type Vec4 = Float32Array // [x, y, z, w]
+type Quat = Float32Array // [x, y, z, w]
+type Mat4 = Float32Array // 16 elements, column-major
+type AABB = Float32Array // [minX, minY, minZ, maxX, maxY, maxZ]
 ```
 
 **Constants**: `VEC3_ZERO`, `VEC3_ONE`, `VEC3_UP`, `VEC3_FORWARD`, `VEC3_RIGHT`, `QUAT_IDENTITY`, `MAT4_IDENTITY`
@@ -767,16 +767,16 @@ Root component. Creates the engine, scene, and camera on mount.
 
 ```tsx
 <Canvas
-  backend='auto'           // 'auto' | 'webgpu' | 'webgl2'
+  backend="auto" // 'auto' | 'webgpu' | 'webgl2'
   antialias={true}
-  shadows={true}           // or { resolution: 1024 }
+  shadows={true} // or { resolution: 1024 }
   bloom={{ intensity: 1, levels: 5 }}
   maxFps={60}
   maxDpr={1.5}
   camera={{ fov: 60, near: 0.1, far: 1000, position: [0, -10, 5] }}
   onCreated={({ engine, scene, camera }) => {}}
   style={{}}
-  className=''
+  className=""
 >
   {/* scene graph */}
 </Canvas>
@@ -788,36 +788,36 @@ Scene objects are declared as lowercase JSX elements.
 
 Node elements (`<mesh>`, `<group>`, `<directionalLight>`, `<ambientLight>`) accept these props in addition to element-specific ones:
 
-| Prop | Type |
-| --- | --- |
-| `position` | `[number, number, number]` |
-| `rotation` | `[number, number, number, number]` |
-| `scale` | `[number, number, number] \| number` |
-| `visible` | `boolean` |
-| `castShadow` | `boolean` |
-| `receiveShadow` | `boolean` |
-| `name` | `string` |
-| `ref` | `Ref` |
-| `onClick` | `(event) => void` |
-| `onPointerOver` / `onPointerOut` / `onPointerDown` / `onPointerUp` / `onPointerMove` | `(event) => void` |
+| Prop                                                                                 | Type                                 |
+| ------------------------------------------------------------------------------------ | ------------------------------------ |
+| `position`                                                                           | `[number, number, number]`           |
+| `rotation`                                                                           | `[number, number, number, number]`   |
+| `scale`                                                                              | `[number, number, number] \| number` |
+| `visible`                                                                            | `boolean`                            |
+| `castShadow`                                                                         | `boolean`                            |
+| `receiveShadow`                                                                      | `boolean`                            |
+| `name`                                                                               | `string`                             |
+| `ref`                                                                                | `Ref`                                |
+| `onClick`                                                                            | `(event) => void`                    |
+| `onPointerOver` / `onPointerOut` / `onPointerDown` / `onPointerUp` / `onPointerMove` | `(event) => void`                    |
 
 Geometry and material elements are attached as children of `<mesh>` (the reconciler sets them on `mesh.geometry` / `mesh.material` automatically). Constructor options are passed via `args={[opts]}`.
 
-| Element | Maps to |
-| --- | --- |
-| `<mesh>` | `Mesh` |
-| `<group>` | `Group` |
-| `<directionalLight>` | `DirectionalLight` |
-| `<ambientLight>` | `AmbientLight` |
-| `<boxGeometry>` | `BoxGeometry` |
-| `<sphereGeometry>` | `SphereGeometry` |
-| `<planeGeometry>` | `PlaneGeometry` |
-| `<coneGeometry>` | `ConeGeometry` |
-| `<cylinderGeometry>` | `CylinderGeometry` |
-| `<capsuleGeometry>` | `CapsuleGeometry` |
-| `<circleGeometry>` | `CircleGeometry` |
-| `<basicMaterial>` | `BasicMaterial` |
-| `<lambertMaterial>` | `LambertMaterial` |
+| Element                    | Maps to                                           |
+| -------------------------- | ------------------------------------------------- |
+| `<mesh>`                   | `Mesh`                                            |
+| `<group>`                  | `Group`                                           |
+| `<directionalLight>`       | `DirectionalLight`                                |
+| `<ambientLight>`           | `AmbientLight`                                    |
+| `<boxGeometry>`            | `BoxGeometry`                                     |
+| `<sphereGeometry>`         | `SphereGeometry`                                  |
+| `<planeGeometry>`          | `PlaneGeometry`                                   |
+| `<coneGeometry>`           | `ConeGeometry`                                    |
+| `<cylinderGeometry>`       | `CylinderGeometry`                                |
+| `<capsuleGeometry>`        | `CapsuleGeometry`                                 |
+| `<circleGeometry>`         | `CircleGeometry`                                  |
+| `<basicMaterial>`          | `BasicMaterial`                                   |
+| `<lambertMaterial>`        | `LambertMaterial`                                 |
 | `<primitive object={...}>` | Insert any pre-built engine object into the scene |
 
 #### Hooks
@@ -892,9 +892,9 @@ Render DOM content anchored to a 3D position. Inherits parent transforms.
 ```tsx
 <Html
   position={[0, 0, 1]} // optional offset from parent node
-  center={true}         // CSS translate(-50%, -50%)
+  center={true} // CSS translate(-50%, -50%)
   style={{}}
-  className=''
+  className=""
 >
   <div>Hello</div>
 </Html>
