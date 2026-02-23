@@ -41,6 +41,9 @@ interface CharacterProps {
   timeOffset: number
 }
 
+const characterMaterial = new LambertMaterial({ emissiveBrightness: 0.2 })
+const raycaster = new Raycaster()
+
 const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
   const { scene } = useEngine()
 
@@ -81,7 +84,7 @@ const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
         const ibm = skeleton.boneInverseBindMatrices[handBoneIndex]!
         const axeLocal = mat4Compose(mat4Create(), VEC3_ZERO, new Float32Array([0, 0, 1, 0]), VEC3_ONE)
         bodyMesh.geometry = mergeStaticIntoSkinned(bakedBody, axeGeometry, handBoneIndex, ibm, axeLocal)
-        bodyMesh.material = new LambertMaterial({ emissiveBrightness: 0.3 })
+        bodyMesh.material = characterMaterial
       }
     }
   }, [bodyMesh, skeleton, bakedBody, axeGeometry])
@@ -116,7 +119,6 @@ const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
       s.zResolved = true
       const edenMesh = scene.getByName('eden') as Mesh | undefined
       if (edenMesh) {
-        const raycaster = new Raycaster()
         raycaster.set(new Float32Array([x, y, 200]), new Float32Array([0, 0, -1]))
         const hits = raycaster.intersectObject(edenMesh)
         if (hits.length > 0) s.z = hits[0]!.point[2]!
