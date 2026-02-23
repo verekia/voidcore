@@ -10,7 +10,7 @@
 // collectMeshes() – Walks the scene graph in a single pass to:
 //   1. Distance-cull meshes beyond their maxDistance from the camera (squared distance,
 //      no sqrt). Distance-culled meshes are excluded from both rendering and shadow casting.
-//   2. Collect camera-visible Mesh nodes (frustum culled against the camera frustum)
+//   2. Collect camera-visible Mesh and Sprite nodes (frustum culled against the camera frustum)
 //   3. Collect shadow-only casters (meshes outside camera frustum but inside the shadow
 //      frustum). This merges what used to be two separate traversals into one.
 //   4. Skip invisible nodes and meshes outside both frustums
@@ -30,10 +30,16 @@
 //   The shadow volume is a fixed ortho box centered at the world origin, oriented along
 //   the light direction. Size and depth are configured on the DirectionalLight itself
 //   (shadowMapSize, shadowNear, shadowFar). The camera has no involvement.
+//
+// computeBillboardMatrix() – Computes a camera-facing world matrix for sprites. Extracts
+//   position and scale from the sprite's scene-graph world matrix, then builds a new matrix
+//   using the camera's right/up vectors as the sprite's local X/Y axes. Supports optional
+//   2D rotation (around the view axis) and constant-size mode (sizeAttenuation=false).
 
 import {
   aabbTransform,
   frustumContainsAABB,
+  mat4Create,
   mat4LookAt,
   mat4Multiply,
   vec3Create,
@@ -46,6 +52,7 @@ import {
 import { Mesh } from '../scene/mesh'
 
 import type { AABB, Mat4, Vec3 } from '../math/index'
+import type { PerspectiveCamera } from '../scene/camera'
 import type { AmbientLight, DirectionalLight } from '../scene/light'
 import type { Node } from '../scene/node'
 import type { SortState } from './sort'
@@ -129,7 +136,7 @@ export const collectMeshes = (
   while (stackTop > 0) {
     const node = stack[--stackTop]!
     if (!node.visible) continue
-    if (node.type === 'mesh') {
+    if (node.type === 'mesh' || node.type === 'sprite') {
       const mesh = node as Mesh
 
       // Distance culling: skip mesh entirely if beyond maxDistance
@@ -235,4 +242,102 @@ export const computeShadowMatrix = (
 
   // Final shadow VP = proj * view
   mat4Multiply(shadowVP, lightProj, lightView)
+}
+
+/**
+ * Scratch buffer for billboard matrix computation — avoids per-call allocation.
+ * Both renderers use this via computeBillboardMatrix() in the batch fill phase.
+ */
+const _bbMatrix: Mat4 = mat4Create()
+
+/**
+ * Compute a billboard world matrix that makes a sprite always face the camera.
+ *
+ * Extracts the sprite's world position and scale from its scene-graph world matrix,
+ * then constructs a new matrix whose orientation matches the camera's view axes
+ * (right, up, backward). The result is written into the output buffer.
+ *
+ * Supports optional 2D rotation (around the view axis) and size attenuation toggle
+ * (when false, the sprite maintains constant screen size regardless of distance).
+ */
+export const computeBillboardMatrix = (
+  out: Float32Array,
+  off: number,
+  worldMatrix: Mat4,
+  camera: PerspectiveCamera,
+  rotation: number,
+  sizeAttenuation: boolean,
+): void => {
+  const vm = camera._viewMatrix
+
+  // Extract position from world matrix
+  const tx = worldMatrix[12]!
+  const ty = worldMatrix[13]!
+  const tz = worldMatrix[14]!
+
+  // Extract scale from world matrix columns
+  let sx = Math.sqrt(
+    worldMatrix[0]! * worldMatrix[0]! + worldMatrix[1]! * worldMatrix[1]! + worldMatrix[2]! * worldMatrix[2]!,
+  )
+  let sy = Math.sqrt(
+    worldMatrix[4]! * worldMatrix[4]! + worldMatrix[5]! * worldMatrix[5]! + worldMatrix[6]! * worldMatrix[6]!,
+  )
+
+  // sizeAttenuation=false: scale by distance so sprite stays constant screen size
+  if (!sizeAttenuation) {
+    const dx = tx - camera.position[0]!
+    const dy = ty - camera.position[1]!
+    const dz = tz - camera.position[2]!
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
+    sx *= dist
+    sy *= dist
+  }
+
+  // Camera basis vectors from view matrix rows (transpose of the rotation part)
+  //   Right:    vm[0], vm[4], vm[8]
+  //   Up:       vm[1], vm[5], vm[9]
+  //   Backward: vm[2], vm[6], vm[10]
+  let rx = vm[0]!,
+    ry = vm[4]!,
+    rz = vm[8]!
+  let ux = vm[1]!,
+    uy = vm[5]!,
+    uz = vm[9]!
+
+  // Apply 2D rotation around the view axis (rotate right/up vectors)
+  if (rotation !== 0) {
+    const cos = Math.cos(rotation)
+    const sin = Math.sin(rotation)
+    const rx2 = cos * rx + sin * ux
+    const ry2 = cos * ry + sin * uy
+    const rz2 = cos * rz + sin * uz
+    ux = -sin * rx + cos * ux
+    uy = -sin * ry + cos * uy
+    uz = -sin * rz + cos * uz
+    rx = rx2
+    ry = ry2
+    rz = rz2
+  }
+
+  // Build billboard matrix (column-major):
+  //   Column 0: camera right * scaleX
+  //   Column 1: camera up * scaleY
+  //   Column 2: camera backward (unit length, Z axis irrelevant for flat plane)
+  //   Column 3: world position
+  out[off] = rx * sx
+  out[off + 1] = ry * sx
+  out[off + 2] = rz * sx
+  out[off + 3] = 0
+  out[off + 4] = ux * sy
+  out[off + 5] = uy * sy
+  out[off + 6] = uz * sy
+  out[off + 7] = 0
+  out[off + 8] = vm[2]!
+  out[off + 9] = vm[6]!
+  out[off + 10] = vm[10]!
+  out[off + 11] = 0
+  out[off + 12] = tx
+  out[off + 13] = ty
+  out[off + 14] = tz
+  out[off + 15] = 1
 }

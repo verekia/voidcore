@@ -17,7 +17,7 @@ A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 sup
 - **Procedural geometry** – Box, sphere, plane, cone, cylinder, capsule, circle
 - **glTF/GLB loading** – Import 3D models with Draco compression support
 - **KTX2 textures** – Load Basis Universal compressed textures (ETC1S/UASTC) via WASM transcoder, with automatic transcoding to GPU-native formats (ASTC, BC7, BC3, ETC2) based on device support
-- **Material system** – Basic and Lambert shading with vertex colors, bloom, transparency, color and AO maps
+- **Material system** – Basic and Lambert shading with vertex colors, bloom, transparency, color and AO maps, per-material tiled normal maps
 - **Mesh outlines** – Shader-based inverted hull outlines via `outline` option (thickness + color)
 - **Sorted alpha blending** – Back-to-front transparent mesh rendering with premultiplied alpha (WebGPU)
 - **Shadow maps** – Single shadow map with PCF 3×3 filtering, shadow baking for static scenes
@@ -284,6 +284,14 @@ interface MeshOutline {
 }
 ```
 
+#### Sprite
+
+Extends `Mesh`. A billboard plane that always faces the camera. Uses a shared 1×1 `PlaneGeometry` and defaults to `SpriteMaterial`. Does not cast shadows by default.
+
+```ts
+new Sprite(material?: SpriteMaterial)
+```
+
 #### Group
 
 Extends `Node`. Empty container for grouping scene objects.
@@ -433,6 +441,9 @@ interface PaletteEntry {
   tiledAo?: Texture              // per-material tiled AO texture (world-space XY repeat)
   tiledAoIntensity?: number      // default 1.0, supports HDR values
   tiledAoScale?: number          // default 1.0, world-space tiling frequency
+  tiledNormal?: Texture          // per-material tiled normal map (world-space XY repeat)
+  tiledNormalIntensity?: number  // default 1.0
+  tiledNormalScale?: number      // default 1.0, world-space tiling frequency
 }
 ```
 
@@ -493,6 +504,26 @@ interface CustomShader {
 | Vertex   | `out.uv` / `v_uv`            | `vec2<f32>` / `vec2` | UV coordinates (read/write)          |
 | Fragment | `finalColor`  | `vec3<f32>` / `vec3`     | Output color before alpha premultiply  |
 | Fragment | `alpha`       | `f32` / `float`          | Output alpha                           |
+
+#### SpriteMaterial
+
+Unlit material with defaults tuned for sprites (transparent, double-sided).
+
+```ts
+new SpriteMaterial(opts?: SpriteMaterialOptions)
+
+interface SpriteMaterialOptions extends MaterialOptions {
+  rotation?: number         // 2D rotation in radians (default: 0)
+  sizeAttenuation?: boolean // shrink with distance (default: true)
+}
+```
+
+| Property          | Type      | Description                                   |
+| ----------------- | --------- | --------------------------------------------- |
+| `rotation`        | `number`  | 2D rotation around the view axis (radians)    |
+| `sizeAttenuation` | `boolean` | When false, sprite keeps constant screen size |
+
+Inherits all `MaterialOptions` properties. `transparent` defaults to `true`, `side` defaults to `'double'`.
 
 #### Texture
 
@@ -828,6 +859,7 @@ Geometry and material elements are attached as children of `<mesh>` (the reconci
 | Element                    | Maps to                                           |
 | -------------------------- | ------------------------------------------------- |
 | `<mesh>`                   | `Mesh`                                            |
+| `<sprite>`                 | `Sprite`                                          |
 | `<group>`                  | `Group`                                           |
 | `<directionalLight>`       | `DirectionalLight`                                |
 | `<ambientLight>`           | `AmbientLight`                                    |
@@ -840,6 +872,7 @@ Geometry and material elements are attached as children of `<mesh>` (the reconci
 | `<circleGeometry>`         | `CircleGeometry`                                  |
 | `<basicMaterial>`          | `BasicMaterial`                                   |
 | `<lambertMaterial>`        | `LambertMaterial`                                 |
+| `<spriteMaterial>`         | `SpriteMaterial`                                  |
 | `<primitive object={...}>` | Insert any pre-built engine object into the scene |
 
 #### Hooks

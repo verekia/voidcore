@@ -33,7 +33,8 @@
 // emissive → float16, joints → uint8, bone weights → unorm8. Meshes with
 // baked vertex colors use separate VC shader programs. VC shaders also support
 // per-material tiled AO via a 2D array texture sampled with world-space XY
-// coordinates (repeat wrapping).
+// coordinates (repeat wrapping), and per-material tiled normal maps via a second
+// 2D array texture with per-vertex data in a float16x4 attribute (location 7).
 //
 // Custom shaders: materials with customShader get dedicated WebGL programs (cached per-material
 // via WeakMap). Custom shader snippets are injected into the standard lambert/basic shaders
@@ -58,6 +59,7 @@ import { Node } from '../scene/node'
 import { packColorsUnorm8, packEmissiveFloat16, packNormalsSnorm8, packUVsFloat16, packWeightsUnorm8 } from './pack'
 import {
   collectMeshes,
+  computeBillboardMatrix,
   computeLightDir,
   computeShadowMatrix,
   defaultMaxDpr,
@@ -114,6 +116,7 @@ interface GPUBuffers {
   uv?: WebGLBuffer
   color?: WebGLBuffer
   emissive?: WebGLBuffer
+  tiledNormal?: WebGLBuffer
   joints?: WebGLBuffer
   weights?: WebGLBuffer
   vao?: WebGLVertexArrayObject
@@ -170,6 +173,7 @@ interface SceneUniformLocs {
   u_aoIntensity: WebGLUniformLocation | null
   u_tiledAoArray: WebGLUniformLocation | null
   u_tiledAoScales: WebGLUniformLocation | null
+  u_tiledNormalArray: WebGLUniformLocation | null
 }
 
 interface PostUniformLocs {
@@ -195,6 +199,7 @@ const cacheSceneLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): Scen
   u_aoIntensity: gl.getUniformLocation(program, 'u_aoIntensity'),
   u_tiledAoArray: gl.getUniformLocation(program, 'u_tiledAoArray'),
   u_tiledAoScales: gl.getUniformLocation(program, 'u_tiledAoScales'),
+  u_tiledNormalArray: gl.getUniformLocation(program, 'u_tiledNormalArray'),
 })
 
 const cachePostLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): PostUniformLocs => ({
@@ -256,6 +261,7 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
   // Vertex colors (unorm8x4) and emissive (float16x4) — only for baked-palette meshes
   let colorBuffer: WebGLBuffer | undefined
   let emissiveBuffer: WebGLBuffer | undefined
+  let tiledNormalBuffer: WebGLBuffer | undefined
   if (geometry.colors) {
     colorBuffer = gl.createBuffer()!
     gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer)
@@ -266,6 +272,14 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
     gl.bufferData(
       gl.ARRAY_BUFFER,
       packEmissiveFloat16(geometry.emissiveColors ?? new Float32Array(geometry.vertexCount * 4), geometry.vertexCount),
+      gl.STATIC_DRAW,
+    )
+
+    tiledNormalBuffer = gl.createBuffer()!
+    gl.bindBuffer(gl.ARRAY_BUFFER, tiledNormalBuffer)
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      packEmissiveFloat16(geometry.tiledNormalData ?? new Float32Array(geometry.vertexCount * 4), geometry.vertexCount),
       gl.STATIC_DRAW,
     )
   }
@@ -308,7 +322,7 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
     gl.vertexAttribPointer(2, 2, gl.HALF_FLOAT, false, 0, 0)
   }
 
-  // Vertex color meshes: color@3, joints@4, weights@5, emissive@6
+  // Vertex color meshes: color@3, joints@4, weights@5, emissive@6, tiledNormal@7
   // Non-VC meshes: joints@3, weights@4
   const hasVC = !!colorBuffer
   if (hasVC) {
@@ -337,6 +351,11 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
     gl.bindBuffer(gl.ARRAY_BUFFER, emissiveBuffer!)
     gl.enableVertexAttribArray(6)
     gl.vertexAttribPointer(6, 4, gl.HALF_FLOAT, false, 0, 0)
+
+    // Tiled normal data (location 7) — float16x4
+    gl.bindBuffer(gl.ARRAY_BUFFER, tiledNormalBuffer!)
+    gl.enableVertexAttribArray(7)
+    gl.vertexAttribPointer(7, 4, gl.HALF_FLOAT, false, 0, 0)
   } else {
     gl.disableVertexAttribArray(3)
 
@@ -358,6 +377,7 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
 
     gl.disableVertexAttribArray(5)
     gl.disableVertexAttribArray(6)
+    gl.disableVertexAttribArray(7)
   }
 
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuffer)
@@ -370,6 +390,7 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
     uv: uvBuffer,
     color: colorBuffer,
     emissive: emissiveBuffer,
+    tiledNormal: tiledNormalBuffer,
     joints: jointsBuffer,
     weights: weightsBuffer,
     vao,
@@ -427,9 +448,10 @@ const ensureOutlineGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry)
     gl.bufferData(gl.ARRAY_BUFFER, combinedUV, gl.STATIC_DRAW)
   }
 
-  // Combined vertex colors and emissive: [original, duplicated]
+  // Combined vertex colors, emissive, and tiled normal: [original, duplicated]
   let colorBuf: WebGLBuffer | undefined
   let emissiveBuf: WebGLBuffer | undefined
+  let tiledNormalBuf: WebGLBuffer | undefined
   if (geometry.colors) {
     const baseColors = packColorsUnorm8(geometry.colors, vc)
     const combinedColors = new Uint8Array(vc * 2 * 4)
@@ -446,6 +468,14 @@ const ensureOutlineGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry)
     emissiveBuf = gl.createBuffer()!
     gl.bindBuffer(gl.ARRAY_BUFFER, emissiveBuf)
     gl.bufferData(gl.ARRAY_BUFFER, combinedEmissive, gl.STATIC_DRAW)
+
+    const baseTiledNormal = packEmissiveFloat16(geometry.tiledNormalData ?? new Float32Array(vc * 4), vc)
+    const combinedTiledNormal = new Uint16Array(vc * 2 * 4)
+    combinedTiledNormal.set(baseTiledNormal, 0)
+    combinedTiledNormal.set(baseTiledNormal, vc * 4)
+    tiledNormalBuf = gl.createBuffer()!
+    gl.bindBuffer(gl.ARRAY_BUFFER, tiledNormalBuf)
+    gl.bufferData(gl.ARRAY_BUFFER, combinedTiledNormal, gl.STATIC_DRAW)
   }
 
   // Combined joints + weights for skinned meshes
@@ -505,7 +535,7 @@ const ensureOutlineGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry)
     gl.disableVertexAttribArray(2)
   }
 
-  // Vertex color meshes: color@3, joints@4, weights@5, emissive@6
+  // Vertex color meshes: color@3, joints@4, weights@5, emissive@6, tiledNormal@7
   // Non-VC meshes: joints@3, weights@4
   const hasVC = !!colorBuf
   if (hasVC) {
@@ -532,6 +562,10 @@ const ensureOutlineGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry)
     gl.bindBuffer(gl.ARRAY_BUFFER, emissiveBuf!)
     gl.enableVertexAttribArray(6)
     gl.vertexAttribPointer(6, 4, gl.HALF_FLOAT, false, 0, 0)
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, tiledNormalBuf!)
+    gl.enableVertexAttribArray(7)
+    gl.vertexAttribPointer(7, 4, gl.HALF_FLOAT, false, 0, 0)
   } else {
     gl.disableVertexAttribArray(3)
 
@@ -551,6 +585,7 @@ const ensureOutlineGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry)
 
     gl.disableVertexAttribArray(5)
     gl.disableVertexAttribArray(6)
+    gl.disableVertexAttribArray(7)
   }
 
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf)
@@ -758,8 +793,11 @@ export class WebGLRenderer implements Renderer {
   private _glTexCache = new WeakMap<Texture, WebGLTexture>()
   private _dummyWhiteTex!: WebGLTexture
   private _dummyTiledAoArrayTex!: WebGLTexture
+  private _dummyTiledNormalArrayTex!: WebGLTexture
   private _tiledAoArrayCache = new WeakMap<Geometry, { glTex: WebGLTexture; scales: Float32Array }>()
+  private _tiledNormalArrayCache = new WeakMap<Geometry, WebGLTexture>()
   private _customProgramCache = new WeakMap<Material, Map<number, { program: WebGLProgram; locs: SceneUniformLocs }>>()
+
   private _bloomDownLocs!: PostUniformLocs
   private _bloomUpLocs!: PostUniformLocs
   private _blitLocs!: BlitUniformLocs
@@ -1024,6 +1062,27 @@ export class WebGLRenderer implements Renderer {
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.REPEAT)
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, null)
 
+    // 1x1x1 flat normal dummy array texture (128,128,255 = neutral normal) for when no tiled normals exist
+    this._dummyTiledNormalArrayTex = gl.createTexture()!
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, this._dummyTiledNormalArrayTex)
+    gl.texImage3D(
+      gl.TEXTURE_2D_ARRAY,
+      0,
+      gl.RGBA8,
+      1,
+      1,
+      1,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      new Uint8Array([128, 128, 255, 255]),
+    )
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.REPEAT)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.REPEAT)
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, null)
+
     // Cache canvas dimensions
     this._displayW = canvas.clientWidth
     this._displayH = canvas.clientHeight
@@ -1106,6 +1165,44 @@ export class WebGLRenderer implements Renderer {
     return entry
   }
 
+  private _ensureTiledNormalArrayTexture(geometry: Geometry): WebGLTexture {
+    const cached = this._tiledNormalArrayCache.get(geometry)
+    if (cached) return cached
+
+    const gl = this.gl
+    const textures = geometry.tiledNormalTextures!
+    const layerCount = textures.length
+    const firstTex = textures[0]!
+    const w = firstTex.width
+    const h = firstTex.height
+    const isCompressed = firstTex.format !== 'rgba8'
+
+    const glTex = gl.createTexture()!
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, glTex)
+
+    if (isCompressed) {
+      const internalFormat = _toGLInternalFormat(firstTex.format)
+      gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, internalFormat, w, h, layerCount)
+      for (let i = 0; i < layerCount; i++) {
+        gl.compressedTexSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, i, w, h, 1, internalFormat, textures[i]!.data)
+      }
+    } else {
+      gl.texImage3D(gl.TEXTURE_2D_ARRAY, 0, gl.RGBA8, w, h, layerCount, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+      for (let i = 0; i < layerCount; i++) {
+        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, i, w, h, 1, gl.RGBA, gl.UNSIGNED_BYTE, textures[i]!.data)
+      }
+    }
+
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.REPEAT)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.REPEAT)
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, null)
+
+    this._tiledNormalArrayCache.set(geometry, glTex)
+    return glTex
+  }
+
   private _bindMaterialTextures(material: Material, locs: SceneUniformLocs, geometry?: Geometry) {
     const gl = this.gl
 
@@ -1132,6 +1229,18 @@ export class WebGLRenderer implements Renderer {
       } else {
         gl.bindTexture(gl.TEXTURE_2D_ARRAY, this._dummyTiledAoArrayTex)
         gl.uniform1i(locs.u_tiledAoArray, 5)
+      }
+    }
+
+    // Tiled normal array texture → texture unit 6
+    if (locs.u_tiledNormalArray !== null) {
+      gl.activeTexture(gl.TEXTURE6)
+      if (geometry?.tiledNormalTextures && geometry.tiledNormalTextures.length > 0) {
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, this._ensureTiledNormalArrayTexture(geometry))
+        gl.uniform1i(locs.u_tiledNormalArray, 6)
+      } else {
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, this._dummyTiledNormalArrayTex)
+        gl.uniform1i(locs.u_tiledNormalArray, 6)
       }
     }
   }
@@ -1530,7 +1639,22 @@ export class WebGLRenderer implements Renderer {
         mesh._batchIndex = skinnedIdx++
       } else {
         const off = objIdx * alignedObjFloats
-        objBatch.set(mesh._worldMatrix, off)
+
+        // Sprites: compute billboard matrix (camera-facing orientation)
+        if (mesh.type === 'sprite') {
+          const mat = mesh.material as any
+          computeBillboardMatrix(
+            objBatch,
+            off,
+            mesh._worldMatrix,
+            camera,
+            mat.rotation ?? 0,
+            mat.sizeAttenuation ?? true,
+          )
+        } else {
+          objBatch.set(mesh._worldMatrix, off)
+        }
+
         if (mat4Invert(this._invWorldMatrix, mesh._worldMatrix)) {
           mat4Transpose(this._normalMatrix, this._invWorldMatrix)
         }

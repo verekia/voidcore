@@ -32,7 +32,10 @@
 // support per-material tiled AO via a 2D array texture (group 3, bindings 3-5): the layer
 // index is packed in color.a, intensity in emissive.a, and per-layer tiling scales in a
 // uniform buffer. Tiling uses world-space XY coordinates; the tiled AO multiplies the
-// world AO for a combined result.
+// world AO for a combined result. Per-material tiled normal maps use a second 2D array
+// texture (group 3, binding 6) with per-vertex data in a float16x4 attribute (location 7):
+// layerIndex/255 in x, intensity in y, scale in z. Normal mapping uses a cotangent frame
+// (screen-space derivatives) for static meshes and triplanar projection for skinned meshes.
 //
 // Custom shader builders (buildLambertWGSL, buildBasicWGSL, etc.) generate shader source
 // with user-provided WGSL code injected at hook points. Variables at hook points use `var`
@@ -346,6 +349,7 @@ ${OBJECT_BINDING}
 @group(3) @binding(3) var tiledAoArray: texture_2d_array<f32>;
 @group(3) @binding(4) var tiledAoSampler: sampler;
 @group(3) @binding(5) var<uniform> tiledAoScales: array<vec4<f32>, 4>;
+@group(3) @binding(6) var tiledNormalArray: texture_2d_array<f32>;
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
@@ -355,6 +359,7 @@ struct VertexOutput {
   @location(3) @interpolate(flat) outlineFlag: f32,
   @location(4) color: vec4<f32>,
   @location(5) vcEmissive: vec4<f32>,
+  @location(6) tiledNormalInfo: vec4<f32>,
 };
 
 @vertex
@@ -364,6 +369,7 @@ fn vs_main(
   @location(2) a_uv: vec2<f32>,
   @location(3) a_color: vec4<f32>,
   @location(6) a_emissive: vec4<f32>,
+  @location(7) a_tiledNormal: vec4<f32>,
 ) -> VertexOutput {
   var out: VertexOutput;
   let flag = a_normal.w;
@@ -378,6 +384,7 @@ fn vs_main(
   out.uv = a_uv;
   out.color = a_color;
   out.vcEmissive = a_emissive;
+  out.tiledNormalInfo = a_tiledNormal;
   out.position = frame.viewProjection * worldPos;
   return out;
 }
@@ -409,6 +416,19 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let tiledAoSample = textureSample(tiledAoArray, tiledAoSampler, in.uv * tiledAoScale, tiledAoLayer).r;
   let tiledAo = select(1.0, mix(1.0, tiledAoSample, tiledAoIntensity), tiledAoLayerRaw > 0u);
 
+  // Tiled normals: decode layer, sample before non-uniform branch
+  let tnLayerRaw = u32(round(in.tiledNormalInfo.x * 255.0));
+  let tnIntensity = in.tiledNormalInfo.y;
+  let tnScale = in.tiledNormalInfo.z;
+  let tnLayer = select(0u, tnLayerRaw - 1u, tnLayerRaw > 0u);
+  let tnUV = in.uv * tnScale;
+  let tnSample = textureSample(tiledNormalArray, tiledAoSampler, tnUV, tnLayer).rgb;
+  // Also compute screen-space derivatives before the discard branch
+  let dWorldPosDx = dpdx(in.worldPos);
+  let dWorldPosDy = dpdy(in.worldPos);
+  let dUVdx = dpdx(tnUV);
+  let dUVdy = dpdy(tnUV);
+
   if (in.outlineFlag > 0.5) {
     if (front_facing || object.outlineColorAndThickness.w <= 0.0) { discard; }
     out.color = vec4<f32>(object.outlineColorAndThickness.xyz, 1.0);
@@ -416,7 +436,28 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
     return out;
   }
 
-  let normal = normalize(in.normal);
+  var normal = normalize(in.normal);
+
+  // Apply tiled normal map via cotangent frame
+  if (tnLayerRaw > 0u) {
+    // Decode tangent-space normal from [0,1] to [-1,1]
+    let tnNormal = tnSample * 2.0 - 1.0;
+    // Build cotangent frame from screen-space derivatives
+    let dp1 = dWorldPosDx;
+    let dp2 = dWorldPosDy;
+    let duv1 = dUVdx;
+    let duv2 = dUVdy;
+    let dp2perp = cross(dp2, normal);
+    let dp1perp = cross(normal, dp1);
+    let T = dp2perp * duv1.x + dp1perp * duv2.x;
+    let B = dp2perp * duv1.y + dp1perp * duv2.y;
+    let invmax = inverseSqrt(max(dot(T, T), dot(B, B)));
+    let tbn_T = T * invmax;
+    let tbn_B = B * invmax;
+    let perturbedNormal = normalize(tbn_T * tnNormal.x + tbn_B * tnNormal.y + normal * tnNormal.z);
+    normal = normalize(mix(normal, perturbedNormal, tnIntensity));
+  }
+
   let baseColor = material.baseColor * in.color.rgb;
   let alpha = material.opacity;
   let emissive = in.vcEmissive.rgb;
@@ -455,6 +496,7 @@ ${OBJECT_BINDING}
 @group(3) @binding(3) var tiledAoArray: texture_2d_array<f32>;
 @group(3) @binding(4) var tiledAoSampler: sampler;
 @group(3) @binding(5) var<uniform> tiledAoScales: array<vec4<f32>, 4>;
+@group(3) @binding(6) var tiledNormalArray: texture_2d_array<f32>;
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
@@ -464,6 +506,7 @@ struct VertexOutput {
   @location(3) @interpolate(flat) outlineFlag: f32,
   @location(4) color: vec4<f32>,
   @location(5) vcEmissive: vec4<f32>,
+  @location(6) tiledNormalInfo: vec4<f32>,
 };
 
 @vertex
@@ -475,6 +518,7 @@ fn vs_main(
   @location(4) a_joints: vec4<u32>,
   @location(5) a_weights: vec4<f32>,
   @location(6) a_emissive: vec4<f32>,
+  @location(7) a_tiledNormal: vec4<f32>,
 ) -> VertexOutput {
   var out: VertexOutput;
   let flag = a_normal.w;
@@ -498,6 +542,7 @@ fn vs_main(
   out.uv = a_uv;
   out.color = a_color;
   out.vcEmissive = a_emissive;
+  out.tiledNormalInfo = a_tiledNormal;
   out.position = frame.viewProjection * vec4<f32>(worldPos, 1.0);
   return out;
 }
@@ -533,6 +578,16 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let tiledAoSample = taoXY * triN.z + taoXZ * triN.y + taoYZ * triN.x;
   let tiledAo = select(1.0, mix(1.0, tiledAoSample, tiledAoIntensity), tiledAoLayerRaw > 0u);
 
+  // Tiled normals: triplanar sample before non-uniform branch
+  let tnLayerRaw = u32(round(in.tiledNormalInfo.x * 255.0));
+  let tnIntensity = in.tiledNormalInfo.y;
+  let tnScale = in.tiledNormalInfo.z;
+  let tnLayer = select(0u, tnLayerRaw - 1u, tnLayerRaw > 0u);
+  // Triplanar normal sampling from 3 axes
+  let tnXY = textureSample(tiledNormalArray, tiledAoSampler, in.worldPos.xy * tnScale, tnLayer).rgb;
+  let tnXZ = textureSample(tiledNormalArray, tiledAoSampler, in.worldPos.xz * tnScale, tnLayer).rgb;
+  let tnYZ = textureSample(tiledNormalArray, tiledAoSampler, in.worldPos.yz * tnScale, tnLayer).rgb;
+
   if (in.outlineFlag > 0.5) {
     if (front_facing || object.outlineColorAndThickness.w <= 0.0) { discard; }
     out.color = vec4<f32>(object.outlineColorAndThickness.xyz, 1.0);
@@ -540,7 +595,26 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
     return out;
   }
 
-  let normal = normalize(in.normal);
+  var normal = normalize(in.normal);
+
+  // Apply tiled normal map via triplanar + fixed per-axis TBN
+  if (tnLayerRaw > 0u) {
+    let triW = abs(normal);
+    // Decode tangent-space normals from [0,1] to [-1,1]
+    let nXY = tnXY * 2.0 - 1.0;
+    let nXZ = tnXZ * 2.0 - 1.0;
+    let nYZ = tnYZ * 2.0 - 1.0;
+    // Fixed TBN per projection axis (Z-up coordinate system)
+    // XY projection: T=+X, B=+Y, N=+Z
+    let pXY = normalize(vec3<f32>(nXY.x, nXY.y, nXY.z) * vec3<f32>(1.0, 1.0, sign(normal.z + 0.001)));
+    // XZ projection: T=+X, B=+Z, N=+Y
+    let pXZ = normalize(vec3<f32>(nXZ.x, nXZ.z, nXZ.y) * vec3<f32>(1.0, sign(normal.y + 0.001), 1.0));
+    // YZ projection: T=+Y, B=+Z, N=+X
+    let pYZ = normalize(vec3<f32>(nYZ.z, nYZ.x, nYZ.y) * vec3<f32>(sign(normal.x + 0.001), 1.0, 1.0));
+    let blended = normalize(pXY * triW.z + pXZ * triW.y + pYZ * triW.x);
+    normal = normalize(mix(normal, blended, tnIntensity));
+  }
+
   let baseColor = material.baseColor * in.color.rgb;
   let alpha = material.opacity;
   let emissive = in.vcEmissive.rgb;
