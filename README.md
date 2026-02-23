@@ -2,7 +2,7 @@
 
 A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 support.
 
-![Voidcore logo](/logo.webp)
+<img src="https://raw.githubusercontent.com/verekia/voidcore/refs/heads/main/logo.webp" width="200">
 
 > [!IMPORTANT]
 > This engine is developed specifically for [**Mana Blade**](https://manablade.com/) and is not meant to be used by other projects at the moment.
