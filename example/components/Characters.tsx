@@ -46,6 +46,8 @@ const characterMaterial = new LambertMaterial({ emissiveBrightness: 0.2 })
 const raycaster = new Raycaster()
 const rayOrigin = new Float32Array([0, 0, 200])
 const rayDir = new Float32Array([0, 0, -1])
+const axeLocalTransform = mat4Compose(mat4Create(), VEC3_ZERO, new Float32Array([0, 0, 1, 0]), VEC3_ONE)
+let cachedMergedGeometry: ReturnType<typeof mergeStaticIntoSkinned> | null = null
 
 const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
   const { scene } = useEngine()
@@ -80,15 +82,20 @@ const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
   useMemo(() => {
     bodyMesh.outline = { thickness: 0.03, color: [0, 0, 0] }
 
-    const handBone = skeleton.getBone('Hand.R')
-    if (handBone) {
-      const handBoneIndex = skeleton.bones.indexOf(handBone)
-      if (handBoneIndex >= 0) {
-        const ibm = skeleton.boneInverseBindMatrices[handBoneIndex]!
-        const axeLocal = mat4Compose(mat4Create(), VEC3_ZERO, new Float32Array([0, 0, 1, 0]), VEC3_ONE)
-        bodyMesh.geometry = mergeStaticIntoSkinned(bakedBody, axeGeometry, handBoneIndex, ibm, axeLocal)
-        bodyMesh.material = characterMaterial
+    if (!cachedMergedGeometry) {
+      const handBone = skeleton.getBone('Hand.R')
+      if (handBone) {
+        const handBoneIndex = skeleton.bones.indexOf(handBone)
+        if (handBoneIndex >= 0) {
+          const ibm = skeleton.boneInverseBindMatrices[handBoneIndex]!
+          cachedMergedGeometry = mergeStaticIntoSkinned(bakedBody, axeGeometry, handBoneIndex, ibm, axeLocalTransform)
+        }
       }
+    }
+
+    if (cachedMergedGeometry) {
+      bodyMesh.geometry = cachedMergedGeometry
+      bodyMesh.material = characterMaterial
     }
   }, [bodyMesh, skeleton, bakedBody, axeGeometry])
 
@@ -128,7 +135,12 @@ const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
       rayOrigin[1] = posY
       raycaster.set(rayOrigin, rayDir)
       const hits = raycaster.intersectObject(edenMesh)
-      s.z = hits.length > 0 ? hits[0]!.point[2]! : -50
+      if (hits.length > 0) {
+        s.z = hits[0]!.point[2]!
+        root.visible = true
+      } else {
+        root.visible = false
+      }
     }
 
     root.setPosition(posX, posY, s.z)
