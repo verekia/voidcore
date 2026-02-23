@@ -22,8 +22,8 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: Run all checks
-        run: bun all
-
       - name: Build example
         run: bun run build
+
+      - name: Run all checks
+        run: bun all
