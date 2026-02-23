@@ -15,11 +15,13 @@ import {
   CircleGeometry,
 } from '../geometry/primitives'
 import { BasicMaterial, LambertMaterial } from '../materials/material'
+import { SpriteMaterial } from '../materials/sprite-material'
 import { PerspectiveCamera } from '../scene/camera'
 import { Group } from '../scene/group'
 import { AmbientLight, DirectionalLight } from '../scene/light'
 import { Mesh } from '../scene/mesh'
 import { Scene } from '../scene/scene'
+import { Sprite } from '../scene/sprite'
 
 import type { Skeleton } from '../animation/skeleton'
 import type { Geometry } from '../geometry/geometry'
@@ -33,6 +35,7 @@ import type {
   CircleGeometryOptions,
 } from '../geometry/primitives'
 import type { Material, MaterialOptions, MaterialSide, PaletteEntry } from '../materials/material'
+import type { SpriteMaterialOptions } from '../materials/sprite-material'
 import type { CameraOptions } from '../scene/camera'
 import type { AmbientLightOptions, DirectionalLightOptions } from '../scene/light'
 import type { MeshOutline } from '../scene/mesh'
@@ -53,8 +56,10 @@ export const catalogue: Record<string, new (...args: any[]) => any> = {
   cylinderGeometry: CylinderGeometry,
   capsuleGeometry: CapsuleGeometry,
   circleGeometry: CircleGeometry,
+  sprite: Sprite,
   basicMaterial: BasicMaterial,
   lambertMaterial: LambertMaterial,
+  spriteMaterial: SpriteMaterial,
 }
 
 // ─── Category sets ────────────────────────────────────────────────────────────
@@ -69,7 +74,7 @@ export const GEOMETRY_TYPES = new Set([
   'circleGeometry',
 ])
 
-export const MATERIAL_TYPES = new Set(['basicMaterial', 'lambertMaterial'])
+export const MATERIAL_TYPES = new Set(['basicMaterial', 'lambertMaterial', 'spriteMaterial'])
 
 // ─── Prop interfaces ─────────────────────────────────────────────────────────
 
@@ -146,6 +151,17 @@ export interface MaterialProps extends BaseProps {
   side?: MaterialSide
 }
 
+export interface SpriteProps extends NodeProps {
+  material?: Material
+  maxDistance?: number
+}
+
+export interface SpriteMaterialProps extends MaterialProps {
+  args?: [SpriteMaterialOptions?]
+  rotation?: number
+  sizeAttenuation?: boolean
+}
+
 export interface PrimitiveProps extends NodeProps {
   object: any
 }
@@ -168,8 +184,11 @@ type VoidElements = {
   capsuleGeometry: GeometryProps & { args?: [CapsuleGeometryOptions?] }
   circleGeometry: GeometryProps & { args?: [CircleGeometryOptions?] }
 
+  sprite: SpriteProps
+
   basicMaterial: MaterialProps
   lambertMaterial: MaterialProps
+  spriteMaterial: SpriteMaterialProps
 
   primitive: PrimitiveProps
 }
