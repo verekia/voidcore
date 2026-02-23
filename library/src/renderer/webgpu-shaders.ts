@@ -27,7 +27,8 @@
 // Vertex-color (VC) variants read per-vertex color (unorm8x4) and emissive (float16x4)
 // attributes, replacing the old palette uniform system. Non-VC shaders use material.baseColor
 // directly with no emissive. The bakePalette() utility resolves palette entries into vertex
-// attributes before rendering.
+// attributes before rendering. VC variants also sample the AO map (group 3) so that meshes
+// using bakePalette() can still benefit from ambient occlusion textures.
 
 // ─── Shared WGSL blocks ──────────────────────────────────────────────
 
@@ -331,6 +332,9 @@ ${OBJECT_UNIFORMS}
 ${FRAME_BINDINGS}
 ${MATERIAL_BINDING}
 ${OBJECT_BINDING}
+@group(3) @binding(0) var colorMapTexture: texture_2d<f32>;
+@group(3) @binding(1) var aoMapTexture: texture_2d<f32>;
+@group(3) @binding(2) var mapSampler: sampler;
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
@@ -378,6 +382,9 @@ struct FragmentOutput {
 fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
   var out: FragmentOutput;
 
+  // Sample textures before any non-uniform branching (WGSL requires uniform control flow for textureSample)
+  let aoSample = textureSample(aoMapTexture, mapSampler, in.uv).r;
+
   if (in.outlineFlag > 0.5) {
     if (front_facing || object.outlineColorAndThickness.w <= 0.0) { discard; }
     out.color = vec4<f32>(object.outlineColorAndThickness.xyz, 1.0);
@@ -390,7 +397,8 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let alpha = material.opacity;
   let emissive = in.vcEmissive.rgb;
 
-  let ambient = frame.ambientColor * frame.ambientIntensity;
+  let ao = mix(1.0, aoSample, material.aoIntensity);
+  let ambient = frame.ambientColor * frame.ambientIntensity * ao;
   let NdotL = max(dot(normal, frame.lightDir), 0.0);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
@@ -417,6 +425,9 @@ ${SKINNED_OBJECT_UNIFORMS}
 ${FRAME_BINDINGS}
 ${MATERIAL_BINDING}
 ${OBJECT_BINDING}
+@group(3) @binding(0) var colorMapTexture: texture_2d<f32>;
+@group(3) @binding(1) var aoMapTexture: texture_2d<f32>;
+@group(3) @binding(2) var mapSampler: sampler;
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
@@ -475,6 +486,9 @@ struct FragmentOutput {
 fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
   var out: FragmentOutput;
 
+  // Sample textures before any non-uniform branching (WGSL requires uniform control flow for textureSample)
+  let aoSample = textureSample(aoMapTexture, mapSampler, in.uv).r;
+
   if (in.outlineFlag > 0.5) {
     if (front_facing || object.outlineColorAndThickness.w <= 0.0) { discard; }
     out.color = vec4<f32>(object.outlineColorAndThickness.xyz, 1.0);
@@ -487,7 +501,8 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let alpha = material.opacity;
   let emissive = in.vcEmissive.rgb;
 
-  let ambient = frame.ambientColor * frame.ambientIntensity;
+  let ao = mix(1.0, aoSample, material.aoIntensity);
+  let ambient = frame.ambientColor * frame.ambientIntensity * ao;
   let NdotL = max(dot(normal, frame.lightDir), 0.0);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {

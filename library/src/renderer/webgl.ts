@@ -1719,7 +1719,7 @@ export class WebGLRenderer implements Renderer {
       if (programChanged && mesh.material.type === 'lambert') {
         gl.uniform1i(locs.u_shadowMap, 2)
       }
-      if (mesh.material._hasTextures && !mesh._isSkinned && !hasVC) {
+      if (hasVC || (mesh.material._hasTextures && !mesh._isSkinned)) {
         this._bindMaterialTextures(mesh.material, locs)
       }
 
@@ -1779,7 +1779,7 @@ export class WebGLRenderer implements Renderer {
         if (programChanged && mesh.material.type === 'lambert') {
           gl.uniform1i(locs.u_shadowMap, 2)
         }
-        if (mesh.material._hasTextures && !mesh._isSkinned && !hasVC) {
+        if (hasVC || (mesh.material._hasTextures && !mesh._isSkinned)) {
           this._bindMaterialTextures(mesh.material, locs)
         }
 

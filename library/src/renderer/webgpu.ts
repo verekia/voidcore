@@ -665,10 +665,10 @@ export class WebGPURenderer implements Renderer {
     const vcSkinnedModule = device.createShaderModule({ code: LAMBERT_SKINNED_VC_WGSL })
 
     const vcPipelineLayout = device.createPipelineLayout({
-      bindGroupLayouts: [this.frameBGL, this.materialBGL, this.objectBGL],
+      bindGroupLayouts: [this.frameBGL, this.materialBGL, this.objectBGL, this.textureBGL],
     })
     const vcSkinnedPipelineLayout = device.createPipelineLayout({
-      bindGroupLayouts: [this.frameBGL, this.materialBGL, this.skinnedObjectBGL],
+      bindGroupLayouts: [this.frameBGL, this.materialBGL, this.skinnedObjectBGL, this.textureBGL],
     })
 
     const opaqueTargets: GPUColorTargetState[] = [{ format: 'rgba8unorm' }, { format: 'rgba16float' }]
@@ -761,9 +761,10 @@ export class WebGPURenderer implements Renderer {
     }
 
     // Pipeline layout
-    const bindGroupLayouts = isTextured
-      ? [this.frameBGL, this.materialBGL, this.objectBGL, this.textureBGL]
-      : [this.frameBGL, this.materialBGL, isSkinned ? this.skinnedObjectBGL : this.objectBGL]
+    const bindGroupLayouts =
+      isTextured || isVC
+        ? [this.frameBGL, this.materialBGL, isSkinned ? this.skinnedObjectBGL : this.objectBGL, this.textureBGL]
+        : [this.frameBGL, this.materialBGL, isSkinned ? this.skinnedObjectBGL : this.objectBGL]
     const layout = device.createPipelineLayout({ bindGroupLayouts })
 
     // Vertex buffers
@@ -2297,7 +2298,7 @@ export class WebGPURenderer implements Renderer {
           pipeline = mesh.material.type === 'lambert' ? this.lambertPipeline : this.basicPipeline
         }
       }
-      if (mesh.material._hasTextures && !mesh._isSkinned && !hasVC) {
+      if (hasVC || (mesh.material._hasTextures && !mesh._isSkinned)) {
         scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))
       }
       drawMeshGPU(scenePass, mesh, pipeline)
@@ -2345,7 +2346,7 @@ export class WebGPURenderer implements Renderer {
           pipeline = mesh.material.type === 'lambert' ? this.lambertTransparentPipeline : this.basicTransparentPipeline
         }
       }
-      if (mesh.material._hasTextures && !mesh._isSkinned && !hasVC) {
+      if (hasVC || (mesh.material._hasTextures && !mesh._isSkinned)) {
         scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))
       }
       drawMeshGPU(scenePass, mesh, pipeline)

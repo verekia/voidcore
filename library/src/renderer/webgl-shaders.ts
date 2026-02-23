@@ -8,7 +8,7 @@
 //   Lambert          – Diffuse lighting (ambient + directional light × surface normal)
 //                      with shadow map sampling (PCF 3×3).
 //   Lambert VC       – Same as Lambert but reads per-vertex color and emissive attributes
-//                      (baked from palette via bakePalette()).
+//                      (baked from palette via bakePalette()). Also samples the AO map.
 //   Lambert Textured – Same as Lambert but also samples color map and AO map textures.
 //   Lambert Skinned  – Same lighting + shadows, but vertices are deformed by bone matrices.
 //   Lambert Skinned VC – Skinned variant with vertex colors and emissive.
@@ -355,6 +355,8 @@ uniform float u_opacity;
 uniform highp sampler2DShadow u_shadowMap;
 uniform bool u_receiveShadow;
 uniform float u_emissiveBrightness;
+uniform sampler2D u_aoMap;
+uniform float u_aoIntensity;
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
@@ -373,7 +375,8 @@ void main() {
   vec3 baseColor = u_baseColor * v_color.rgb;
   vec3 emissive = v_emissive.rgb;
 
-  vec3 ambient = u_ambientColor * u_ambientIntensity;
+  float ao = mix(1.0, texture(u_aoMap, v_uv).r, u_aoIntensity);
+  vec3 ambient = u_ambientColor * u_ambientIntensity * ao;
   float NdotL = max(dot(normal, u_lightDirection), 0.0);
   float shadow = u_receiveShadow ? sampleShadow(v_worldPos, NdotL) : 1.0;
   vec3 diffuse = u_lightColor * u_lightIntensity * NdotL * shadow;
