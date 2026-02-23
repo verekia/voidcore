@@ -37,7 +37,9 @@
 //                    vertex colors use unorm8x4, emissive uses float16x4.
 //   Custom shaders – Materials with customShader get dedicated pipelines (cached per-material
 //                    via WeakMap). Custom shader snippets are injected into the standard
-//                    lambert/basic shaders at vertex and fragment hook points.
+//                    lambert/basic shaders at vertex and fragment hook points. Custom uniforms
+//                    (float-only) are passed via a uniform buffer at group 3 binding 0,
+//                    accessible as `uniforms.xxx` in shader code.
 //
 // WebGPURenderer.create()  – Async factory that initializes the GPU device and pipelines.
 // WebGPURenderer.render()  – Draws one frame.
@@ -269,6 +271,14 @@ export class WebGPURenderer implements Renderer {
 
   // Per-material custom shader pipeline cache (WeakMap for automatic GC)
   private _customPipelineCache = new WeakMap<Material, Map<number, GPURenderPipeline>>()
+
+  // Per-material custom uniform GPU resources (buffer + bind group + CPU staging array)
+  private _customUniformCache = new WeakMap<
+    Material,
+    { buffer: GPUBuffer; bindGroup: GPUBindGroup; data: Float32Array; names: string[] }
+  >()
+  // BGL for custom uniforms, lazily created (shared across all custom-uniform pipelines)
+  private _customUniformBGL: GPUBindGroupLayout | null = null
 
   // Bind group layouts
   private frameBGL: GPUBindGroupLayout
@@ -924,24 +934,48 @@ export class WebGPURenderer implements Renderer {
 
     const device = this.device
     const cs = material.customShader!
+    const hasUniforms = cs.uniforms && Object.keys(cs.uniforms).length > 0
+
+    // Generate WGSL declaration for custom uniforms
+    let wgslDecl: string | undefined
+    if (hasUniforms) {
+      const names = Object.keys(cs.uniforms!).sort()
+      wgslDecl = `\nstruct CustomUniforms { ${names.map(n => `${n}: f32`).join(', ')} };\n@group(3) @binding(0) var<uniform> uniforms: CustomUniforms;`
+    }
 
     // Build shader source
     let shaderCode: string
     if (material.type === 'lambert') {
       shaderCode = isSkinned
-        ? buildLambertSkinnedWGSL(cs.vertexWGSL, cs.fragmentWGSL)
-        : buildLambertWGSL(cs.vertexWGSL, cs.fragmentWGSL)
+        ? buildLambertSkinnedWGSL(cs.vertexWGSL, cs.fragmentWGSL, wgslDecl)
+        : buildLambertWGSL(cs.vertexWGSL, cs.fragmentWGSL, wgslDecl)
     } else {
       shaderCode = isSkinned
-        ? buildBasicSkinnedWGSL(cs.vertexWGSL, cs.fragmentWGSL)
-        : buildBasicWGSL(cs.vertexWGSL, cs.fragmentWGSL)
+        ? buildBasicSkinnedWGSL(cs.vertexWGSL, cs.fragmentWGSL, wgslDecl)
+        : buildBasicWGSL(cs.vertexWGSL, cs.fragmentWGSL, wgslDecl)
     }
 
-    const bindGroupLayouts = [
+    // Ensure custom uniform BGL exists
+    if (hasUniforms && !this._customUniformBGL) {
+      this._customUniformBGL = device.createBindGroupLayout({
+        entries: [
+          {
+            binding: 0,
+            visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+            buffer: { type: 'uniform' },
+          },
+        ],
+      })
+    }
+
+    const bindGroupLayouts: GPUBindGroupLayout[] = [
       this.frameBGL,
       this.materialBGL,
       isSkinned ? this.skinnedObjectBGL : this.objectBGL,
     ]
+    if (hasUniforms) {
+      bindGroupLayouts.push(this._customUniformBGL!)
+    }
     const layout = device.createPipelineLayout({ bindGroupLayouts })
     const buffers = isSkinned ? SKINNED_VERTEX_BUFFER_LAYOUT : VERTEX_BUFFER_LAYOUT
 
@@ -975,6 +1009,42 @@ export class WebGPURenderer implements Renderer {
 
     matCache.set(configKey, pipeline)
     return pipeline
+  }
+
+  /**
+   * Lazily creates and updates the GPU buffer + bind group for a material's custom uniforms.
+   * Returns the bind group to set on group 3 during rendering.
+   */
+  private _ensureCustomUniformBindGroup(material: Material): GPUBindGroup {
+    const cs = material.customShader!
+    const uniformValues = cs.uniforms!
+    let entry = this._customUniformCache.get(material)
+
+    if (!entry) {
+      const names = Object.keys(uniformValues).sort()
+      const numFloats = names.length
+      // Pad to 16-byte alignment (vec4 boundary)
+      const bufferSize = Math.ceil((numFloats * 4) / 16) * 16
+      const buffer = this.device.createBuffer({
+        size: bufferSize,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      })
+      const bindGroup = this.device.createBindGroup({
+        layout: this._customUniformBGL!,
+        entries: [{ binding: 0, resource: { buffer } }],
+      })
+      entry = { buffer, bindGroup, data: new Float32Array(numFloats), names }
+      this._customUniformCache.set(material, entry)
+    }
+
+    // Pack current values into the staging array and upload
+    const { buffer, data, names } = entry
+    for (let i = 0; i < names.length; i++) {
+      data[i] = uniformValues[names[i]!]!
+    }
+    this.device.queue.writeBuffer(buffer, 0, data.buffer as ArrayBuffer, 0, data.byteLength)
+
+    return entry.bindGroup
   }
 
   private _ensureGPUTexture(tex: Texture): { texture: GPUTexture; view: GPUTextureView } {
@@ -2672,6 +2742,12 @@ export class WebGPURenderer implements Renderer {
       }
       if (hasVC) {
         scenePass.setBindGroup(3, this._ensureVCTextureBindGroup(mesh.material, mesh.geometry))
+      } else if (
+        hasCustom &&
+        mesh.material.customShader?.uniforms &&
+        Object.keys(mesh.material.customShader.uniforms).length > 0
+      ) {
+        scenePass.setBindGroup(3, this._ensureCustomUniformBindGroup(mesh.material))
       } else if (!hasCustom && mesh.material._hasTextures && !mesh._isSkinned) {
         scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))
       }
@@ -2725,6 +2801,12 @@ export class WebGPURenderer implements Renderer {
       }
       if (hasVC) {
         scenePass.setBindGroup(3, this._ensureVCTextureBindGroup(mesh.material, mesh.geometry))
+      } else if (
+        hasCustom &&
+        mesh.material.customShader?.uniforms &&
+        Object.keys(mesh.material.customShader.uniforms).length > 0
+      ) {
+        scenePass.setBindGroup(3, this._ensureCustomUniformBindGroup(mesh.material))
       } else if (!hasCustom && mesh.material._hasTextures && !mesh._isSkinned) {
         scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))
       }

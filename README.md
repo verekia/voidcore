@@ -497,13 +497,13 @@ interface CustomShader {
 
 **Custom Shader Hook Variables**
 
-| Stage    | Variable      | Type (WGSL / GLSL)       | Description                            |
-| -------- | ------------- | ------------------------ | -------------------------------------- |
-| Vertex   | `out.worldPos` / `v_worldPos` | `vec3<f32>` / `vec3` | World-space position (read/write)    |
-| Vertex   | `out.normal` / `v_normal`     | `vec3<f32>` / `vec3` | World-space normal (read/write)      |
-| Vertex   | `out.uv` / `v_uv`            | `vec2<f32>` / `vec2` | UV coordinates (read/write)          |
-| Fragment | `finalColor`  | `vec3<f32>` / `vec3`     | Output color before alpha premultiply  |
-| Fragment | `alpha`       | `f32` / `float`          | Output alpha                           |
+| Stage    | Variable                      | Type (WGSL / GLSL)   | Description                           |
+| -------- | ----------------------------- | -------------------- | ------------------------------------- |
+| Vertex   | `out.worldPos` / `v_worldPos` | `vec3<f32>` / `vec3` | World-space position (read/write)     |
+| Vertex   | `out.normal` / `v_normal`     | `vec3<f32>` / `vec3` | World-space normal (read/write)       |
+| Vertex   | `out.uv` / `v_uv`             | `vec2<f32>` / `vec2` | UV coordinates (read/write)           |
+| Fragment | `finalColor`                  | `vec3<f32>` / `vec3` | Output color before alpha premultiply |
+| Fragment | `alpha`                       | `f32` / `float`      | Output alpha                          |
 
 #### SpriteMaterial
 

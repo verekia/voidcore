@@ -37,7 +37,8 @@
 // generate shader source with user-provided GLSL code injected at hook points. The basic
 // custom vert shaders use vec4 a_normal to match the snorm8x4 attribute layout, and expose
 // v_worldPos/v_normal so custom code can access them even though the standard basic shader
-// does not use lighting.
+// does not use lighting. Custom uniforms are declared as a std140 UBO (CustomBlock at
+// binding point 2), accessible as `uniforms.xxx` in both vertex and fragment.
 //
 // Data flow: CPU uploads uniform buffers (UBOs) with matrices and light info. The vertex
 // shader reads per-object transforms from ObjectBlock/SkinnedObjectBlock (binding 1) and
@@ -621,7 +622,7 @@ void main() {
 // Fragment hook: runs after finalColor/alpha computation, before output.
 //   Available mutable variables: finalColor (vec3), alpha (float).
 
-export const buildLambertVert = (customVertex?: string) => `#version 300 es
+export const buildLambertVert = (customVertex?: string, customUniformsDecl?: string) => `#version 300 es
 precision highp float;
 
 layout(location = 0) in vec3 a_position;
@@ -635,6 +636,7 @@ out vec3 v_worldPos;
 out vec3 v_normal;
 out vec2 v_uv;
 flat out float v_outlineFlag;
+${customUniformsDecl ?? ''}
 
 void main() {
   float flag = a_normal.w;
@@ -652,7 +654,7 @@ void main() {
 }
 `
 
-export const buildLambertSkinnedVert = (customVertex?: string) => `#version 300 es
+export const buildLambertSkinnedVert = (customVertex?: string, customUniformsDecl?: string) => `#version 300 es
 precision highp float;
 
 layout(location = 0) in vec3 a_position;
@@ -668,6 +670,7 @@ out vec3 v_worldPos;
 out vec3 v_normal;
 out vec2 v_uv;
 flat out float v_outlineFlag;
+${customUniformsDecl ?? ''}
 
 void main() {
   float flag = a_normal.w;
@@ -694,7 +697,11 @@ void main() {
 }
 `
 
-const _buildLambertCustomFrag = (objectBlock: string, customFragment?: string) => `#version 300 es
+const _buildLambertCustomFrag = (
+  objectBlock: string,
+  customFragment?: string,
+  customUniformsDecl?: string,
+) => `#version 300 es
 precision highp float;
 
 in vec3 v_worldPos;
@@ -710,6 +717,7 @@ uniform float u_opacity;
 uniform highp sampler2DShadow u_shadowMap;
 uniform bool u_receiveShadow;
 uniform float u_emissiveBrightness;
+${customUniformsDecl ?? ''}
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
@@ -741,13 +749,13 @@ void main() {
 }
 `
 
-export const buildLambertCustomFrag = (customFragment?: string) =>
-  _buildLambertCustomFrag(OBJECT_BLOCK, customFragment)
+export const buildLambertCustomFrag = (customFragment?: string, customUniformsDecl?: string) =>
+  _buildLambertCustomFrag(OBJECT_BLOCK, customFragment, customUniformsDecl)
 
-export const buildLambertSkinnedCustomFrag = (customFragment?: string) =>
-  _buildLambertCustomFrag(SKINNED_OBJECT_BLOCK, customFragment)
+export const buildLambertSkinnedCustomFrag = (customFragment?: string, customUniformsDecl?: string) =>
+  _buildLambertCustomFrag(SKINNED_OBJECT_BLOCK, customFragment, customUniformsDecl)
 
-export const buildBasicVert = (customVertex?: string) => `#version 300 es
+export const buildBasicVert = (customVertex?: string, customUniformsDecl?: string) => `#version 300 es
 precision highp float;
 
 layout(location = 0) in vec3 a_position;
@@ -760,6 +768,7 @@ ${OBJECT_BLOCK}
 out vec3 v_worldPos;
 out vec3 v_normal;
 out vec2 v_uv;
+${customUniformsDecl ?? ''}
 
 void main() {
   vec4 worldPos = u_worldMatrix * vec4(a_position, 1.0);
@@ -771,7 +780,7 @@ void main() {
 }
 `
 
-export const buildBasicSkinnedVert = (customVertex?: string) => `#version 300 es
+export const buildBasicSkinnedVert = (customVertex?: string, customUniformsDecl?: string) => `#version 300 es
 precision highp float;
 
 layout(location = 0) in vec3 a_position;
@@ -786,6 +795,7 @@ ${SKINNED_OBJECT_BLOCK}
 out vec3 v_worldPos;
 out vec3 v_normal;
 out vec2 v_uv;
+${customUniformsDecl ?? ''}
 
 void main() {
   mat4 skinMatrix =
@@ -803,7 +813,7 @@ void main() {
 }
 `
 
-export const buildBasicCustomFrag = (customFragment?: string) => `#version 300 es
+export const buildBasicCustomFrag = (customFragment?: string, customUniformsDecl?: string) => `#version 300 es
 precision highp float;
 
 in vec3 v_worldPos;
@@ -812,6 +822,7 @@ in vec2 v_uv;
 
 uniform vec3 u_baseColor;
 uniform float u_opacity;
+${customUniformsDecl ?? ''}
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;

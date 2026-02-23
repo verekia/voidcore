@@ -39,7 +39,8 @@
 //
 // Custom shader builders (buildLambertWGSL, buildBasicWGSL, etc.) generate shader source
 // with user-provided WGSL code injected at hook points. Variables at hook points use `var`
-// instead of `let` so the user code can mutate them.
+// instead of `let` so the user code can mutate them. Custom uniforms are declared as a
+// struct at @group(3) @binding(0), accessible as `uniforms.xxx` in both vertex and fragment.
 
 // ─── Shared WGSL blocks ──────────────────────────────────────────────
 
@@ -826,7 +827,11 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 // Fragment hook: runs after finalColor/alpha computation, before output.
 //   Available mutable variables: finalColor (vec3f), alpha (f32).
 
-export const buildLambertWGSL = (customVertex?: string, customFragment?: string) => /* wgsl */ `
+export const buildLambertWGSL = (
+  customVertex?: string,
+  customFragment?: string,
+  customUniformsDecl?: string,
+) => /* wgsl */ `
 ${FRAME_UNIFORMS}
 ${MATERIAL_UNIFORMS}
 ${OBJECT_UNIFORMS}
@@ -834,6 +839,7 @@ ${OBJECT_UNIFORMS}
 ${FRAME_BINDINGS}
 ${MATERIAL_BINDING}
 ${OBJECT_BINDING}
+${customUniformsDecl ?? ''}
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
@@ -904,7 +910,11 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
 }
 `
 
-export const buildLambertSkinnedWGSL = (customVertex?: string, customFragment?: string) => /* wgsl */ `
+export const buildLambertSkinnedWGSL = (
+  customVertex?: string,
+  customFragment?: string,
+  customUniformsDecl?: string,
+) => /* wgsl */ `
 ${FRAME_UNIFORMS}
 ${MATERIAL_UNIFORMS}
 ${SKINNED_OBJECT_UNIFORMS}
@@ -912,6 +922,7 @@ ${SKINNED_OBJECT_UNIFORMS}
 ${FRAME_BINDINGS}
 ${MATERIAL_BINDING}
 ${OBJECT_BINDING}
+${customUniformsDecl ?? ''}
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
@@ -993,7 +1004,11 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
 }
 `
 
-export const buildBasicWGSL = (customVertex?: string, customFragment?: string) => /* wgsl */ `
+export const buildBasicWGSL = (
+  customVertex?: string,
+  customFragment?: string,
+  customUniformsDecl?: string,
+) => /* wgsl */ `
 ${FRAME_UNIFORMS}
 ${MATERIAL_UNIFORMS}
 ${OBJECT_UNIFORMS}
@@ -1001,6 +1016,7 @@ ${OBJECT_UNIFORMS}
 ${FRAME_BINDINGS}
 ${MATERIAL_BINDING}
 ${OBJECT_BINDING}
+${customUniformsDecl ?? ''}
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
@@ -1043,7 +1059,11 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 }
 `
 
-export const buildBasicSkinnedWGSL = (customVertex?: string, customFragment?: string) => /* wgsl */ `
+export const buildBasicSkinnedWGSL = (
+  customVertex?: string,
+  customFragment?: string,
+  customUniformsDecl?: string,
+) => /* wgsl */ `
 ${FRAME_UNIFORMS}
 ${MATERIAL_UNIFORMS}
 ${SKINNED_OBJECT_UNIFORMS}
@@ -1051,6 +1071,7 @@ ${SKINNED_OBJECT_UNIFORMS}
 ${FRAME_BINDINGS}
 ${MATERIAL_BINDING}
 ${OBJECT_BINDING}
+${customUniformsDecl ?? ''}
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
