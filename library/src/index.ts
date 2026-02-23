@@ -69,6 +69,7 @@ export {
   useGLTF,
   useKTX2,
   useColoredGeometry,
+  useColoredStaticGeometry,
   useAnimations,
   type UseGLTFOptions,
   type ClonedMesh,

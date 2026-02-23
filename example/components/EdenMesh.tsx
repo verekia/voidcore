@@ -1,8 +1,8 @@
 import { Suspense, useMemo } from 'react'
 
-import { LambertMaterial, prebuildBVH, BakeShadows, useGLTF, useKTX2, useColoredGeometry } from 'voidcore'
+import { LambertMaterial, prebuildBVH, BakeShadows, useKTX2, useColoredStaticGeometry } from 'voidcore'
 
-import { staticBundleSrc, cityAoSrc } from './assets'
+import { cityAoSrc } from './assets'
 
 const EDEN_COLORS: [number, number, number][] = [
   [0.78, 0.44, 0.25],
@@ -40,22 +40,18 @@ const EDEN_PALETTE = EDEN_COLORS.map((color, i) => ({
 }))
 
 const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
-  const edenMesh = useGLTF(staticBundleSrc, { meshName: 'Eden' })
+  const geometry = useColoredStaticGeometry('Eden', EDEN_PALETTE)
   const aoTexture = useKTX2(cityAoSrc)
-  const coloredGeometry = useColoredGeometry(edenMesh.geometry, EDEN_PALETTE)
 
-  const { geometry, material } = useMemo(() => {
-    prebuildBVH(coloredGeometry)
+  const material = useMemo(() => {
+    prebuildBVH(geometry)
     onReady?.()
-    return {
-      geometry: coloredGeometry,
-      material: new LambertMaterial({
-        aoMap: aoTexture,
-        aoIntensity: 2,
-        emissiveBrightness: 0.5,
-      }),
-    }
-  }, [coloredGeometry, aoTexture, onReady])
+    return new LambertMaterial({
+      aoMap: aoTexture,
+      aoIntensity: 2,
+      emissiveBrightness: 0.5,
+    })
+  }, [geometry, aoTexture, onReady])
 
   return (
     <Suspense fallback={null}>
