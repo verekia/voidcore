@@ -1,6 +1,6 @@
 import { Suspense, useMemo } from 'react'
 
-import { LambertMaterial, bakePalette, mergeGeometries, prebuildBVH, BakeShadows, useGLTF, useKTX2 } from 'voidcore'
+import { LambertMaterial, bakePalette, prebuildBVH, BakeShadows, useGLTF, useKTX2 } from 'voidcore'
 
 import { staticBundleSrc, cityAoSrc } from './assets'
 
@@ -44,13 +44,8 @@ const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
   const aoTexture = useKTX2(cityAoSrc, '/basis-1.50/')
 
   const { geometry, material } = useMemo(() => {
-    const edenMeshes = gltf.meshes.filter(m => m.name === 'Eden')
-    for (let i = 0; i < edenMeshes.length; i++) {
-      const geom = edenMeshes[i]!.geometry
-      geom.materialIndices = new Uint8Array(geom.vertexCount).fill(i)
-    }
-    const merged = mergeGeometries(edenMeshes.map(m => m.geometry))
-    const geometry = bakePalette(merged, EDEN_PALETTE)
+    const edenMesh = gltf.meshes.find(m => m.name === 'Eden')!
+    const geometry = bakePalette(edenMesh.geometry, EDEN_PALETTE)
     prebuildBVH(geometry)
     onReady?.()
     return {
