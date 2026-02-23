@@ -512,9 +512,9 @@ const intersectMesh = (
   const ldy = m[1]! * worldDx + m[5]! * worldDy + m[9]! * worldDz
   const ldz = m[2]! * worldDx + m[6]! * worldDy + m[10]! * worldDz
 
-  const lidx = 1 / ldx,
-    lidy = 1 / ldy,
-    lidz = 1 / ldz
+  const lidx = 1 / (ldx || 1e-20),
+    lidy = 1 / (ldy || 1e-20),
+    lidz = 1 / (ldz || 1e-20)
 
   const bvh = getMeshBVH(mesh.geometry)
   const { floatNodes, intNodes, triOrder } = bvh
@@ -668,9 +668,9 @@ export class Raycaster {
       this.direction[1] = dy * inv
       this.direction[2] = dz * inv
     }
-    this._invDir[0] = 1 / this.direction[0]!
-    this._invDir[1] = 1 / this.direction[1]!
-    this._invDir[2] = 1 / this.direction[2]!
+    this._invDir[0] = 1 / (this.direction[0]! || 1e-20)
+    this._invDir[1] = 1 / (this.direction[1]! || 1e-20)
+    this._invDir[2] = 1 / (this.direction[2]! || 1e-20)
   }
 
   /**
@@ -708,9 +708,9 @@ export class Raycaster {
       this.direction[1] = wy * inv
       this.direction[2] = wz * inv
     }
-    this._invDir[0] = 1 / this.direction[0]!
-    this._invDir[1] = 1 / this.direction[1]!
-    this._invDir[2] = 1 / this.direction[2]!
+    this._invDir[0] = 1 / (this.direction[0]! || 1e-20)
+    this._invDir[1] = 1 / (this.direction[1]! || 1e-20)
+    this._invDir[2] = 1 / (this.direction[2]! || 1e-20)
   }
 
   /**

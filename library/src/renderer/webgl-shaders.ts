@@ -8,8 +8,10 @@
 //   Lambert          – Diffuse lighting (ambient + directional light × surface normal)
 //                      with shadow map sampling (PCF 3×3).
 //   Lambert VC       – Same as Lambert but reads per-vertex color and emissive attributes
-//                      (baked from palette via bakePalette()). Also samples the AO map and
-//                      per-material tiled AO via a 2D array texture (world-space XY tiling).
+//                      (baked from palette via bakePalette()). Also samples the AO map,
+//                      per-material tiled AO via a 2D array texture (world-space XY tiling),
+//                      and per-material tiled normal maps via a second 2D array texture
+//                      with cotangent-frame normal mapping (screen-space derivatives).
 //   Lambert Textured – Same as Lambert but also samples color map and AO map textures.
 //   Lambert Skinned  – Same lighting + shadows, but vertices are deformed by bone matrices.
 //   Lambert Skinned VC – Skinned variant with vertex colors and emissive.
@@ -310,6 +312,7 @@ layout(location = 1) in vec4 a_normal;
 layout(location = 2) in vec2 a_uv;
 layout(location = 3) in vec4 a_color;
 layout(location = 6) in vec4 a_emissive;
+layout(location = 7) in vec4 a_tiledNormal;
 
 ${FRAME_BLOCK}
 ${OBJECT_BLOCK}
@@ -320,6 +323,7 @@ out vec2 v_uv;
 flat out float v_outlineFlag;
 out vec4 v_color;
 out vec4 v_emissive;
+out vec4 v_tiledNormal;
 
 void main() {
   float flag = a_normal.w;
@@ -334,6 +338,7 @@ void main() {
   v_uv = a_uv;
   v_color = a_color;
   v_emissive = a_emissive;
+  v_tiledNormal = a_tiledNormal;
   gl_Position = u_viewProjection * worldPos;
 }
 `
@@ -347,6 +352,7 @@ in vec2 v_uv;
 flat in float v_outlineFlag;
 in vec4 v_color;
 in vec4 v_emissive;
+in vec4 v_tiledNormal;
 
 ${FRAME_BLOCK}
 ${objectBlock}
@@ -360,6 +366,7 @@ uniform sampler2D u_aoMap;
 uniform float u_aoIntensity;
 uniform highp sampler2DArray u_tiledAoArray;
 uniform float u_tiledAoScales[16];
+uniform highp sampler2DArray u_tiledNormalArray;
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
@@ -387,6 +394,31 @@ void main() {
     float scale = u_tiledAoScales[layer];
     float tiledSample = texture(u_tiledAoArray, vec3(v_uv * scale, float(layer))).r;
     tiledAo = mix(1.0, tiledSample, tiledAoIntensity);
+  }
+
+  // Tiled normals: cotangent frame normal mapping
+  uint tnLayerRaw = uint(round(v_tiledNormal.x * 255.0));
+  if (tnLayerRaw > 0u) {
+    float tnIntensity = v_tiledNormal.y;
+    float tnScale = v_tiledNormal.z;
+    uint tnLayer = tnLayerRaw - 1u;
+    vec2 tnUV = v_uv * tnScale;
+    vec3 tnSample = texture(u_tiledNormalArray, vec3(tnUV, float(tnLayer))).rgb;
+    vec3 tnNormal = tnSample * 2.0 - 1.0;
+    // Build cotangent frame from screen-space derivatives
+    vec3 dp1 = dFdx(v_worldPos);
+    vec3 dp2 = dFdy(v_worldPos);
+    vec2 duv1 = dFdx(tnUV);
+    vec2 duv2 = dFdy(tnUV);
+    vec3 dp2perp = cross(dp2, normal);
+    vec3 dp1perp = cross(normal, dp1);
+    vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+    vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+    float invmax = inversesqrt(max(dot(T, T), dot(B, B)));
+    vec3 tbn_T = T * invmax;
+    vec3 tbn_B = B * invmax;
+    vec3 perturbedNormal = normalize(tbn_T * tnNormal.x + tbn_B * tnNormal.y + normal * tnNormal.z);
+    normal = normalize(mix(normal, perturbedNormal, tnIntensity));
   }
 
   float ao = mix(1.0, texture(u_aoMap, v_uv).r, u_aoIntensity) * tiledAo;
@@ -418,6 +450,7 @@ layout(location = 3) in vec4 a_color;
 layout(location = 4) in vec4 a_joints;
 layout(location = 5) in vec4 a_weights;
 layout(location = 6) in vec4 a_emissive;
+layout(location = 7) in vec4 a_tiledNormal;
 
 ${FRAME_BLOCK}
 ${SKINNED_OBJECT_BLOCK}
@@ -428,6 +461,7 @@ out vec2 v_uv;
 flat out float v_outlineFlag;
 out vec4 v_color;
 out vec4 v_emissive;
+out vec4 v_tiledNormal;
 
 void main() {
   float flag = a_normal.w;
@@ -451,6 +485,7 @@ void main() {
   v_uv = a_uv;
   v_color = a_color;
   v_emissive = a_emissive;
+  v_tiledNormal = a_tiledNormal;
   gl_Position = u_viewProjection * vec4(worldPos, 1.0);
 }
 `
