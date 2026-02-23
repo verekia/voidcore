@@ -1,13 +1,15 @@
 # voidcore
 
-A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 support.
+A minimal purpose-built 3D graphics engine written in TypeScript with WebGPU and WebGL2 support. The goal of this engine is to replace Three.js and React Three Fiber (love them both!) with a minimal subset of feature that my game needs, with better performance.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/verekia/voidcore/refs/heads/main/logo.webp" width="160">
 </p>
 
 > [!IMPORTANT]
-> This engine is still experimental and developed specifically for [**Mana Blade**](https://manablade.com/). It is not meant to be used by other projects at the moment and its API can change at any time.
+> This engine is developed specifically for [**Mana Blade**](https://manablade.com/). It is not meant to be used by other projects at the moment and its API can change at any time.
+
+The [demo](https://engine.v1v2.io/) renders around 250 characters, positioned by 250 raycasts per frame, all independently animated, with no instancing. It has fairly good performance even on older phones. In practice I have at most 50 characters rendered at the same time in the game so this is good enough.
 
 ## Features
 

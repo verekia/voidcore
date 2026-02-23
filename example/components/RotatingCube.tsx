@@ -14,7 +14,7 @@ const RotatingCube = () => {
   })
 
   return (
-    <mesh ref={meshRef} position={[80, 0, 60]} scale={5} castShadow>
+    <mesh ref={meshRef} position={[80, 0, 60]} scale={5}>
       <boxGeometry args={[{ width: 10, height: 10, depth: 10 }]} />
       <lambertMaterial args={[{ color: [0.2, 0.6, 1.0] }]} />
       <Html center>

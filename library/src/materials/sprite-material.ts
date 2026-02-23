@@ -30,7 +30,7 @@ export class SpriteMaterial extends Material {
   constructor(opts: SpriteMaterialOptions = {}) {
     super('basic', {
       transparent: true,
-      side: 'double',
+      side: 'front',
       ...opts,
     })
     this.rotation = opts.rotation ?? 0
