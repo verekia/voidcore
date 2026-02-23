@@ -1,4 +1,4 @@
-# VoidCore
+# voidcore
 
 A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 support.
 
@@ -7,7 +7,7 @@ A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 sup
 </p>
 
 > [!IMPORTANT]
-> This engine is developed specifically for [**Mana Blade**](https://manablade.com/) and is not meant to be used by other projects at the moment.
+> This engine is still experimental and developed specifically for [**Mana Blade**](https://manablade.com/). It is not meant to be used by other projects at the moment and its API can change at any time.
 
 ## Features
 
