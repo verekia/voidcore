@@ -31,6 +31,12 @@
 //   Bloom Upsample   – 9-tap tent filter that blurs back up, additively blending.
 //   Blit             – Combines the scene color + bloom and applies gamma correction.
 //
+// Custom shader builders (buildLambertVert, buildBasicVert, buildLambertCustomFrag, etc.)
+// generate shader source with user-provided GLSL code injected at hook points. The basic
+// custom vert shaders use vec4 a_normal to match the snorm8x4 attribute layout, and expose
+// v_worldPos/v_normal so custom code can access them even though the standard basic shader
+// does not use lighting.
+//
 // Data flow: CPU uploads uniform buffers (UBOs) with matrices and light info. The vertex
 // shader reads per-object transforms from ObjectBlock/SkinnedObjectBlock (binding 1) and
 // per-frame data (view-projection, lights) from FrameBlock (binding 0).
@@ -569,6 +575,218 @@ layout(location = 1) out vec4 fragEmissive;
 void main() {
   fragColor = vec4(u_baseColor, u_opacity);
   fragEmissive = vec4(0.0, 0.0, 0.0, u_opacity);
+}
+`
+
+// ─── Custom shader builders ──────────────────────────────────────────
+//
+// These functions inject user-provided GLSL code snippets into the standard material shaders.
+// Vertex hook: runs after v_worldPos/v_normal/v_uv computation, before gl_Position.
+//   Available mutable variables: v_worldPos (vec3), v_normal (vec3), v_uv (vec2).
+// Fragment hook: runs after finalColor/alpha computation, before output.
+//   Available mutable variables: finalColor (vec3), alpha (float).
+
+export const buildLambertVert = (customVertex?: string) => `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec4 a_normal;
+layout(location = 2) in vec2 a_uv;
+
+${FRAME_BLOCK}
+${OBJECT_BLOCK}
+
+out vec3 v_worldPos;
+out vec3 v_normal;
+out vec2 v_uv;
+flat out float v_outlineFlag;
+
+void main() {
+  float flag = a_normal.w;
+  v_outlineFlag = flag;
+  vec3 pos = a_position;
+  if (flag > 0.5) {
+    pos = pos + normalize(a_normal.xyz) * u_outlineColorAndThickness.w;
+  }
+  vec4 worldPos = u_worldMatrix * vec4(pos, 1.0);
+  v_worldPos = worldPos.xyz;
+  v_normal = normalize((u_normalMatrix * vec4(a_normal.xyz, 0.0)).xyz);
+  v_uv = a_uv;
+  ${customVertex ?? ''}
+  gl_Position = u_viewProjection * vec4(v_worldPos, 1.0);
+}
+`
+
+export const buildLambertSkinnedVert = (customVertex?: string) => `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec4 a_normal;
+layout(location = 2) in vec2 a_uv;
+layout(location = 3) in vec4 a_joints;
+layout(location = 4) in vec4 a_weights;
+
+${FRAME_BLOCK}
+${SKINNED_OBJECT_BLOCK}
+
+out vec3 v_worldPos;
+out vec3 v_normal;
+out vec2 v_uv;
+flat out float v_outlineFlag;
+
+void main() {
+  float flag = a_normal.w;
+  v_outlineFlag = flag;
+
+  mat4 skinMatrix =
+    a_weights.x * u_boneMatrices[int(a_joints.x)] +
+    a_weights.y * u_boneMatrices[int(a_joints.y)] +
+    a_weights.z * u_boneMatrices[int(a_joints.z)] +
+    a_weights.w * u_boneMatrices[int(a_joints.w)];
+
+  vec4 skinnedPos = skinMatrix * vec4(a_position, 1.0);
+  vec3 skinnedNorm = normalize((skinMatrix * vec4(a_normal.xyz, 0.0)).xyz);
+
+  vec3 worldPos = skinnedPos.xyz;
+  if (flag > 0.5) {
+    worldPos = worldPos + skinnedNorm * u_outlineColorAndThickness.w;
+  }
+  v_worldPos = worldPos;
+  v_normal = skinnedNorm;
+  v_uv = a_uv;
+  ${customVertex ?? ''}
+  gl_Position = u_viewProjection * vec4(v_worldPos, 1.0);
+}
+`
+
+const _buildLambertCustomFrag = (objectBlock: string, customFragment?: string) => `#version 300 es
+precision highp float;
+
+in vec3 v_worldPos;
+in vec3 v_normal;
+in vec2 v_uv;
+flat in float v_outlineFlag;
+
+${FRAME_BLOCK}
+${objectBlock}
+
+uniform vec3 u_baseColor;
+uniform float u_opacity;
+uniform highp sampler2DShadow u_shadowMap;
+uniform bool u_receiveShadow;
+uniform float u_emissiveBrightness;
+
+layout(location = 0) out vec4 fragColor;
+layout(location = 1) out vec4 fragEmissive;
+
+${SHADOW_FUNCTIONS}
+
+void main() {
+  if (v_outlineFlag > 0.5) {
+    if (gl_FrontFacing || u_outlineColorAndThickness.w <= 0.0) discard;
+    fragColor = vec4(u_outlineColorAndThickness.xyz, 1.0);
+    fragEmissive = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
+
+  vec3 normal = normalize(v_normal);
+  vec3 baseColor = u_baseColor;
+
+  vec3 ambient = u_ambientColor * u_ambientIntensity;
+  float NdotL = max(dot(normal, u_lightDirection), 0.0);
+  float shadow = u_receiveShadow ? sampleShadow(v_worldPos, NdotL) : 1.0;
+  vec3 diffuse = u_lightColor * u_lightIntensity * NdotL * shadow;
+
+  vec3 finalColor = baseColor * (ambient + diffuse);
+  float alpha = u_opacity;
+  ${customFragment ?? ''}
+
+  fragColor = vec4(finalColor, alpha);
+  fragEmissive = vec4(0.0, 0.0, 0.0, alpha);
+}
+`
+
+export const buildLambertCustomFrag = (customFragment?: string) =>
+  _buildLambertCustomFrag(OBJECT_BLOCK, customFragment)
+
+export const buildLambertSkinnedCustomFrag = (customFragment?: string) =>
+  _buildLambertCustomFrag(SKINNED_OBJECT_BLOCK, customFragment)
+
+export const buildBasicVert = (customVertex?: string) => `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec4 a_normal;
+layout(location = 2) in vec2 a_uv;
+
+${FRAME_BLOCK}
+${OBJECT_BLOCK}
+
+out vec3 v_worldPos;
+out vec3 v_normal;
+out vec2 v_uv;
+
+void main() {
+  vec4 worldPos = u_worldMatrix * vec4(a_position, 1.0);
+  v_worldPos = worldPos.xyz;
+  v_normal = normalize((u_normalMatrix * vec4(a_normal.xyz, 0.0)).xyz);
+  v_uv = a_uv;
+  ${customVertex ?? ''}
+  gl_Position = u_viewProjection * vec4(v_worldPos, 1.0);
+}
+`
+
+export const buildBasicSkinnedVert = (customVertex?: string) => `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec4 a_normal;
+layout(location = 2) in vec2 a_uv;
+layout(location = 3) in vec4 a_joints;
+layout(location = 4) in vec4 a_weights;
+
+${FRAME_BLOCK}
+${SKINNED_OBJECT_BLOCK}
+
+out vec3 v_worldPos;
+out vec3 v_normal;
+out vec2 v_uv;
+
+void main() {
+  mat4 skinMatrix =
+    a_weights.x * u_boneMatrices[int(a_joints.x)] +
+    a_weights.y * u_boneMatrices[int(a_joints.y)] +
+    a_weights.z * u_boneMatrices[int(a_joints.z)] +
+    a_weights.w * u_boneMatrices[int(a_joints.w)];
+
+  vec4 skinnedPos = skinMatrix * vec4(a_position, 1.0);
+  v_worldPos = skinnedPos.xyz;
+  v_normal = normalize((skinMatrix * vec4(a_normal.xyz, 0.0)).xyz);
+  v_uv = a_uv;
+  ${customVertex ?? ''}
+  gl_Position = u_viewProjection * vec4(v_worldPos, 1.0);
+}
+`
+
+export const buildBasicCustomFrag = (customFragment?: string) => `#version 300 es
+precision highp float;
+
+in vec3 v_worldPos;
+in vec3 v_normal;
+in vec2 v_uv;
+
+uniform vec3 u_baseColor;
+uniform float u_opacity;
+
+layout(location = 0) out vec4 fragColor;
+layout(location = 1) out vec4 fragEmissive;
+
+void main() {
+  vec3 finalColor = u_baseColor;
+  float alpha = u_opacity;
+  ${customFragment ?? ''}
+  fragColor = vec4(finalColor, alpha);
+  fragEmissive = vec4(0.0, 0.0, 0.0, alpha);
 }
 `
 

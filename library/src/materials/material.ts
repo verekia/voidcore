@@ -31,10 +31,26 @@
 //   - "back"   – Only back faces are visible (front faces culled).
 //   - "double" – Both faces are visible (no culling).
 //
+// Custom shaders let users inject code snippets into the vertex and fragment stages of
+// existing materials. The engine inserts the snippet at a well-defined hook point so users
+// can modify worldPos/normal/uv (vertex) or finalColor/alpha (fragment) without writing a
+// full shader from scratch. Both WGSL (WebGPU) and GLSL (WebGL2) snippets can be provided.
+//
 // new BasicMaterial()   – Unlit material (ignores lights).
 // new LambertMaterial() – Diffuse-lit material (reacts to lights).
 
 import type { Texture } from './texture'
+
+export interface CustomShader {
+  /** WGSL code injected into the vertex shader. Can read/write: out.worldPos, out.normal, out.uv. */
+  vertexWGSL?: string
+  /** WGSL code injected into the fragment shader. Can read/write: finalColor (vec3f), alpha (f32). */
+  fragmentWGSL?: string
+  /** GLSL code injected into the vertex shader. Can read/write: v_worldPos, v_normal, v_uv. */
+  vertexGLSL?: string
+  /** GLSL code injected into the fragment shader. Can read/write: finalColor (vec3), alpha (float). */
+  fragmentGLSL?: string
+}
 
 export interface PaletteEntry {
   color: [number, number, number]
@@ -71,9 +87,13 @@ export class Material {
   aoMap?: Texture
   aoIntensity: number
 
+  // Custom shaders
+  customShader?: CustomShader
+
   // Computed
   _hasEmissive = false
   _hasTextures = false
+  _hasCustomShader = false
   needsUpdate = true
 
   constructor(type: MaterialType, opts: MaterialOptions = {}) {
@@ -90,6 +110,11 @@ export class Material {
     this.aoMap = opts.aoMap
     this.aoIntensity = opts.aoIntensity ?? 1.0
     this._hasTextures = !!(opts.colorMap || opts.aoMap)
+
+    if (opts.customShader) {
+      this.customShader = opts.customShader
+      this._hasCustomShader = true
+    }
 
     if (opts.palette) {
       this.palette = opts.palette
@@ -109,6 +134,7 @@ export interface MaterialOptions {
   colorMap?: Texture
   aoMap?: Texture
   aoIntensity?: number
+  customShader?: CustomShader
 }
 
 export class BasicMaterial extends Material {

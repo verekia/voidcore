@@ -458,6 +458,14 @@ interface MaterialOptions {
   colorMap?: Texture                  // diffuse/albedo texture
   aoMap?: Texture                     // ambient occlusion texture (red channel)
   aoIntensity?: number                // AO influence (default: 1)
+  customShader?: CustomShader         // inject custom shader code snippets
+}
+
+interface CustomShader {
+  vertexWGSL?: string    // WGSL code injected into vertex shader
+  fragmentWGSL?: string  // WGSL code injected into fragment shader
+  vertexGLSL?: string    // GLSL code injected into vertex shader
+  fragmentGLSL?: string  // GLSL code injected into fragment shader
 }
 ```
 
@@ -473,7 +481,18 @@ interface MaterialOptions {
 | `colorMap`           | `Texture \| undefined`          |
 | `aoMap`              | `Texture \| undefined`          |
 | `aoIntensity`        | `number`                        |
+| `customShader`       | `CustomShader \| undefined`     |
 | `needsUpdate`        | `boolean`                       |
+
+**Custom Shader Hook Variables**
+
+| Stage    | Variable      | Type (WGSL / GLSL)       | Description                            |
+| -------- | ------------- | ------------------------ | -------------------------------------- |
+| Vertex   | `out.worldPos` / `v_worldPos` | `vec3<f32>` / `vec3` | World-space position (read/write)    |
+| Vertex   | `out.normal` / `v_normal`     | `vec3<f32>` / `vec3` | World-space normal (read/write)      |
+| Vertex   | `out.uv` / `v_uv`            | `vec2<f32>` / `vec2` | UV coordinates (read/write)          |
+| Fragment | `finalColor`  | `vec3<f32>` / `vec3`     | Output color before alpha premultiply  |
+| Fragment | `alpha`       | `f32` / `float`          | Output alpha                           |
 
 #### Texture
 

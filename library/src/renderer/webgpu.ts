@@ -33,6 +33,9 @@
 //                    texture sampled with world-space XY coordinates (repeat wrapping).
 //   Vertex packing – Normals use snorm8x4, UVs use float16x2, bone weights use unorm8x4,
 //                    vertex colors use unorm8x4, emissive uses float16x4.
+//   Custom shaders – Materials with customShader get dedicated pipelines (cached per-material
+//                    via WeakMap). Custom shader snippets are injected into the standard
+//                    lambert/basic shaders at vertex and fragment hook points.
 //
 // WebGPURenderer.create()  – Async factory that initializes the GPU device and pipelines.
 // WebGPURenderer.render()  – Draws one frame.
@@ -75,6 +78,10 @@ import {
   BLOOM_DOWN_WGSL,
   BLOOM_UP_WGSL,
   BLIT_WGSL,
+  buildLambertWGSL,
+  buildLambertSkinnedWGSL,
+  buildBasicWGSL,
+  buildBasicSkinnedWGSL,
 } from './webgpu-shaders'
 
 import type { Geometry } from '../geometry/geometry'
@@ -253,6 +260,9 @@ export class WebGPURenderer implements Renderer {
   // Pipeline cache for per-material side (cull mode) variants
   // Key: basePipelineId << 2 | cullModeId (0=back, 1=front, 2=none)
   private _pipelineCache = new Map<number, GPURenderPipeline>()
+
+  // Per-material custom shader pipeline cache (WeakMap for automatic GC)
+  private _customPipelineCache = new WeakMap<Material, Map<number, GPURenderPipeline>>()
 
   // Bind group layouts
   private frameBGL: GPUBindGroupLayout
@@ -861,6 +871,82 @@ export class WebGPURenderer implements Renderer {
 
     this._pipelineCache.set(key, cached)
     return cached
+  }
+
+  /**
+   * Returns a cached GPU pipeline for a material with custom shaders.
+   * Config key encodes: isSkinned | isTransparent | cullMode.
+   */
+  private _getCustomPipeline(
+    material: Material,
+    isSkinned: boolean,
+    isTransparent: boolean,
+    cullMode: GPUCullMode,
+  ): GPURenderPipeline {
+    const cullId = cullMode === 'back' ? 0 : cullMode === 'front' ? 1 : 2
+    const configKey = (isSkinned ? 1 : 0) | (isTransparent ? 2 : 0) | (cullId << 2)
+
+    let matCache = this._customPipelineCache.get(material)
+    if (!matCache) {
+      matCache = new Map()
+      this._customPipelineCache.set(material, matCache)
+    }
+    const cached = matCache.get(configKey)
+    if (cached) return cached
+
+    const device = this.device
+    const cs = material.customShader!
+
+    // Build shader source
+    let shaderCode: string
+    if (material.type === 'lambert') {
+      shaderCode = isSkinned
+        ? buildLambertSkinnedWGSL(cs.vertexWGSL, cs.fragmentWGSL)
+        : buildLambertWGSL(cs.vertexWGSL, cs.fragmentWGSL)
+    } else {
+      shaderCode = isSkinned
+        ? buildBasicSkinnedWGSL(cs.vertexWGSL, cs.fragmentWGSL)
+        : buildBasicWGSL(cs.vertexWGSL, cs.fragmentWGSL)
+    }
+
+    const bindGroupLayouts = [
+      this.frameBGL,
+      this.materialBGL,
+      isSkinned ? this.skinnedObjectBGL : this.objectBGL,
+    ]
+    const layout = device.createPipelineLayout({ bindGroupLayouts })
+    const buffers = isSkinned ? SKINNED_VERTEX_BUFFER_LAYOUT : VERTEX_BUFFER_LAYOUT
+
+    let targets: GPUColorTargetState[]
+    if (isTransparent) {
+      const blend: GPUBlendState = {
+        color: { operation: 'add', srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+        alpha: { operation: 'add', srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+      }
+      targets = [
+        { format: 'rgba8unorm', blend },
+        { format: 'rgba16float', blend },
+      ]
+    } else {
+      targets = [{ format: 'rgba8unorm' }, { format: 'rgba16float' }]
+    }
+
+    const module = device.createShaderModule({ code: shaderCode })
+    const pipeline = device.createRenderPipeline({
+      layout,
+      vertex: { module, entryPoint: 'vs_main', buffers },
+      fragment: { module, entryPoint: 'fs_main', targets },
+      primitive: { topology: 'triangle-list', cullMode, frontFace: 'ccw' },
+      depthStencil: {
+        format: 'depth24plus',
+        depthWriteEnabled: !isTransparent,
+        depthCompare: 'less-equal',
+      },
+      multisample: { count: this.samples },
+    })
+
+    matCache.set(configKey, pipeline)
+    return pipeline
   }
 
   private _ensureGPUTexture(tex: Texture): { texture: GPUTexture; view: GPUTextureView } {
@@ -2420,9 +2506,12 @@ export class WebGPURenderer implements Renderer {
       if (mesh._outlineThickness > 0 && mesh.material.type === 'lambert') cullMode = 'none'
 
       const hasVC = !!mesh.geometry.colors && mesh.material.type === 'lambert'
+      const hasCustom = !hasVC && mesh.material._hasCustomShader
 
       let pipeline: GPURenderPipeline
-      if (cullMode !== 'back') {
+      if (hasCustom) {
+        pipeline = this._getCustomPipeline(mesh.material, mesh._isSkinned, false, cullMode)
+      } else if (cullMode !== 'back') {
         // Non-default cull mode: use lazy pipeline cache
         let pipelineType: number
         if (hasVC) {
@@ -2449,7 +2538,7 @@ export class WebGPURenderer implements Renderer {
       }
       if (hasVC) {
         scenePass.setBindGroup(3, this._ensureVCTextureBindGroup(mesh.material, mesh.geometry))
-      } else if (mesh.material._hasTextures && !mesh._isSkinned) {
+      } else if (!hasCustom && mesh.material._hasTextures && !mesh._isSkinned) {
         scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))
       }
       drawMeshGPU(scenePass, mesh, pipeline)
@@ -2467,9 +2556,12 @@ export class WebGPURenderer implements Renderer {
       if (mesh._outlineThickness > 0 && mesh.material.type === 'lambert') cullMode = 'none'
 
       const hasVC = !!mesh.geometry.colors && mesh.material.type === 'lambert'
+      const hasCustom = !hasVC && mesh.material._hasCustomShader
 
       let pipeline: GPURenderPipeline
-      if (cullMode !== 'none') {
+      if (hasCustom) {
+        pipeline = this._getCustomPipeline(mesh.material, mesh._isSkinned, true, cullMode)
+      } else if (cullMode !== 'none') {
         // Non-default cull mode for transparent: use lazy pipeline cache
         let pipelineType: number
         if (hasVC) {
@@ -2499,7 +2591,7 @@ export class WebGPURenderer implements Renderer {
       }
       if (hasVC) {
         scenePass.setBindGroup(3, this._ensureVCTextureBindGroup(mesh.material, mesh.geometry))
-      } else if (mesh.material._hasTextures && !mesh._isSkinned) {
+      } else if (!hasCustom && mesh.material._hasTextures && !mesh._isSkinned) {
         scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))
       }
       drawMeshGPU(scenePass, mesh, pipeline)

@@ -32,7 +32,7 @@ import type {
   CapsuleGeometryOptions,
   CircleGeometryOptions,
 } from '../geometry/primitives'
-import type { Material, MaterialOptions, MaterialSide, PaletteEntry } from '../materials/material'
+import type { CustomShader, Material, MaterialOptions, MaterialSide, PaletteEntry } from '../materials/material'
 import type { CameraOptions } from '../scene/camera'
 import type { AmbientLightOptions, DirectionalLightOptions } from '../scene/light'
 import type { MeshOutline } from '../scene/mesh'
@@ -144,6 +144,7 @@ export interface MaterialProps extends BaseProps {
   opacity?: number
   transparent?: boolean
   side?: MaterialSide
+  customShader?: CustomShader
 }
 
 export interface PrimitiveProps extends NodeProps {

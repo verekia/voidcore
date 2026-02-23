@@ -95,6 +95,14 @@ export const applyProps = (
       continue
     }
 
+    // Custom shader assignment on materials
+    if (key === 'customShader') {
+      obj.customShader = newVal
+      obj._hasCustomShader = !!newVal
+      obj.needsUpdate = true
+      continue
+    }
+
     // Direct assignments: visible, castShadow, receiveShadow, name, intensity, fov, near, far, etc.
     if (key in obj) {
       obj[key] = newVal
