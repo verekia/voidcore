@@ -18,16 +18,16 @@ A performant 3D graphics engine written in TypeScript with WebGPU and WebGL2 sup
 - **glTF/GLB loading** – Import 3D models with Draco compression support
 - **KTX2 textures** – Load Basis Universal compressed textures (ETC1S/UASTC) via WASM transcoder, with automatic transcoding to GPU-native formats (ASTC, BC7, BC3, ETC2) based on device support
 - **Material system** – Basic (unlit) and Lambert (diffuse) shading with palette support, opacity, transparency, color maps, AO maps, and per-material face culling (`side: 'front'`/`'back'`/`'double'`)
-- **Mesh outlines** – Inverted hull outlines via `outline` option (thickness + color), works with static and skinned meshes
+- **Mesh outlines** – Shader-based inverted hull outlines via `outline` option (thickness + color)
 - **Sorted alpha blending** – Back-to-front transparent mesh rendering with premultiplied alpha (WebGPU)
 - **Shadow maps** – Single shadow map with PCF 3×3 filtering, light-owned configuration, shadow baking for static scenes
 - **Bloom post-processing** – Multi-level downsample/upsample with Karis average
 - **Frustum culling** – AABB-based visibility culling with Gribb-Hartmann plane extraction
 - **Distance culling** – Per-mesh `maxDistance` to hide meshes beyond a camera distance threshold
-- **Raycasting** – BVH-accelerated ray-mesh intersection for mouse picking
+- **Raycasting** – BVH-accelerated raycasts
 - **DPR limiting** – Configurable max device pixel ratio (1.25 mobile / 1.5 desktop default)
 - **Priority scheduler** – Single rAF loop with priority-ordered callbacks and FPS capping
-- **HTML overlay** – DOM elements tracking 3D world positions with dirty checking, depth z-index, distance scaling
+- **HTML overlay** – DOM elements tracking 3D world positions with depth z-index and distance scaling
 - **Orbit controls** – Mouse/touch camera controls with damping and inertia
 - **Zero-allocation math** – Float32Array-backed vectors, matrices, and quaternions (configurable to Float16Array via `floatPrecision` option)
 - **Z-up coordinate system** – Right-handed, Z-up convention throughout
