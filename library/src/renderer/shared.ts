@@ -60,14 +60,19 @@ import type { SortState } from './sort'
 /**
  * Find the index of the first transparent mesh in the sorted draw list.
  * Transparent meshes have bit 30 set in their sort key, so they sort after all opaques.
+ * Uses binary search since keys are sorted (O(log n) instead of O(n) linear scan).
  * Returns meshCount if no transparent meshes exist.
  */
 export const findTransparentStart = (state: SortState, meshCount: number): number => {
   const { keys, indices } = state
-  for (let i = 0; i < meshCount; i++) {
-    if (keys[indices[i]!]! >>> 30) return i
+  let lo = 0
+  let hi = meshCount
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (keys[indices[mid]!]! >>> 30) hi = mid
+    else lo = mid + 1
   }
-  return meshCount
+  return lo
 }
 
 /** Default max DPR: 1.25 on mobile (coarse pointer), 1.5 on desktop. */

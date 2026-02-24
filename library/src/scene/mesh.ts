@@ -34,6 +34,9 @@ export interface MeshOutline {
   maxDistance?: number
 }
 
+// Default outline color (shared reference, avoids allocation per getter call)
+const _defaultOutlineColor: [number, number, number] = [0, 0, 0]
+
 export class Mesh extends Node {
   geometry!: Geometry
   material!: Material
@@ -59,8 +62,8 @@ export class Mesh extends Node {
 
   /** Resolved outline color (default black). */
   get _outlineColor(): [number, number, number] {
-    if (this.outline == null || typeof this.outline === 'number') return [0, 0, 0]
-    return this.outline.color ?? [0, 0, 0]
+    if (this.outline == null || typeof this.outline === 'number') return _defaultOutlineColor
+    return this.outline.color ?? _defaultOutlineColor
   }
 
   /** Resolved outline max distance (0 = no distance culling, default 1000). */
