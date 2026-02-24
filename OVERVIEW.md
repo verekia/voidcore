@@ -456,7 +456,7 @@ The format priority is: ASTC 4×4 > BC7 > ETC2 RGBA > BC3 > RGBA8 (uncompressed 
 
 ## Raycasting and BVH
 
-**Raycasting** (`raycasting/index.ts`) shoots an invisible ray into the 3D scene and finds which triangles it intersects. This is used for mouse picking (what did the user click?), hit detection, and spatial queries.
+**Raycasting** (`raycasting/index.ts`) shoots an invisible ray into the 3D scene and finds which triangles it intersects. Common uses include collision detection, line-of-sight checks, ground placement (projecting objects onto terrain), pseudo-physics (e.g. gravity via downward rays), and mouse/pointer picking.
 
 ### The Problem
 
@@ -475,7 +475,7 @@ VoidCore's BVH uses **binned SAH** (Surface Area Heuristic) for construction: at
 
 ### Zero-Allocation Raycasting
 
-For per-frame raycasts (e.g., continuous pointer tracking), you can pre-allocate hit objects with `createRaycastHit()` and pass them as a target array. The raycaster writes into these pre-allocated objects and returns the hit count instead of allocating new arrays — eliminating GC pressure in the hot path.
+For per-frame raycasts (e.g., collision tests, ground snapping, continuous pointer tracking), you can pre-allocate hit objects with `createRaycastHit()` and pass them as a target array. The raycaster writes into these pre-allocated objects and returns the hit count instead of allocating new arrays — eliminating GC pressure in the hot path.
 
 ---
 
@@ -569,7 +569,7 @@ The resulting screen position is applied via a CSS `translate3d` transform (GPU-
 
 ## React Bindings
 
-VoidCore includes an optional declarative React layer that maps JSX elements to engine objects. This lets you describe 3D scenes the same way you describe DOM UIs.
+VoidCore includes an optional declarative React layer that maps JSX elements to engine objects, based on [React Three Fiber](https://github.com/pmndrs/react-three-fiber)'s API design. This lets you describe 3D scenes the same way you describe DOM UIs.
 
 ### Custom Reconciler
 
@@ -658,3 +658,9 @@ For static scenes, the shadow map is rendered once and frozen, eliminating the e
 ### DPR Limiting
 
 High-DPI displays (Retina, 4K) have pixel ratios of 2–3×, meaning the GPU must shade 4–9× as many pixels. VoidCore defaults to capping the effective DPR (1.25 on mobile, 1.5 on desktop) for a practical balance between visual quality and performance.
+
+---
+
+## Credits
+
+This codebase was entirely AI-generated. While it is impossible to pinpoint exactly what other projects VoidCore takes inspiration from, it is clearly standing on the shoulders of [Three.js](https://threejs.org/), [React Three Fiber](https://github.com/pmndrs/react-three-fiber), and [three-mesh-bvh](https://github.com/gkjohnson/three-mesh-bvh). Huge thanks to the authors and contributors of these projects for paving the way.

@@ -1,8 +1,9 @@
 // Reconciler – Custom React reconciler for VoidCore's scene graph.
 //
-// Uses react-reconciler to map React elements to engine objects (Mesh, Group, DirectionalLight,
-// geometry, material, etc.). Supports mutation mode: elements are created, appended to parents,
-// removed, and updated as React's diffing algorithm dictates.
+// The API design is based on React Three Fiber (R3F). Uses react-reconciler to map React elements
+// to engine objects (Mesh, Group, DirectionalLight, geometry, material, etc.). Supports mutation
+// mode: elements are created, appended to parents, removed, and updated as React's diffing
+// algorithm dictates.
 //
 // Key concepts:
 //   VoidInstance – Wrapper around an engine object that tracks parent/child/attach relationships.

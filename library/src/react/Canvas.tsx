@@ -1,4 +1,4 @@
-// Canvas – Root React component for VoidCore's declarative API.
+// Canvas – Root React component for VoidCore's declarative API (based on React Three Fiber).
 //
 // Creates the WebGPU/WebGL2 engine, scene, and camera on mount, then renders children
 // via the custom reconciler into the scene graph. Manages the rAF loop, frame callbacks,
