@@ -964,3 +964,7 @@ Mount to freeze the shadow map for static scenes; unmount to resume real-time sh
 ```tsx
 <BakeShadows />
 ```
+
+## Credits
+
+This codebase was entirely AI-generated. While it is impossible to pinpoint exactly what other projects VoidCore takes inspiration from, it is clearly standing on the shoulders of [Three.js](https://threejs.org/), [React Three Fiber](https://github.com/pmndrs/react-three-fiber), and [three-mesh-bvh](https://github.com/gkjohnson/three-mesh-bvh). Huge thanks to the authors and contributors of these projects for paving the way.

@@ -658,3 +658,9 @@ For static scenes, the shadow map is rendered once and frozen, eliminating the e
 ### DPR Limiting
 
 High-DPI displays (Retina, 4K) have pixel ratios of 2–3×, meaning the GPU must shade 4–9× as many pixels. VoidCore defaults to capping the effective DPR (1.25 on mobile, 1.5 on desktop) for a practical balance between visual quality and performance.
+
+---
+
+## Credits
+
+This codebase was entirely AI-generated. While it is impossible to pinpoint exactly what other projects VoidCore takes inspiration from, it is clearly standing on the shoulders of [Three.js](https://threejs.org/), [React Three Fiber](https://github.com/pmndrs/react-three-fiber), and [three-mesh-bvh](https://github.com/gkjohnson/three-mesh-bvh). Huge thanks to the authors and contributors of these projects for paving the way.
