@@ -2042,11 +2042,7 @@ export class WebGLRenderer implements Renderer {
       if (hasVC || (!hasCustom && mesh.material._hasTextures && !mesh._isSkinned)) {
         this._bindMaterialTextures(mesh.material, locs, hasVC ? mesh.geometry : undefined)
       }
-      if (
-        hasCustom &&
-        mesh.material.customShader?.uniforms &&
-        Object.keys(mesh.material.customShader.uniforms).length > 0
-      ) {
+      if (hasCustom && mesh.material._hasCustomUniforms) {
         this._bindCustomUniforms(mesh.material)
       }
 
@@ -2114,11 +2110,7 @@ export class WebGLRenderer implements Renderer {
         if (hasVC || (!hasCustom && mesh.material._hasTextures && !mesh._isSkinned)) {
           this._bindMaterialTextures(mesh.material, locs, hasVC ? mesh.geometry : undefined)
         }
-        if (
-          hasCustom &&
-          mesh.material.customShader?.uniforms &&
-          Object.keys(mesh.material.customShader.uniforms).length > 0
-        ) {
+        if (hasCustom && mesh.material._hasCustomUniforms) {
           this._bindCustomUniforms(mesh.material)
         }
 

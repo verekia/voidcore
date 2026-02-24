@@ -73,6 +73,9 @@ const _tempWorldPos: Vec3 = vec3Create()
 const _tempCamPos: Vec3 = vec3Create()
 const _vpMatrix: Mat4 = mat4Create()
 
+// Pre-allocated result object for projectToScreen (avoids per-call object creation)
+const _projResult = { x: 0, y: 0, depth: 0, visible: false }
+
 const projectToScreen = (
   worldPos: Vec3,
   vpMatrix: Mat4,
@@ -86,20 +89,27 @@ const projectToScreen = (
   const w = _tempVec4[3]!
 
   // Behind camera check
-  if (w <= 0) return { x: 0, y: 0, depth: 0, visible: false }
+  if (w <= 0) {
+    _projResult.visible = false
+    return _projResult
+  }
 
   // Perspective divide → NDC
   const ndcX = _tempVec4[0]! / w
   const ndcY = _tempVec4[1]! / w
 
   // Frustum check with 1.1 margin to prevent popping at edges
-  if (Math.abs(ndcX) > 1.1 || Math.abs(ndcY) > 1.1) return { x: 0, y: 0, depth: 0, visible: false }
+  if (Math.abs(ndcX) > 1.1 || Math.abs(ndcY) > 1.1) {
+    _projResult.visible = false
+    return _projResult
+  }
 
   // NDC → screen pixels (Y flipped for DOM coordinates)
-  const screenX = (ndcX * 0.5 + 0.5) * canvasWidth
-  const screenY = (1 - (ndcY * 0.5 + 0.5)) * canvasHeight
-
-  return { x: screenX, y: screenY, depth: w, visible: true }
+  _projResult.x = (ndcX * 0.5 + 0.5) * canvasWidth
+  _projResult.y = (1 - (ndcY * 0.5 + 0.5)) * canvasHeight
+  _projResult.depth = w
+  _projResult.visible = true
+  return _projResult
 }
 
 export const createOverlayManager = (canvas: HTMLCanvasElement) => {

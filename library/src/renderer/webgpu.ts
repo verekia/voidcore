@@ -1789,10 +1789,16 @@ export class WebGPURenderer implements Renderer {
     let srcW = rt.width
     let srcH = rt.height
 
+    // Reuse a single staging buffer for all bloom uniform writes (avoids per-iteration allocation)
+    const bloomData = new Float32Array(4)
+
     for (let i = 0; i < this.bloomLevels; i++) {
       // Write texel size + karis flag
-      const data = new Float32Array([1 / srcW, 1 / srcH, i === 0 ? 1.0 : 0.0, 0])
-      d.queue.writeBuffer(this.bloomDownUBs[i]!, 0, data.buffer, data.byteOffset, data.byteLength)
+      bloomData[0] = 1 / srcW
+      bloomData[1] = 1 / srcH
+      bloomData[2] = i === 0 ? 1.0 : 0.0
+      bloomData[3] = 0
+      d.queue.writeBuffer(this.bloomDownUBs[i]!, 0, bloomData.buffer, bloomData.byteOffset, bloomData.byteLength)
 
       this.bloomDownBGs.push(
         d.createBindGroup({
@@ -1813,9 +1819,12 @@ export class WebGPURenderer implements Renderer {
     // Bloom upsample bind groups
     this.bloomUpBGs = []
     for (let i = this.bloomLevels - 1; i > 0; i--) {
-      const data = new Float32Array([1 / rt.bloomWidths[i]!, 1 / rt.bloomHeights[i]!, 0, 0])
+      bloomData[0] = 1 / rt.bloomWidths[i]!
+      bloomData[1] = 1 / rt.bloomHeights[i]!
+      bloomData[2] = 0
+      bloomData[3] = 0
       const ubIdx = this.bloomLevels - 1 - i
-      d.queue.writeBuffer(this.bloomUpUBs[ubIdx]!, 0, data.buffer, data.byteOffset, data.byteLength)
+      d.queue.writeBuffer(this.bloomUpUBs[ubIdx]!, 0, bloomData.buffer, bloomData.byteOffset, bloomData.byteLength)
 
       this.bloomUpBGs.push(
         d.createBindGroup({
@@ -1832,8 +1841,11 @@ export class WebGPURenderer implements Renderer {
     // Blit bind group
     const bloomView = this.bloomEnabled && this.bloomLevels > 0 ? rt.bloomViews[0]! : this.dummyTextureView
 
-    const blitData = new Float32Array([this.bloomIntensity, 0, 0, 0])
-    d.queue.writeBuffer(this.blitUB, 0, blitData.buffer, blitData.byteOffset, blitData.byteLength)
+    bloomData[0] = this.bloomIntensity
+    bloomData[1] = 0
+    bloomData[2] = 0
+    bloomData[3] = 0
+    d.queue.writeBuffer(this.blitUB, 0, bloomData.buffer, bloomData.byteOffset, bloomData.byteLength)
 
     this.blitBG = d.createBindGroup({
       layout: this.blitBGL,
@@ -2742,11 +2754,7 @@ export class WebGPURenderer implements Renderer {
       }
       if (hasVC) {
         scenePass.setBindGroup(3, this._ensureVCTextureBindGroup(mesh.material, mesh.geometry))
-      } else if (
-        hasCustom &&
-        mesh.material.customShader?.uniforms &&
-        Object.keys(mesh.material.customShader.uniforms).length > 0
-      ) {
+      } else if (hasCustom && mesh.material._hasCustomUniforms) {
         scenePass.setBindGroup(3, this._ensureCustomUniformBindGroup(mesh.material))
       } else if (!hasCustom && mesh.material._hasTextures && !mesh._isSkinned) {
         scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))
@@ -2801,11 +2809,7 @@ export class WebGPURenderer implements Renderer {
       }
       if (hasVC) {
         scenePass.setBindGroup(3, this._ensureVCTextureBindGroup(mesh.material, mesh.geometry))
-      } else if (
-        hasCustom &&
-        mesh.material.customShader?.uniforms &&
-        Object.keys(mesh.material.customShader.uniforms).length > 0
-      ) {
+      } else if (hasCustom && mesh.material._hasCustomUniforms) {
         scenePass.setBindGroup(3, this._ensureCustomUniformBindGroup(mesh.material))
       } else if (!hasCustom && mesh.material._hasTextures && !mesh._isSkinned) {
         scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))

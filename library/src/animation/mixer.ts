@@ -230,18 +230,19 @@ export class AnimationMixer {
       const nw = action.weight / totalWeight
       accWeight += nw
 
-      // Initialize sample buffer to rest pose, then override with tracks
-      this._samplePos.set(this._restPos)
-      this._sampleRot.set(this._restRot)
-      this._sampleScale.set(this._restScale)
-      this._sampleClipInto(action.clip, action.time, action)
-
       if (ai === 0) {
-        // First action: copy directly
-        this._blendedPos.set(this._samplePos)
-        this._blendedRot.set(this._sampleRot)
-        this._blendedScale.set(this._sampleScale)
+        // First action: sample directly into blended buffer (avoids sample→blended copy)
+        this._blendedPos.set(this._restPos)
+        this._blendedRot.set(this._restRot)
+        this._blendedScale.set(this._restScale)
+        this._sampleClipInto(action.clip, action.time, action, true)
       } else {
+        // Subsequent actions: sample into scratch buffer, then blend into blended
+        this._samplePos.set(this._restPos)
+        this._sampleRot.set(this._restRot)
+        this._sampleScale.set(this._restScale)
+        this._sampleClipInto(action.clip, action.time, action, false)
+
         // Incremental blend: t = nw / accWeight
         const t = accWeight > 0 ? nw / accWeight : 0
 
@@ -299,10 +300,19 @@ export class AnimationMixer {
 
   // ─── Internal clip sampling ─────────────────────────────────────
 
-  private _sampleClipInto(clip: AnimationClip, time: number, action: AnimationAction) {
+  /**
+   * Sample a clip at the given time and write results into the target buffers.
+   * When writeToBlended=true, writes directly to _blended* buffers (first-action fast path).
+   * When writeToBlended=false, writes to _sample* buffers (for subsequent blending).
+   */
+  private _sampleClipInto(clip: AnimationClip, time: number, action: AnimationAction, writeToBlended: boolean) {
     const t = clip.duration > 0 ? time % clip.duration : 0
 
     const cached = action._cachedIndices!
+
+    const posOut = writeToBlended ? this._blendedPos : this._samplePos
+    const rotOut = writeToBlended ? this._blendedRot : this._sampleRot
+    const scaleOut = writeToBlended ? this._blendedScale : this._sampleScale
 
     for (let ti = 0; ti < clip.tracks.length; ti++) {
       const track = clip.tracks[ti]!
@@ -347,11 +357,19 @@ export class AnimationMixer {
 
       if (track.interpolation === 'STEP') alpha = 0
 
-      this._writeTrackSample(track, idx0, idx1, alpha)
+      this._writeTrackSample(track, idx0, idx1, alpha, posOut, rotOut, scaleOut)
     }
   }
 
-  private _writeTrackSample(track: KeyframeTrack, idx0: number, idx1: number, alpha: number) {
+  private _writeTrackSample(
+    track: KeyframeTrack,
+    idx0: number,
+    idx1: number,
+    alpha: number,
+    posOut: Float32Array,
+    rotOut: Float32Array,
+    scaleOut: Float32Array,
+  ) {
     const values = track.values
     const bi = track.boneIndex
     const stride = track.path === 'rotation' ? 4 : 3
@@ -361,21 +379,21 @@ export class AnimationMixer {
     if (track.path === 'translation') {
       const p = bi * 3
       if (alpha === 0) {
-        this._samplePos[p] = values[off0]!
-        this._samplePos[p + 1] = values[off0 + 1]!
-        this._samplePos[p + 2] = values[off0 + 2]!
+        posOut[p] = values[off0]!
+        posOut[p + 1] = values[off0 + 1]!
+        posOut[p + 2] = values[off0 + 2]!
       } else {
-        this._samplePos[p] = values[off0]! + (values[off1]! - values[off0]!) * alpha
-        this._samplePos[p + 1] = values[off0 + 1]! + (values[off1 + 1]! - values[off0 + 1]!) * alpha
-        this._samplePos[p + 2] = values[off0 + 2]! + (values[off1 + 2]! - values[off0 + 2]!) * alpha
+        posOut[p] = values[off0]! + (values[off1]! - values[off0]!) * alpha
+        posOut[p + 1] = values[off0 + 1]! + (values[off1 + 1]! - values[off0 + 1]!) * alpha
+        posOut[p + 2] = values[off0 + 2]! + (values[off1 + 2]! - values[off0 + 2]!) * alpha
       }
     } else if (track.path === 'rotation') {
       const r = bi * 4
       if (alpha === 0) {
-        this._sampleRot[r] = values[off0]!
-        this._sampleRot[r + 1] = values[off0 + 1]!
-        this._sampleRot[r + 2] = values[off0 + 2]!
-        this._sampleRot[r + 3] = values[off0 + 3]!
+        rotOut[r] = values[off0]!
+        rotOut[r + 1] = values[off0 + 1]!
+        rotOut[r + 2] = values[off0 + 2]!
+        rotOut[r + 3] = values[off0 + 3]!
       } else {
         this._q4a[0] = values[off0]!
         this._q4a[1] = values[off0 + 1]!
@@ -386,21 +404,21 @@ export class AnimationMixer {
         this._q4b[2] = values[off1 + 2]!
         this._q4b[3] = values[off1 + 3]!
         quatSlerp(this._q4a, this._q4a, this._q4b, alpha)
-        this._sampleRot[r] = this._q4a[0]!
-        this._sampleRot[r + 1] = this._q4a[1]!
-        this._sampleRot[r + 2] = this._q4a[2]!
-        this._sampleRot[r + 3] = this._q4a[3]!
+        rotOut[r] = this._q4a[0]!
+        rotOut[r + 1] = this._q4a[1]!
+        rotOut[r + 2] = this._q4a[2]!
+        rotOut[r + 3] = this._q4a[3]!
       }
     } else {
       const s = bi * 3
       if (alpha === 0) {
-        this._sampleScale[s] = values[off0]!
-        this._sampleScale[s + 1] = values[off0 + 1]!
-        this._sampleScale[s + 2] = values[off0 + 2]!
+        scaleOut[s] = values[off0]!
+        scaleOut[s + 1] = values[off0 + 1]!
+        scaleOut[s + 2] = values[off0 + 2]!
       } else {
-        this._sampleScale[s] = values[off0]! + (values[off1]! - values[off0]!) * alpha
-        this._sampleScale[s + 1] = values[off0 + 1]! + (values[off1 + 1]! - values[off0 + 1]!) * alpha
-        this._sampleScale[s + 2] = values[off0 + 2]! + (values[off1 + 2]! - values[off0 + 2]!) * alpha
+        scaleOut[s] = values[off0]! + (values[off1]! - values[off0]!) * alpha
+        scaleOut[s + 1] = values[off0 + 1]! + (values[off1 + 1]! - values[off0 + 1]!) * alpha
+        scaleOut[s + 2] = values[off0 + 2]! + (values[off1 + 2]! - values[off0 + 2]!) * alpha
       }
     }
   }

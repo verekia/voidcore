@@ -3,13 +3,15 @@
 // A skeleton is a hierarchy of bones (scene nodes) plus "inverse bind matrices" that
 // define how the mesh was originally posed. Each frame, the skeleton computes a
 // "bone matrix" for every bone: boneMatrix = bone.worldMatrix * inverseBindMatrix.
-// These matrices are uploaded to the GPU so the vertex shader can deform the mesh
-// vertices according to the current pose.
+// These matrices are written directly into the shared boneMatrices buffer using
+// mat4MultiplyInto, avoiding a temporary matrix and a per-bone .set() copy.
+// The resulting matrices are uploaded to the GPU so the vertex shader can deform
+// the mesh vertices according to the current pose.
 //
 // Skeleton.update()   – Recomputes all bone matrices (called once per frame when dirty).
 // Skeleton.getBone()  – Finds a bone node by name.
 
-import { mat4Create, mat4Multiply } from '../math/index'
+import { mat4MultiplyInto } from '../math/index'
 
 import type { Mat4 } from '../math/index'
 import type { Node } from '../scene/node'
@@ -19,8 +21,6 @@ export class Skeleton {
   boneInverseBindMatrices: Mat4[]
   boneMatrices: Float32Array
   _dirty = true
-
-  private _tempMat: Mat4 = mat4Create()
 
   constructor(bones: Node[], inverseBindMatrices: Mat4[]) {
     this.bones = bones
@@ -41,9 +41,8 @@ export class Skeleton {
     for (let i = 0; i < this.bones.length; i++) {
       const bone = this.bones[i]!
       const ibm = this.boneInverseBindMatrices[i]!
-      // boneMatrix = bone.worldMatrix * inverseBindMatrix
-      mat4Multiply(this._tempMat, bone._worldMatrix, ibm)
-      this.boneMatrices.set(this._tempMat, i * 16)
+      // boneMatrix = bone.worldMatrix * inverseBindMatrix (written directly, no temp copy)
+      mat4MultiplyInto(this.boneMatrices, i * 16, bone._worldMatrix, ibm)
     }
     this._dirty = false
   }
