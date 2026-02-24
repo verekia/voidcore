@@ -302,7 +302,7 @@ export const mat4Multiply = (out: Mat4, a: Mat4, b: Mat4): Mat4 => {
   return out
 }
 
-/** Multiply a * b and write 16 floats directly into `out` at the given byte offset. */
+/** Multiply a * b and write 16 floats directly into `out` at the given float offset. */
 export const mat4MultiplyInto = (out: Float32Array, offset: number, a: Mat4, b: Mat4): void => {
   const a00 = a[0]!,
     a01 = a[1]!,
