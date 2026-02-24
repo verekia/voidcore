@@ -47,6 +47,7 @@ interface SchedulerEntry {
 export class Scheduler {
   private _entries: SchedulerEntry[] = []
   private _sorted = true
+  private _hasNulls = false // tracks whether any callbacks have been removed (need compaction)
   private _rafId = 0
   private _lastTime = 0
   private _elapsed = 0
@@ -87,7 +88,8 @@ export class Scheduler {
     return () => {
       if (!entry.callback) return // already removed
       entry.callback = null
-      this._sorted = false // trigger compaction on next frame
+      this._hasNulls = true // trigger compaction on next sort pass
+      this._sorted = false
     }
   }
 
@@ -140,13 +142,16 @@ export class Scheduler {
     this._elapsed += dt
     this._frame++
 
-    // Compact dead entries + sort by priority when entries have changed
+    // Compact dead entries (only if removals occurred) + sort by priority when entries have changed
     if (!this._sorted) {
-      let write = 0
-      for (let read = 0; read < this._entries.length; read++) {
-        if (this._entries[read]!.callback) this._entries[write++] = this._entries[read]!
+      if (this._hasNulls) {
+        let write = 0
+        for (let read = 0; read < this._entries.length; read++) {
+          if (this._entries[read]!.callback) this._entries[write++] = this._entries[read]!
+        }
+        this._entries.length = write
+        this._hasNulls = false
       }
-      this._entries.length = write
       this._entries.sort((a, b) => a.priority - b.priority)
       this._sorted = true
     }

@@ -106,19 +106,19 @@ export class OrbitControls {
     this.distance += this._velocityDist
     this.distance = Math.max(this.minDistance, Math.min(this.maxDistance, this.distance))
 
+    // Precompute trig values once (used by both pan and camera positioning)
+    const cosEl = Math.cos(this.elevation)
+    const sinEl = Math.sin(this.elevation)
+    const cosAz = Math.cos(this.azimuth)
+    const sinAz = Math.sin(this.azimuth)
+
     // Pan
     if (Math.abs(this._velocityPanX) > 1e-6 || Math.abs(this._velocityPanY) > 1e-6) {
-      // Camera right and up vectors
-      const cosEl = Math.cos(this.elevation)
-      const cosAz = Math.cos(this.azimuth)
-      const sinAz = Math.sin(this.azimuth)
-
       // Right vector (perpendicular to forward in XY plane)
       const rx = -sinAz,
         ry = cosAz
 
       // Up vector (Z-up)
-      const sinEl = Math.sin(this.elevation)
       const ux = -sinEl * cosAz
       const uy = -sinEl * sinAz
       const uz = cosEl
@@ -131,11 +131,10 @@ export class OrbitControls {
     }
 
     // Compute camera position from spherical coordinates (Z-up)
-    const cosEl = Math.cos(this.elevation)
     this.camera.setPosition(
-      this.target[0]! + this.distance * cosEl * Math.cos(this.azimuth),
-      this.target[1]! + this.distance * cosEl * Math.sin(this.azimuth),
-      this.target[2]! + this.distance * Math.sin(this.elevation),
+      this.target[0]! + this.distance * cosEl * cosAz,
+      this.target[1]! + this.distance * cosEl * sinAz,
+      this.target[2]! + this.distance * sinEl,
     )
 
     // Compute view matrix directly (bypasses Node.lookAt quaternion convention)

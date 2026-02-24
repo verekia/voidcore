@@ -1789,10 +1789,16 @@ export class WebGPURenderer implements Renderer {
     let srcW = rt.width
     let srcH = rt.height
 
+    // Reuse a single staging buffer for all bloom uniform writes (avoids per-iteration allocation)
+    const bloomData = new Float32Array(4)
+
     for (let i = 0; i < this.bloomLevels; i++) {
       // Write texel size + karis flag
-      const data = new Float32Array([1 / srcW, 1 / srcH, i === 0 ? 1.0 : 0.0, 0])
-      d.queue.writeBuffer(this.bloomDownUBs[i]!, 0, data.buffer, data.byteOffset, data.byteLength)
+      bloomData[0] = 1 / srcW
+      bloomData[1] = 1 / srcH
+      bloomData[2] = i === 0 ? 1.0 : 0.0
+      bloomData[3] = 0
+      d.queue.writeBuffer(this.bloomDownUBs[i]!, 0, bloomData.buffer, bloomData.byteOffset, bloomData.byteLength)
 
       this.bloomDownBGs.push(
         d.createBindGroup({
@@ -1813,9 +1819,12 @@ export class WebGPURenderer implements Renderer {
     // Bloom upsample bind groups
     this.bloomUpBGs = []
     for (let i = this.bloomLevels - 1; i > 0; i--) {
-      const data = new Float32Array([1 / rt.bloomWidths[i]!, 1 / rt.bloomHeights[i]!, 0, 0])
+      bloomData[0] = 1 / rt.bloomWidths[i]!
+      bloomData[1] = 1 / rt.bloomHeights[i]!
+      bloomData[2] = 0
+      bloomData[3] = 0
       const ubIdx = this.bloomLevels - 1 - i
-      d.queue.writeBuffer(this.bloomUpUBs[ubIdx]!, 0, data.buffer, data.byteOffset, data.byteLength)
+      d.queue.writeBuffer(this.bloomUpUBs[ubIdx]!, 0, bloomData.buffer, bloomData.byteOffset, bloomData.byteLength)
 
       this.bloomUpBGs.push(
         d.createBindGroup({
@@ -1832,8 +1841,11 @@ export class WebGPURenderer implements Renderer {
     // Blit bind group
     const bloomView = this.bloomEnabled && this.bloomLevels > 0 ? rt.bloomViews[0]! : this.dummyTextureView
 
-    const blitData = new Float32Array([this.bloomIntensity, 0, 0, 0])
-    d.queue.writeBuffer(this.blitUB, 0, blitData.buffer, blitData.byteOffset, blitData.byteLength)
+    bloomData[0] = this.bloomIntensity
+    bloomData[1] = 0
+    bloomData[2] = 0
+    bloomData[3] = 0
+    d.queue.writeBuffer(this.blitUB, 0, bloomData.buffer, bloomData.byteOffset, bloomData.byteLength)
 
     this.blitBG = d.createBindGroup({
       layout: this.blitBGL,
@@ -2701,55 +2713,54 @@ export class WebGPURenderer implements Renderer {
     this._lastMaterial = null
     for (let si = 0; si < transparentStart; si++) {
       const mesh = meshes[sortedIndices[si]!]!
+      const mat = mesh.material
+      const isLambert = mat.type === 'lambert'
+      const isSkinned = mesh._isSkinned
 
       // Determine cull mode from material side
-      const side = mesh.material.side
+      const side = mat.side
       let cullMode: GPUCullMode = side === 'back' ? 'front' : side === 'double' ? 'none' : 'back'
 
       // Outlined Lambert meshes use cullMode:none (shader handles front-face discard)
-      if (mesh._outlineThickness > 0 && mesh.material.type === 'lambert') cullMode = 'none'
+      if (mesh._outlineThickness > 0 && isLambert) cullMode = 'none'
 
-      const hasVC = !!mesh.geometry.colors && mesh.material.type === 'lambert'
-      const hasCustom = !hasVC && mesh.material._hasCustomShader
+      const hasVC = !!mesh.geometry.colors && isLambert
+      const hasCustom = !hasVC && mat._hasCustomShader
 
       let pipeline: GPURenderPipeline
       if (hasCustom) {
-        pipeline = this._getCustomPipeline(mesh.material, mesh._isSkinned, false, cullMode)
+        pipeline = this._getCustomPipeline(mat, isSkinned, false, cullMode)
       } else if (cullMode !== 'back') {
         // Non-default cull mode: use lazy pipeline cache
         let pipelineType: number
         if (hasVC) {
-          pipelineType = mesh._isSkinned ? 11 : 10
-        } else if (mesh._isSkinned) {
-          pipelineType = mesh.material.type === 'lambert' ? 2 : 3
-        } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
+          pipelineType = isSkinned ? 11 : 10
+        } else if (isSkinned) {
+          pipelineType = isLambert ? 2 : 3
+        } else if (mat._hasTextures && isLambert) {
           pipelineType = 4
         } else {
-          pipelineType = mesh.material.type === 'lambert' ? 0 : 1
+          pipelineType = isLambert ? 0 : 1
         }
         pipeline = this._getSidePipeline(pipelineType, cullMode)
       } else {
         // Default cull mode: use existing pipelines (fast path)
         if (hasVC) {
-          pipeline = mesh._isSkinned ? this.lambertSkinnedVCPipeline : this.lambertVCPipeline
-        } else if (mesh._isSkinned) {
-          pipeline = mesh.material.type === 'lambert' ? this.lambertSkinnedPipeline : this.basicSkinnedPipeline
-        } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
+          pipeline = isSkinned ? this.lambertSkinnedVCPipeline : this.lambertVCPipeline
+        } else if (isSkinned) {
+          pipeline = isLambert ? this.lambertSkinnedPipeline : this.basicSkinnedPipeline
+        } else if (mat._hasTextures && isLambert) {
           pipeline = this.lambertTexturedPipeline
         } else {
-          pipeline = mesh.material.type === 'lambert' ? this.lambertPipeline : this.basicPipeline
+          pipeline = isLambert ? this.lambertPipeline : this.basicPipeline
         }
       }
       if (hasVC) {
-        scenePass.setBindGroup(3, this._ensureVCTextureBindGroup(mesh.material, mesh.geometry))
-      } else if (
-        hasCustom &&
-        mesh.material.customShader?.uniforms &&
-        Object.keys(mesh.material.customShader.uniforms).length > 0
-      ) {
-        scenePass.setBindGroup(3, this._ensureCustomUniformBindGroup(mesh.material))
-      } else if (!hasCustom && mesh.material._hasTextures && !mesh._isSkinned) {
-        scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))
+        scenePass.setBindGroup(3, this._ensureVCTextureBindGroup(mat, mesh.geometry))
+      } else if (hasCustom && mat._hasCustomUniforms) {
+        scenePass.setBindGroup(3, this._ensureCustomUniformBindGroup(mat))
+      } else if (!hasCustom && mat._hasTextures && !isSkinned) {
+        scenePass.setBindGroup(3, this._ensureTextureBindGroup(mat))
       }
       drawMeshGPU(scenePass, mesh, pipeline)
     }
@@ -2757,58 +2768,54 @@ export class WebGPURenderer implements Renderer {
     // ─── Transparent draw loop (back-to-front, blend + no depth write) ──
     for (let si = transparentStart; si < meshes.length; si++) {
       const mesh = meshes[sortedIndices[si]!]!
+      const mat = mesh.material
+      const isLambert = mat.type === 'lambert'
+      const isSkinned = mesh._isSkinned
 
       // Determine cull mode from material side
-      const side = mesh.material.side
+      const side = mat.side
       let cullMode: GPUCullMode = side === 'back' ? 'front' : side === 'double' ? 'none' : 'back'
 
       // Outlined Lambert meshes use cullMode:none (shader handles front-face discard)
-      if (mesh._outlineThickness > 0 && mesh.material.type === 'lambert') cullMode = 'none'
+      if (mesh._outlineThickness > 0 && isLambert) cullMode = 'none'
 
-      const hasVC = !!mesh.geometry.colors && mesh.material.type === 'lambert'
-      const hasCustom = !hasVC && mesh.material._hasCustomShader
+      const hasVC = !!mesh.geometry.colors && isLambert
+      const hasCustom = !hasVC && mat._hasCustomShader
 
       let pipeline: GPURenderPipeline
       if (hasCustom) {
-        pipeline = this._getCustomPipeline(mesh.material, mesh._isSkinned, true, cullMode)
+        pipeline = this._getCustomPipeline(mat, isSkinned, true, cullMode)
       } else if (cullMode !== 'none') {
         // Non-default cull mode for transparent: use lazy pipeline cache
         let pipelineType: number
         if (hasVC) {
-          pipelineType = mesh._isSkinned ? 13 : 12
-        } else if (mesh._isSkinned) {
-          pipelineType = mesh.material.type === 'lambert' ? 7 : 8
-        } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
+          pipelineType = isSkinned ? 13 : 12
+        } else if (isSkinned) {
+          pipelineType = isLambert ? 7 : 8
+        } else if (mat._hasTextures && isLambert) {
           pipelineType = 9
         } else {
-          pipelineType = mesh.material.type === 'lambert' ? 5 : 6
+          pipelineType = isLambert ? 5 : 6
         }
         pipeline = this._getSidePipeline(pipelineType, cullMode)
       } else {
         // Default cull mode for transparent: use existing pipelines (fast path)
         if (hasVC) {
-          pipeline = mesh._isSkinned ? this.lambertSkinnedVCTransparentPipeline : this.lambertVCTransparentPipeline
-        } else if (mesh._isSkinned) {
-          pipeline =
-            mesh.material.type === 'lambert'
-              ? this.lambertSkinnedTransparentPipeline
-              : this.basicSkinnedTransparentPipeline
-        } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
+          pipeline = isSkinned ? this.lambertSkinnedVCTransparentPipeline : this.lambertVCTransparentPipeline
+        } else if (isSkinned) {
+          pipeline = isLambert ? this.lambertSkinnedTransparentPipeline : this.basicSkinnedTransparentPipeline
+        } else if (mat._hasTextures && isLambert) {
           pipeline = this.lambertTexturedTransparentPipeline
         } else {
-          pipeline = mesh.material.type === 'lambert' ? this.lambertTransparentPipeline : this.basicTransparentPipeline
+          pipeline = isLambert ? this.lambertTransparentPipeline : this.basicTransparentPipeline
         }
       }
       if (hasVC) {
-        scenePass.setBindGroup(3, this._ensureVCTextureBindGroup(mesh.material, mesh.geometry))
-      } else if (
-        hasCustom &&
-        mesh.material.customShader?.uniforms &&
-        Object.keys(mesh.material.customShader.uniforms).length > 0
-      ) {
-        scenePass.setBindGroup(3, this._ensureCustomUniformBindGroup(mesh.material))
-      } else if (!hasCustom && mesh.material._hasTextures && !mesh._isSkinned) {
-        scenePass.setBindGroup(3, this._ensureTextureBindGroup(mesh.material))
+        scenePass.setBindGroup(3, this._ensureVCTextureBindGroup(mat, mesh.geometry))
+      } else if (hasCustom && mat._hasCustomUniforms) {
+        scenePass.setBindGroup(3, this._ensureCustomUniformBindGroup(mat))
+      } else if (!hasCustom && mat._hasTextures && !isSkinned) {
+        scenePass.setBindGroup(3, this._ensureTextureBindGroup(mat))
       }
       drawMeshGPU(scenePass, mesh, pipeline)
     }

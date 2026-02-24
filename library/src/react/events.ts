@@ -3,6 +3,10 @@
 // Attaches DOM listeners to the canvas and converts pointer positions to raycasts.
 // Walks hit results to find instances with event handlers (onClick, onPointerOver, etc.)
 // and dispatches synthetic events with 3D intersection data.
+//
+// Performance: pointer move fires at display refresh rate, so the hot path avoids
+// allocations by reusing a pre-allocated mesh array and NDC tuple. The canvas
+// bounding rect is read once per event (not per helper call).
 
 import { instanceMap } from './reconciler'
 
@@ -24,27 +28,25 @@ export interface VoidEvent {
 
 let hoveredInstance: VoidInstance | null = null
 
+// Pre-allocated buffers reused every pointer event (avoids per-event allocation)
+const _meshes: Mesh[] = []
+const _ndc: [number, number] = [0, 0]
+
 const collectMeshes = (node: Node, meshes: Mesh[]) => {
   if (node.type === 'mesh' && node.visible) {
     meshes.push(node as Mesh)
   }
-  for (const child of node.children) {
-    collectMeshes(child, meshes)
+  const children = node.children
+  for (let i = 0; i < children.length; i++) {
+    collectMeshes(children[i]!, meshes)
   }
-}
-
-const toNDC = (e: PointerEvent | MouseEvent, canvas: HTMLCanvasElement): [number, number] => {
-  const rect = canvas.getBoundingClientRect()
-  const x = ((e.clientX - rect.left) / rect.width) * 2 - 1
-  const y = -((e.clientY - rect.top) / rect.height) * 2 + 1
-  return [x, y]
 }
 
 const raycast = (store: VoidStore, ndc: [number, number]): RaycastHit[] => {
   store.raycaster.setFromCamera(ndc, store.camera)
-  const meshes: Mesh[] = []
-  collectMeshes(store.scene, meshes)
-  return store.raycaster.intersectObjects(meshes)
+  _meshes.length = 0
+  collectMeshes(store.scene, _meshes)
+  return store.raycaster.intersectObjects(_meshes)
 }
 
 const findInstanceHandler = (
@@ -82,11 +84,14 @@ export const setupEvents = (store: VoidStore): (() => void) => {
   const canvas = store.canvas
 
   const onPointerMove = (e: PointerEvent) => {
-    store.pointer.x = ((e.clientX - canvas.getBoundingClientRect().left) / canvas.clientWidth) * 2 - 1
-    store.pointer.y = -((e.clientY - canvas.getBoundingClientRect().top) / canvas.clientHeight) * 2 + 1
+    // Read bounding rect once per event (not per helper call)
+    const rect = canvas.getBoundingClientRect()
+    store.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
+    store.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
 
-    const ndc = toNDC(e, canvas)
-    const hits = raycast(store, ndc)
+    _ndc[0] = store.pointer.x
+    _ndc[1] = store.pointer.y
+    const hits = raycast(store, _ndc)
 
     let newHovered: VoidInstance | null = null
     if (hits.length > 0) {
@@ -114,8 +119,10 @@ export const setupEvents = (store: VoidStore): (() => void) => {
   }
 
   const handlePointerEvent = (eventName: string) => (e: PointerEvent | MouseEvent) => {
-    const ndc = toNDC(e, canvas)
-    const hits = raycast(store, ndc)
+    const rect = canvas.getBoundingClientRect()
+    _ndc[0] = ((e.clientX - rect.left) / rect.width) * 2 - 1
+    _ndc[1] = -((e.clientY - rect.top) / rect.height) * 2 + 1
+    const hits = raycast(store, _ndc)
     if (hits.length > 0) {
       const hit = hits[0]!
       const found = findInstanceHandler(hit, eventName)

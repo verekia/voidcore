@@ -1993,40 +1993,43 @@ export class WebGLRenderer implements Renderer {
     // ─── Opaque draw loop ────────────────────────────────────────
     for (let si = 0; si < transparentStart; si++) {
       const mesh = meshes[sortedIndices[si]!]!
-      const isOutlined = mesh._outlineThickness > 0 && mesh.material.type === 'lambert'
-      const hasVC = !!mesh.geometry.colors && mesh.material.type === 'lambert'
-      const hasCustom = !hasVC && mesh.material._hasCustomShader
+      const mat = mesh.material
+      const isLambert = mat.type === 'lambert'
+      const isSkinned = mesh._isSkinned
+      const isOutlined = mesh._outlineThickness > 0 && isLambert
+      const hasVC = !!mesh.geometry.colors && isLambert
+      const hasCustom = !hasVC && mat._hasCustomShader
 
       // Apply material side (cull mode), considering outlines
-      applySide(mesh.material.side, isOutlined)
+      applySide(mat.side, isOutlined)
 
       let program: WebGLProgram
       let locs: SceneUniformLocs
       if (hasCustom) {
-        const entry = this._getCustomProgram(mesh.material, mesh._isSkinned)
+        const entry = this._getCustomProgram(mat, isSkinned)
         program = entry.program
         locs = entry.locs
       } else if (hasVC) {
-        if (mesh._isSkinned) {
+        if (isSkinned) {
           program = this.lambertSkinnedVCProgram
           locs = this._lambertSkinnedVCLocs
         } else {
           program = this.lambertVCProgram
           locs = this._lambertVCLocs
         }
-      } else if (mesh._isSkinned) {
-        if (mesh.material.type === 'lambert') {
+      } else if (isSkinned) {
+        if (isLambert) {
           program = this.lambertSkinnedProgram
           locs = this._lambertSkinnedLocs
         } else {
           program = this.basicSkinnedProgram
           locs = this._basicSkinnedLocs
         }
-      } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
+      } else if (mat._hasTextures && isLambert) {
         program = this.lambertTexturedProgram
         locs = this._lambertTexturedLocs
       } else {
-        if (mesh.material.type === 'lambert') {
+        if (isLambert) {
           program = this.lambertProgram
           locs = this._lambertLocs
         } else {
@@ -2036,18 +2039,14 @@ export class WebGLRenderer implements Renderer {
       }
 
       const programChanged = this._setProgram(program)
-      if (programChanged && mesh.material.type === 'lambert') {
+      if (programChanged && isLambert) {
         gl.uniform1i(locs.u_shadowMap, 2)
       }
-      if (hasVC || (!hasCustom && mesh.material._hasTextures && !mesh._isSkinned)) {
-        this._bindMaterialTextures(mesh.material, locs, hasVC ? mesh.geometry : undefined)
+      if (hasVC || (!hasCustom && mat._hasTextures && !isSkinned)) {
+        this._bindMaterialTextures(mat, locs, hasVC ? mesh.geometry : undefined)
       }
-      if (
-        hasCustom &&
-        mesh.material.customShader?.uniforms &&
-        Object.keys(mesh.material.customShader.uniforms).length > 0
-      ) {
-        this._bindCustomUniforms(mesh.material)
+      if (hasCustom && mat._hasCustomUniforms) {
+        this._bindCustomUniforms(mat)
       }
 
       drawMesh(si, locs, programChanged, mesh)
@@ -2065,40 +2064,43 @@ export class WebGLRenderer implements Renderer {
 
       for (let si = transparentStart; si < meshes.length; si++) {
         const mesh = meshes[sortedIndices[si]!]!
-        const isOutlined = mesh._outlineThickness > 0 && mesh.material.type === 'lambert'
-        const hasVC = !!mesh.geometry.colors && mesh.material.type === 'lambert'
-        const hasCustom = !hasVC && mesh.material._hasCustomShader
+        const mat = mesh.material
+        const isLambert = mat.type === 'lambert'
+        const isSkinned = mesh._isSkinned
+        const isOutlined = mesh._outlineThickness > 0 && isLambert
+        const hasVC = !!mesh.geometry.colors && isLambert
+        const hasCustom = !hasVC && mat._hasCustomShader
 
         // Apply material side (cull mode), considering outlines
-        applySide(mesh.material.side, isOutlined)
+        applySide(mat.side, isOutlined)
 
         let program: WebGLProgram
         let locs: SceneUniformLocs
         if (hasCustom) {
-          const entry = this._getCustomProgram(mesh.material, mesh._isSkinned)
+          const entry = this._getCustomProgram(mat, isSkinned)
           program = entry.program
           locs = entry.locs
         } else if (hasVC) {
-          if (mesh._isSkinned) {
+          if (isSkinned) {
             program = this.lambertSkinnedVCProgram
             locs = this._lambertSkinnedVCLocs
           } else {
             program = this.lambertVCProgram
             locs = this._lambertVCLocs
           }
-        } else if (mesh._isSkinned) {
-          if (mesh.material.type === 'lambert') {
+        } else if (isSkinned) {
+          if (isLambert) {
             program = this.lambertSkinnedProgram
             locs = this._lambertSkinnedLocs
           } else {
             program = this.basicSkinnedProgram
             locs = this._basicSkinnedLocs
           }
-        } else if (mesh.material._hasTextures && mesh.material.type === 'lambert') {
+        } else if (mat._hasTextures && isLambert) {
           program = this.lambertTexturedProgram
           locs = this._lambertTexturedLocs
         } else {
-          if (mesh.material.type === 'lambert') {
+          if (isLambert) {
             program = this.lambertProgram
             locs = this._lambertLocs
           } else {
@@ -2108,18 +2110,14 @@ export class WebGLRenderer implements Renderer {
         }
 
         const programChanged = this._setProgram(program)
-        if (programChanged && mesh.material.type === 'lambert') {
+        if (programChanged && isLambert) {
           gl.uniform1i(locs.u_shadowMap, 2)
         }
-        if (hasVC || (!hasCustom && mesh.material._hasTextures && !mesh._isSkinned)) {
-          this._bindMaterialTextures(mesh.material, locs, hasVC ? mesh.geometry : undefined)
+        if (hasVC || (!hasCustom && mat._hasTextures && !isSkinned)) {
+          this._bindMaterialTextures(mat, locs, hasVC ? mesh.geometry : undefined)
         }
-        if (
-          hasCustom &&
-          mesh.material.customShader?.uniforms &&
-          Object.keys(mesh.material.customShader.uniforms).length > 0
-        ) {
-          this._bindCustomUniforms(mesh.material)
+        if (hasCustom && mat._hasCustomUniforms) {
+          this._bindCustomUniforms(mat)
         }
 
         drawMesh(si, locs, programChanged, mesh)

@@ -103,6 +103,7 @@ export class Material {
   _hasEmissive = false
   _hasTextures = false
   _hasCustomShader = false
+  _hasCustomUniforms = false
   needsUpdate = true
 
   constructor(type: MaterialType, opts: MaterialOptions = {}) {
@@ -123,6 +124,7 @@ export class Material {
     if (opts.customShader) {
       this.customShader = opts.customShader
       this._hasCustomShader = true
+      this._hasCustomUniforms = !!(opts.customShader.uniforms && Object.keys(opts.customShader.uniforms).length > 0)
     }
 
     if (opts.palette) {
