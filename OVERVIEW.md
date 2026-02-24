@@ -569,7 +569,7 @@ The resulting screen position is applied via a CSS `translate3d` transform (GPU-
 
 ## React Bindings
 
-VoidCore includes an optional declarative React layer that maps JSX elements to engine objects. This lets you describe 3D scenes the same way you describe DOM UIs.
+VoidCore includes an optional declarative React layer that maps JSX elements to engine objects, based on [React Three Fiber](https://github.com/pmndrs/react-three-fiber)'s API design. This lets you describe 3D scenes the same way you describe DOM UIs.
 
 ### Custom Reconciler
 
