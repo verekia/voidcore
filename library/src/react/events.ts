@@ -109,7 +109,15 @@ export const setupEvents = (store: VoidStore): (() => void) => {
     // Enter/Leave detection
     if (newHovered !== hoveredInstance) {
       if (hoveredInstance && hoveredInstance.eventHandlers.onPointerOut) {
-        hoveredInstance.eventHandlers.onPointerOut({ nativeEvent: e })
+        hoveredInstance.eventHandlers.onPointerOut({
+          object: hoveredInstance.object,
+          point: null,
+          normal: null,
+          distance: 0,
+          uv: null,
+          nativeEvent: e,
+          stopPropagation: () => {},
+        })
       }
       if (newHovered && newHovered.eventHandlers.onPointerOver && hits.length > 0) {
         newHovered.eventHandlers.onPointerOver(createSyntheticEvent(hits[0]!, e))

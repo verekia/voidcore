@@ -104,7 +104,7 @@ export class Engine {
   }
 
   dispose() {
-    this.scheduler.destroy()
+    this.scheduler.dispose()
     this.renderer.dispose()
   }
 

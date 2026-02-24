@@ -2,6 +2,7 @@ import { memo, useRef, useMemo } from 'react'
 
 import {
   Raycaster,
+  createRaycastHit,
   LambertMaterial,
   Mesh,
   useEngine,
@@ -25,7 +26,7 @@ const CLIP_DURATION = 2
 const CROSSFADE_DURATION = 0.3
 const ORBIT_RADIUS = 2
 const ORBIT_SPEED = 1
-const GRID_SPACING = 5
+const GRID_SPACING = 3
 
 const bodyPalette: PaletteEntry[] = [{ color: [1, 1, 1] }, { color: [1, 1, 1] }]
 
@@ -46,6 +47,7 @@ const characterMaterial = new LambertMaterial({ emissiveBrightness: 0.2 })
 const raycaster = new Raycaster()
 const rayOrigin = new Float32Array([0, 0, 200])
 const rayDir = new Float32Array([0, 0, -1])
+const rayHits = [createRaycastHit()]
 const axeLocalTransform = mat4Compose(mat4Create(), VEC3_ZERO, new Float32Array([0, 0, 1, 0]), VEC3_ONE)
 let cachedMergedGeometry: ReturnType<typeof mergeStaticIntoSkinned> | null = null
 
@@ -138,9 +140,9 @@ const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
       rayOrigin[0] = posX
       rayOrigin[1] = posY
       raycaster.set(rayOrigin, rayDir)
-      const hits = raycaster.intersectObject(edenMesh)
-      if (hits.length > 0) {
-        s.z = hits[0]!.point[2]!
+      const hitCount = raycaster.intersectObject(edenMesh, false, rayHits)
+      if (hitCount > 0) {
+        s.z = rayHits[0]!.point[2]!
         s.firstRaycastDone = true
         root.visible = true
       } else if (!s.firstRaycastDone) {

@@ -138,6 +138,24 @@ const appendChild = (parent: VoidInstance, child: VoidInstance) => {
   }
 }
 
+const insertBefore = (parent: VoidInstance, child: VoidInstance, before: VoidInstance) => {
+  child.parent = parent
+  const beforeIdx = parent.children.indexOf(before)
+  if (beforeIdx !== -1) {
+    parent.children.splice(beforeIdx, 0, child)
+  } else {
+    parent.children.push(child)
+  }
+
+  if (child.attach) {
+    child.previousAttachValue = parent.object[child.attach]
+    parent.object[child.attach] = child.object
+    if (parent.object.needsUpdate !== undefined) parent.object.needsUpdate = true
+  } else if (parent.object.add) {
+    parent.object.add(child.object)
+  }
+}
+
 const removeChild = (parent: VoidInstance, child: VoidInstance) => {
   const idx = parent.children.indexOf(child)
   if (idx !== -1) parent.children.splice(idx, 1)
@@ -262,12 +280,12 @@ export const reconciler = Reconciler({
     removeChild(container, child)
   },
 
-  insertBefore(parent: VoidInstance, child: VoidInstance, _before: VoidInstance) {
-    appendChild(parent, child)
+  insertBefore(parent: VoidInstance, child: VoidInstance, before: VoidInstance) {
+    insertBefore(parent, child, before)
   },
 
-  insertInContainerBefore(container: VoidInstance, child: VoidInstance, _before: VoidInstance) {
-    appendChild(container, child)
+  insertInContainerBefore(container: VoidInstance, child: VoidInstance, before: VoidInstance) {
+    insertBefore(container, child, before)
   },
 
   commitUpdate(instance: VoidInstance, _type: string, oldProps: Record<string, any>, newProps: Record<string, any>) {

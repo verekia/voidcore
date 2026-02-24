@@ -2,7 +2,7 @@
 //
 // SpriteMaterial is an unlit material (like BasicMaterial) with defaults tuned for sprites:
 //   - transparent: true  – Sprites are transparent by default (opt out with transparent: false).
-//   - side: 'double'     – Both faces are visible (sprites can be viewed from any angle).
+//   - side: 'front'      – Front-facing only (sprites always face the camera).
 //
 // Sprite-specific properties:
 //   - rotation          – 2D rotation angle (radians) around the billboard's view axis. Default 0.

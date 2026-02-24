@@ -10,6 +10,8 @@
 // AnimationAction   – Controls playback of a single clip (play, stop, fadeIn, fadeOut, crossFadeTo).
 // AnimationMixer    – Manages multiple actions, blends them, and applies the result to bones.
 // new AnimationMixer(skeleton) – Creates a mixer for a given skeleton.
+// mixer.removeAction(action)   – Removes an action from the mixer.
+// mixer.stopAll()              – Stops all actions and clears the actions list.
 
 import { quatSlerp } from '../math/index'
 
@@ -161,6 +163,18 @@ export class AnimationMixer {
     action._cachedIndices = new Int32Array(clip.tracks.length)
     this._actions.push(action)
     return action
+  }
+
+  removeAction(action: AnimationAction): void {
+    const idx = this._actions.indexOf(action)
+    if (idx !== -1) this._actions.splice(idx, 1)
+  }
+
+  stopAll(): void {
+    for (let i = 0; i < this._actions.length; i++) {
+      this._actions[i]!.stop()
+    }
+    this._actions.length = 0
   }
 
   update(dt: number) {

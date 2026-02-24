@@ -17,8 +17,6 @@
 // AABB  – Axis-aligned bounding box [minX,minY,minZ, maxX,maxY,maxZ] for culling/raycasting.
 // Frustum – Six clip planes extracted from the view-projection matrix for frustum culling.
 //
-// Voidcore Math — Z-up, right-handed, Float32Array-backed, zero-allocation
-
 export type Vec2 = Float32Array // length 2
 export type Vec3 = Float32Array // length 3
 export type Vec4 = Float32Array // length 4
@@ -37,6 +35,16 @@ export const VEC3_FORWARD: Vec3 = new Float32Array([0, 1, 0])
 export const VEC3_RIGHT: Vec3 = new Float32Array([1, 0, 0])
 export const QUAT_IDENTITY: Quat = new Float32Array([0, 0, 0, 1])
 export const MAT4_IDENTITY: Mat4 = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+
+// ─── Vec2 ─────────────────────────────────────────────────────────────
+
+export const vec2Create = (): Vec2 => new Float32Array(2)
+
+export const vec2Set = (out: Vec2, x: number, y: number): Vec2 => {
+  out[0] = x
+  out[1] = y
+  return out
+}
 
 // ─── Vec3 ─────────────────────────────────────────────────────────────
 
@@ -700,6 +708,11 @@ export const quatNormalize = (out: Quat, a: Quat): Quat => {
     out[1] = a[1]! * inv
     out[2] = a[2]! * inv
     out[3] = a[3]! * inv
+  } else {
+    out[0] = 0
+    out[1] = 0
+    out[2] = 0
+    out[3] = 0
   }
   return out
 }
@@ -757,6 +770,11 @@ export const quatInvert = (out: Quat, a: Quat): Quat => {
     out[1] = -a[1]! * inv
     out[2] = -a[2]! * inv
     out[3] = a[3]! * inv
+  } else {
+    out[0] = 0
+    out[1] = 0
+    out[2] = 0
+    out[3] = 0
   }
   return out
 }

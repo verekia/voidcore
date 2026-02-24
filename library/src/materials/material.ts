@@ -100,7 +100,6 @@ export class Material {
   customShader?: CustomShader
 
   // Computed
-  _hasEmissive = false
   _hasTextures = false
   _hasCustomShader = false
   _hasCustomUniforms = false

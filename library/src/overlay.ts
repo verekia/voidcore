@@ -14,7 +14,6 @@
 //   - Centering via CSS translate(-50%, -50%) — no JS measurement needed
 //   - Depth-based z-index for correct overlap ordering
 //   - Optional distance scaling for perspective-consistent sizing
-//   - Optional raycast occlusion (staggered across frames for performance)
 //   - Per-element pointer-events opt-in (container is pointer-events: none)
 //
 // createOverlayManager(canvas) – Creates the overlay system for a given canvas.
@@ -44,7 +43,6 @@ export interface OverlayOptions {
   node?: Node
   offset?: Vec3 | [number, number, number]
   center?: boolean
-  occlude?: boolean
   distanceScale?: boolean
   pointerEvents?: boolean
 }
@@ -59,12 +57,10 @@ interface OverlayEntry {
   node: Node | null
   offset: Vec3
   center: boolean
-  occlude: boolean
   distanceScale: boolean
   _lastScreenX: number
   _lastScreenY: number
   _wasVisible: boolean
-  _occluded: boolean
 }
 
 // Pre-allocated scratch buffers (zero allocation in hot path)
@@ -128,12 +124,10 @@ export const createOverlayManager = (canvas: HTMLCanvasElement) => {
       node: opts.node ?? null,
       offset: opts.offset ? (new Float32Array(opts.offset) as Vec3) : (new Float32Array(3) as Vec3),
       center: opts.center ?? false,
-      occlude: opts.occlude ?? false,
       distanceScale: opts.distanceScale ?? false,
       _lastScreenX: -Infinity,
       _lastScreenY: -Infinity,
       _wasVisible: false,
-      _occluded: false,
     }
 
     // Style the element for GPU-accelerated positioning
@@ -164,13 +158,7 @@ export const createOverlayManager = (canvas: HTMLCanvasElement) => {
     entries[handle._index] = null
   }
 
-  const update = (
-    camera: PerspectiveCamera,
-    canvasWidth: number,
-    canvasHeight: number,
-    _scene?: unknown,
-    frameCount?: number,
-  ) => {
+  const update = (camera: PerspectiveCamera, canvasWidth: number, canvasHeight: number) => {
     // Compute VP matrix from camera's projection and view matrices
     // (renderers compute this into their own buffer, not onto the camera)
     mat4Multiply(_vpMatrix, camera._projectionMatrix, camera._viewMatrix)
@@ -180,8 +168,6 @@ export const createOverlayManager = (canvas: HTMLCanvasElement) => {
     _tempCamPos[0] = camera.position[0]!
     _tempCamPos[1] = camera.position[1]!
     _tempCamPos[2] = camera.position[2]!
-
-    const frame = frameCount ?? 0
 
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i]
@@ -205,14 +191,7 @@ export const createOverlayManager = (canvas: HTMLCanvasElement) => {
       // Project to screen
       const projected = projectToScreen(_tempWorldPos, _vpMatrix, canvasWidth, canvasHeight)
 
-      // Staggered occlusion testing (every 3rd frame per overlay)
-      if (entry.occlude && (frame + i) % 3 === 0) {
-        // TODO: raycast occlusion when scene raycasting API is available
-        entry._occluded = false
-      }
-
-      // Visibility: hide if behind camera, outside frustum, or occluded
-      const visible = projected.visible && !entry._occluded
+      const visible = projected.visible
 
       if (!visible) {
         if (entry._wasVisible) {

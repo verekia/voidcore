@@ -23,6 +23,9 @@ export class Skeleton {
   _dirty = true
 
   constructor(bones: Node[], inverseBindMatrices: Mat4[]) {
+    if (bones.length > 32) {
+      console.error(`Skeleton: ${bones.length} bones exceeds the 32-bone limit. Extra bones will be ignored.`)
+    }
     this.bones = bones
     this.boneInverseBindMatrices = inverseBindMatrices
     // 32 bones max, 16 floats per mat4

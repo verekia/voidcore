@@ -183,7 +183,7 @@ export const Canvas = ({
       engine.start()
     }
 
-    init()
+    init().catch(console.error)
 
     return () => {
       disposed = true

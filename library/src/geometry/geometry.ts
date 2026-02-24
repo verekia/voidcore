@@ -330,7 +330,7 @@ export const mergeGeometries = (geometries: Geometry[]): Geometry => {
  */
 export const mergeStaticIntoSkinned = (
   skinned: Geometry,
-  static_: Geometry,
+  staticGeo: Geometry,
   boneIndex: number,
   inverseBindMatrix: Mat4,
   localTransform?: Mat4,
@@ -347,18 +347,18 @@ export const mergeStaticIntoSkinned = (
   }
 
   const skinnedVerts = skinned.vertexCount
-  const staticVerts = static_.vertexCount
+  const staticVerts = staticGeo.vertexCount
   const totalVerts = skinnedVerts + staticVerts
-  const totalIndices = skinned.indexCount + static_.indexCount
+  const totalIndices = skinned.indexCount + staticGeo.indexCount
 
   // Transform static positions into bind-pose space
   const positions = new Float32Array(totalVerts * 3)
   positions.set(skinned.positions)
   const tmpVec = new Float32Array(3)
   for (let i = 0; i < staticVerts; i++) {
-    tmpVec[0] = static_.positions[i * 3]!
-    tmpVec[1] = static_.positions[i * 3 + 1]!
-    tmpVec[2] = static_.positions[i * 3 + 2]!
+    tmpVec[0] = staticGeo.positions[i * 3]!
+    tmpVec[1] = staticGeo.positions[i * 3 + 1]!
+    tmpVec[2] = staticGeo.positions[i * 3 + 2]!
     vec3TransformMat4(tmpVec, tmpVec, finalTransform)
     positions[(skinnedVerts + i) * 3] = tmpVec[0]!
     positions[(skinnedVerts + i) * 3 + 1] = tmpVec[1]!
@@ -370,9 +370,9 @@ export const mergeStaticIntoSkinned = (
   normals.set(skinned.normals)
   const m = finalTransform
   for (let i = 0; i < staticVerts; i++) {
-    const nx = static_.normals[i * 3]!
-    const ny = static_.normals[i * 3 + 1]!
-    const nz = static_.normals[i * 3 + 2]!
+    const nx = staticGeo.normals[i * 3]!
+    const ny = staticGeo.normals[i * 3 + 1]!
+    const nz = staticGeo.normals[i * 3 + 2]!
     let rx = m[0]! * nx + m[4]! * ny + m[8]! * nz
     let ry = m[1]! * nx + m[5]! * ny + m[9]! * nz
     let rz = m[2]! * nx + m[6]! * ny + m[10]! * nz
@@ -391,8 +391,8 @@ export const mergeStaticIntoSkinned = (
   // Merge indices (offset static indices by skinned vertex count)
   const indices = totalVerts > 65535 ? new Uint32Array(totalIndices) : new Uint16Array(totalIndices)
   indices.set(skinned.indices)
-  for (let i = 0; i < static_.indexCount; i++) {
-    indices[skinned.indexCount + i] = static_.indices[i]! + skinnedVerts
+  for (let i = 0; i < staticGeo.indexCount; i++) {
+    indices[skinned.indexCount + i] = staticGeo.indices[i]! + skinnedVerts
   }
 
   // Merge joints: skinned joints + static joints (all bound to boneIndex)
@@ -413,7 +413,7 @@ export const mergeStaticIntoSkinned = (
 
   // Merge vertex colors
   let colors: Float32Array | undefined
-  if (skinned.colors || static_.colors) {
+  if (skinned.colors || staticGeo.colors) {
     colors = new Float32Array(totalVerts * 4)
     if (skinned.colors) {
       colors.set(skinned.colors)
@@ -426,8 +426,8 @@ export const mergeStaticIntoSkinned = (
         colors[o + 3] = 1
       }
     }
-    if (static_.colors) {
-      colors.set(static_.colors, skinnedVerts * 4)
+    if (staticGeo.colors) {
+      colors.set(staticGeo.colors, skinnedVerts * 4)
     } else {
       for (let i = 0; i < staticVerts; i++) {
         const o = (skinnedVerts + i) * 4
@@ -441,7 +441,7 @@ export const mergeStaticIntoSkinned = (
 
   // Merge emissive colors
   let emissiveColors: Float32Array | undefined
-  if (skinned.emissiveColors || static_.emissiveColors) {
+  if (skinned.emissiveColors || staticGeo.emissiveColors) {
     emissiveColors = new Float32Array(totalVerts * 4)
     if (skinned.emissiveColors) {
       emissiveColors.set(skinned.emissiveColors)
@@ -450,8 +450,8 @@ export const mergeStaticIntoSkinned = (
         emissiveColors[i * 4 + 3] = 1
       }
     }
-    if (static_.emissiveColors) {
-      emissiveColors.set(static_.emissiveColors, skinnedVerts * 4)
+    if (staticGeo.emissiveColors) {
+      emissiveColors.set(staticGeo.emissiveColors, skinnedVerts * 4)
     } else {
       for (let i = 0; i < staticVerts; i++) {
         emissiveColors[(skinnedVerts + i) * 4 + 3] = 1
@@ -461,28 +461,28 @@ export const mergeStaticIntoSkinned = (
 
   // Merge UVs
   let uvs: Float32Array | undefined
-  if (skinned.uvs || static_.uvs) {
+  if (skinned.uvs || staticGeo.uvs) {
     uvs = new Float32Array(totalVerts * 2)
     if (skinned.uvs) uvs.set(skinned.uvs)
-    if (static_.uvs) uvs.set(static_.uvs, skinnedVerts * 2)
+    if (staticGeo.uvs) uvs.set(staticGeo.uvs, skinnedVerts * 2)
   }
 
   const result = new Geometry({ positions, normals, indices, joints, weights, uvs, colors, emissiveColors })
 
   // Propagate tiled AO data from either source geometry
-  const tiledSrc = skinned.tiledAoTextures ? skinned : static_.tiledAoTextures ? static_ : null
+  const tiledSrc = skinned.tiledAoTextures ? skinned : staticGeo.tiledAoTextures ? staticGeo : null
   if (tiledSrc) {
     result.tiledAoTextures = tiledSrc.tiledAoTextures
     result.tiledAoScales = tiledSrc.tiledAoScales
   }
 
   // Merge tiled normal data
-  if (skinned.tiledNormalData || static_.tiledNormalData) {
+  if (skinned.tiledNormalData || staticGeo.tiledNormalData) {
     const merged = new Float32Array(totalVerts * 4)
     if (skinned.tiledNormalData) merged.set(skinned.tiledNormalData)
-    if (static_.tiledNormalData) merged.set(static_.tiledNormalData, skinnedVerts * 4)
+    if (staticGeo.tiledNormalData) merged.set(staticGeo.tiledNormalData, skinnedVerts * 4)
     result.tiledNormalData = merged
-    const normalSrc = skinned.tiledNormalTextures ? skinned : static_.tiledNormalTextures ? static_ : null
+    const normalSrc = skinned.tiledNormalTextures ? skinned : staticGeo.tiledNormalTextures ? staticGeo : null
     if (normalSrc) {
       result.tiledNormalTextures = normalSrc.tiledNormalTextures
     }

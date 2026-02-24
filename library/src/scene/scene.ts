@@ -4,8 +4,11 @@
 // node lookup by name. Ambient light is provided by adding an <ambientLight> node to the
 // scene graph (just like directional lights).
 //
-// Each frame, the renderer calls scene.updateGraph() which triggers a top-down traversal
-// to recompute world matrices for any nodes whose transforms have changed.
+// Each frame, the renderer calls scene.updateGraph() which drives an iterative depth-first
+// traversal to recompute world matrices for any nodes whose transforms have changed.
+// Pre-allocated nodeStack and dirtyStack arrays are kept on the Scene to avoid per-frame
+// allocations. Subtrees whose _subtreeDirty flag is false and whose parent world matrix
+// did not change are skipped entirely, so static objects cost nothing once settled.
 //
 // new Scene()          – Creates an empty scene.
 // scene.getByName()    – Finds any node in the scene by its name string (O(1) lookup).
@@ -15,6 +18,10 @@ import { Node, updateWorldMatrices } from './node'
 
 export class Scene extends Node {
   private _nameMap = new Map<string, Node>()
+  // Pre-allocated stacks for the iterative updateWorldMatrices traversal.
+  // Sized for typical scenes; JavaScript arrays grow automatically if exceeded.
+  private _updateNodeStack: Node[] = []
+  private _updateDirtyStack: boolean[] = []
 
   constructor() {
     super()
@@ -30,7 +37,7 @@ export class Scene extends Node {
   }
 
   updateGraph() {
-    updateWorldMatrices(this)
+    updateWorldMatrices(this, this._updateNodeStack, this._updateDirtyStack)
   }
 
   _registerNames(node: Node) {

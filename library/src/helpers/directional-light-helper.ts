@@ -13,7 +13,7 @@
 // light direction. Size and depth come from the light's shadowMapSize, shadowNear, shadowFar.
 //
 // new DirectionalLightHelper(opts?) – Creates the helper mesh. Add helper.mesh to the scene.
-// helper.update(light)              – Call each frame to recompute the shadow volume box.
+// helper.update(light, res?)        – Call each frame to recompute the shadow volume box.
 // helper.dispose()                  – Releases geometry resources.
 
 import { Geometry } from '../geometry/geometry'
@@ -108,7 +108,7 @@ export class DirectionalLightHelper {
     this.mesh.castShadow = false
   }
 
-  update(light: DirectionalLight): void {
+  update(light: DirectionalLight, shadowResolution = 2048): void {
     // 1. Compute shadow VP matrix using the same function as the renderer (GL convention)
     computeLightDir(this._lightDir, this._tempVec3, light)
     computeShadowMatrix(
@@ -117,7 +117,7 @@ export class DirectionalLightHelper {
       light.shadowMapSize,
       light.shadowNear,
       light.shadowFar,
-      2048,
+      shadowResolution,
       this._lightView,
       this._lightProj,
       mat4Ortho,

@@ -15,7 +15,7 @@ import type { Engine } from 'voidcore'
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
-const CHARACTER_COUNT = 400
+const CHARACTER_COUNT = 500
 
 // ─── Page ───────────────────────────────────────────────────────────────────
 

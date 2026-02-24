@@ -124,7 +124,6 @@ interface GeoBufs {
   index: GPUBuffer
   indexFormat: GPUIndexFormat
   indexCount: number
-  baseIndexCount?: number
   color?: GPUBuffer
   emissive?: GPUBuffer
   tiledNormal?: GPUBuffer
@@ -158,8 +157,7 @@ interface RenderTargets {
 
 // ─── Uniform buffer sizes ────────────────────────────────────────────
 
-// FrameUniforms: mat4(64) + light(48) + pad(16) + shadowVP(64) + bias(16) = 208 bytes
-// (WGSL layout is 192 bytes due to tighter packing, but we use 192 for the GPU buffer)
+// FrameUniforms: viewProj(64) + lightDir(12)+intensity(4) + ambient(12)+pad(4) + shadowVP(64) + bias(4)+pad(12) + bloom(4)+pad(12) = 192 bytes
 const FRAME_UB_SIZE = 192
 // ShadowUniforms: mat4(64)
 const SHADOW_UB_SIZE = 64
@@ -2181,7 +2179,6 @@ export class WebGPURenderer implements Renderer {
       index: idxBuf,
       indexFormat: use32 ? 'uint32' : 'uint16',
       indexCount: ic * 2,
-      baseIndexCount: ic,
       color: colorBuf,
       emissive: emissiveBuf,
       tiledNormal: tiledNormalBuf,

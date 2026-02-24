@@ -5,10 +5,10 @@
 // these costly switches.
 //
 // Sort key layout (32-bit unsigned integer):
-//   Bits 31-30: Layer – 0 = opaque (drawn first), 1 = transparent (drawn after)
+//   Bit 30:     Layer – 0 = opaque (drawn first), 1 = transparent (drawn after)
 //
 //   Opaque key (layer 0) – minimizes state changes:
-//     Bits 29-22: Pipeline ID – Groups by shader program (lambert/basic × skinned/static)
+//     Bits 29-22: Pipeline ID – Groups by shader (lambert/basic × skinned/static × vertex-color)
 //     Bits 21-10: Material ID – Groups by material to reduce uniform uploads
 //     Bits 9-0:   Depth       – Nearest first (early-Z optimization)
 //
@@ -72,7 +72,7 @@ export const sortMeshes = (state: SortState, meshes: Mesh[], meshCount: number, 
     const material = mesh.material
     mesh._isSkinned = !!mesh.skeleton && !!mesh.geometry.joints && !!mesh.geometry.weights
 
-    // Layer: bits 31-30 (0 = opaque, 1 = transparent)
+    // Layer: bit 30 (0 = opaque, 1 = transparent)
     const layer = material.transparent ? 1 : 0
 
     // Pipeline ID (add VC bit so vertex-color meshes batch separately)

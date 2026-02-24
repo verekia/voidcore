@@ -21,7 +21,7 @@
 //   far away, only direction matters), then normalized.
 //
 // findTransparentStart() – Scans sorted keys to find the first transparent mesh.
-//   Transparent meshes have bit 31 set in the sort key, placing them after all opaques.
+//   Transparent meshes have bit 30 set in the sort key, placing them after all opaques.
 //   Returns the index in the sorted draw order where transparent meshes begin.
 //
 // computeShadowMatrix() – Builds the light-space view-projection matrix for the shadow map.

@@ -114,7 +114,7 @@ export class Scheduler {
   }
 
   /** Stop the loop and remove all callbacks. */
-  destroy(): void {
+  dispose(): void {
     this.stop()
     this._entries.length = 0
   }

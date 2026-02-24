@@ -17,6 +17,7 @@
 // Raycaster.set()           – Sets the ray from an origin and direction.
 // Raycaster.setFromCamera() – Creates a ray from screen coordinates through the camera.
 // Raycaster.intersectObject() / intersectObjects() – Returns sorted hits (nearest first).
+// createRaycastHit()           – Creates a pre-allocated hit for zero-allocation raycasting.
 //
 // Key algorithms:
 //   Ray-AABB:     Slab method – tests ray against axis-aligned box entry/exit distances.
@@ -38,8 +39,18 @@ export interface RaycastHit {
   normal: Vec3 // Interpolated surface normal (world space)
   uv: Vec2 | null // Interpolated UV (if geometry has UVs)
   triangleIndex: number // Index of the triangle that was hit
-  object: Mesh // The mesh that was hit
+  object: Mesh | null // The mesh that was hit
 }
+
+/** Create a pre-allocated RaycastHit to reuse across frames (avoids per-hit allocations). */
+export const createRaycastHit = (): RaycastHit => ({
+  distance: 0,
+  point: new Float32Array(3) as Vec3,
+  normal: new Float32Array(3) as Vec3,
+  uv: new Float32Array(2) as Vec2,
+  triangleIndex: -1,
+  object: null,
+})
 
 // ─── Internal Types ────────────────────────────────────────────────────────────
 
@@ -486,7 +497,17 @@ export const prebuildBVH = (geometry: Geometry): void => {
 
 const _localOrigin = new Float32Array(3)
 
-const intersectMesh = (
+// Pre-allocated hit used for internal allocating path
+const _tempHit: RaycastHit = {
+  distance: 0,
+  point: new Float32Array(3) as Vec3,
+  normal: new Float32Array(3) as Vec3,
+  uv: new Float32Array(2) as Vec2,
+  triangleIndex: -1,
+  object: null,
+}
+
+const intersectMeshInto = (
   worldOx: number,
   worldOy: number,
   worldOz: number,
@@ -494,8 +515,9 @@ const intersectMesh = (
   worldDy: number,
   worldDz: number,
   mesh: Mesh,
-): RaycastHit | null => {
-  if (!mat4Invert(_invWorldMat, mesh._worldMatrix)) return null
+  hit: RaycastHit,
+): boolean => {
+  if (!mat4Invert(_invWorldMat, mesh._worldMatrix)) return false
 
   // Transform ray origin to local space (point transform, with translation)
   _localOrigin[0] = worldOx
@@ -578,7 +600,7 @@ const intersectMesh = (
     }
   }
 
-  if (closestTriIdx < 0) return null
+  if (closestTriIdx < 0) return false
 
   // Local-space hit point
   const lhx = lox + ldx * closestDist
@@ -586,7 +608,7 @@ const intersectMesh = (
   const lhz = loz + ldz * closestDist
 
   // Transform hit point to world space
-  const hitPoint = new Float32Array(3)
+  const hitPoint = hit.point
   hitPoint[0] = lhx
   hitPoint[1] = lhy
   hitPoint[2] = lhz
@@ -596,7 +618,10 @@ const intersectMesh = (
   const dx = hitPoint[0]! - worldOx,
     dy = hitPoint[1]! - worldOy,
     dz = hitPoint[2]! - worldOz
-  const worldDist = Math.sqrt(dx * dx + dy * dy + dz * dz)
+
+  hit.distance = Math.sqrt(dx * dx + dy * dy + dz * dz)
+  hit.triangleIndex = closestTriIdx
+  hit.object = mesh
 
   // Interpolate surface normal using barycentric coordinates (u, v, 1-u-v)
   const { normals } = mesh.geometry
@@ -616,34 +641,32 @@ const intersectMesh = (
   const wnz = im[8]! * lnx + im[9]! * lny + im[10]! * lnz
   const nlen = Math.sqrt(wnx * wnx + wny * wny + wnz * wnz)
 
-  const hitNormal = new Float32Array(3)
+  const hitNormal = hit.normal
   if (nlen > 1e-6) {
     const inv = 1 / nlen
     hitNormal[0] = wnx * inv
     hitNormal[1] = wny * inv
     hitNormal[2] = wnz * inv
+  } else {
+    hitNormal[0] = 0
+    hitNormal[1] = 0
+    hitNormal[2] = 0
   }
 
   // Interpolate UV if available
-  let uv: Float32Array | null = null
   if (mesh.geometry.uvs) {
     const uvs = mesh.geometry.uvs
     const u0 = indices[closestTriIdx * 3]! * 2
     const u1 = indices[closestTriIdx * 3 + 1]! * 2
     const u2 = indices[closestTriIdx * 3 + 2]! * 2
-    uv = new Float32Array(2)
-    uv[0] = uvs[u0]! * w + uvs[u1]! * closestU + uvs[u2]! * closestV
-    uv[1] = uvs[u0 + 1]! * w + uvs[u1 + 1]! * closestU + uvs[u2 + 1]! * closestV
+    if (!hit.uv) hit.uv = new Float32Array(2) as Vec2
+    hit.uv[0] = uvs[u0]! * w + uvs[u1]! * closestU + uvs[u2]! * closestV
+    hit.uv[1] = uvs[u0 + 1]! * w + uvs[u1 + 1]! * closestU + uvs[u2 + 1]! * closestV
+  } else {
+    hit.uv = null
   }
 
-  return {
-    distance: worldDist,
-    point: hitPoint,
-    normal: hitNormal,
-    uv,
-    triangleIndex: closestTriIdx,
-    object: mesh,
-  }
+  return true
 }
 
 // ─── Raycaster ─────────────────────────────────────────────────────────────────
@@ -716,8 +739,22 @@ export class Raycaster {
   /**
    * Intersect a single object (and optionally its descendants).
    * Returns hits sorted by distance (nearest first).
+   * Pass a pre-allocated `target` array (from `createRaycastHit()`) to avoid per-hit allocations.
+   * When using a target, the return value is the number of hits written into the array.
    */
-  intersectObject(object: Node, recursive = false): RaycastHit[] {
+  intersectObject(object: Node, recursive?: boolean): RaycastHit[]
+  intersectObject(object: Node, recursive: boolean, target: RaycastHit[]): number
+  intersectObject(object: Node, recursive = false, target?: RaycastHit[]): RaycastHit[] | number {
+    if (target) {
+      this._hitCount = 0
+      this._hitTarget = target
+      this._collectHitsInto(object, recursive)
+      const count = this._hitCount
+      this._hitTarget = null
+      // Sort only the filled portion
+      if (count > 1) target.slice(0, count).sort((a, b) => a.distance - b.distance)
+      return count
+    }
     const hits: RaycastHit[] = []
     this._collectHits(object, recursive, hits)
     hits.sort((a, b) => a.distance - b.distance)
@@ -727,14 +764,60 @@ export class Raycaster {
   /**
    * Intersect an array of objects (and optionally their descendants).
    * Returns hits sorted by distance (nearest first).
+   * Pass a pre-allocated `target` array (from `createRaycastHit()`) to avoid per-hit allocations.
+   * When using a target, the return value is the number of hits written into the array.
    */
-  intersectObjects(objects: Node[], recursive = false): RaycastHit[] {
+  intersectObjects(objects: Node[], recursive?: boolean): RaycastHit[]
+  intersectObjects(objects: Node[], recursive: boolean, target: RaycastHit[]): number
+  intersectObjects(objects: Node[], recursive = false, target?: RaycastHit[]): RaycastHit[] | number {
+    if (target) {
+      this._hitCount = 0
+      this._hitTarget = target
+      for (let i = 0; i < objects.length; i++) {
+        this._collectHitsInto(objects[i]!, recursive)
+      }
+      const count = this._hitCount
+      this._hitTarget = null
+      if (count > 1) target.slice(0, count).sort((a, b) => a.distance - b.distance)
+      return count
+    }
     const hits: RaycastHit[] = []
-    for (const obj of objects) {
-      this._collectHits(obj, recursive, hits)
+    for (let i = 0; i < objects.length; i++) {
+      this._collectHits(objects[i]!, recursive, hits)
     }
     hits.sort((a, b) => a.distance - b.distance)
     return hits
+  }
+
+  // Zero-allocation path state
+  _hitCount = 0
+  _hitTarget: RaycastHit[] | null = null
+
+  _collectHitsInto(node: Node, recursive: boolean): void {
+    if (!node.visible) return
+    const target = this._hitTarget!
+
+    if (node.type === 'mesh') {
+      const ox = this.origin[0]!,
+        oy = this.origin[1]!,
+        oz = this.origin[2]!
+      const dx = this.direction[0]!,
+        dy = this.direction[1]!,
+        dz = this.direction[2]!
+      // Grow pool if needed
+      if (this._hitCount >= target.length) {
+        target.push(createRaycastHit())
+      }
+      if (intersectMeshInto(ox, oy, oz, dx, dy, dz, node as Mesh, target[this._hitCount]!)) {
+        this._hitCount++
+      }
+    }
+
+    if (recursive) {
+      for (let i = 0; i < node.children.length; i++) {
+        this._collectHitsInto(node.children[i]!, true)
+      }
+    }
   }
 
   _collectHits(node: Node, recursive: boolean, hits: RaycastHit[]): void {
@@ -747,13 +830,21 @@ export class Raycaster {
       const dx = this.direction[0]!,
         dy = this.direction[1]!,
         dz = this.direction[2]!
-      const hit = intersectMesh(ox, oy, oz, dx, dy, dz, node as Mesh)
-      if (hit) hits.push(hit)
+      if (intersectMeshInto(ox, oy, oz, dx, dy, dz, node as Mesh, _tempHit)) {
+        hits.push({
+          distance: _tempHit.distance,
+          point: new Float32Array(_tempHit.point) as Vec3,
+          normal: new Float32Array(_tempHit.normal) as Vec3,
+          uv: _tempHit.uv ? (new Float32Array(_tempHit.uv) as Vec2) : null,
+          triangleIndex: _tempHit.triangleIndex,
+          object: _tempHit.object,
+        })
+      }
     }
 
     if (recursive) {
-      for (const child of node.children) {
-        this._collectHits(child, true, hits)
+      for (let i = 0; i < node.children.length; i++) {
+        this._collectHits(node.children[i]!, true, hits)
       }
     }
   }
