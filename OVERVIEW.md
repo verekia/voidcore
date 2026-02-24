@@ -456,7 +456,7 @@ The format priority is: ASTC 4×4 > BC7 > ETC2 RGBA > BC3 > RGBA8 (uncompressed 
 
 ## Raycasting and BVH
 
-**Raycasting** (`raycasting/index.ts`) shoots an invisible ray into the 3D scene and finds which triangles it intersects. This is used for mouse picking (what did the user click?), hit detection, and spatial queries.
+**Raycasting** (`raycasting/index.ts`) shoots an invisible ray into the 3D scene and finds which triangles it intersects. Common uses include collision detection, line-of-sight checks, ground placement (projecting objects onto terrain), pseudo-physics (e.g. gravity via downward rays), and mouse/pointer picking.
 
 ### The Problem
 
@@ -475,7 +475,7 @@ VoidCore's BVH uses **binned SAH** (Surface Area Heuristic) for construction: at
 
 ### Zero-Allocation Raycasting
 
-For per-frame raycasts (e.g., continuous pointer tracking), you can pre-allocate hit objects with `createRaycastHit()` and pass them as a target array. The raycaster writes into these pre-allocated objects and returns the hit count instead of allocating new arrays — eliminating GC pressure in the hot path.
+For per-frame raycasts (e.g., collision tests, ground snapping, continuous pointer tracking), you can pre-allocate hit objects with `createRaycastHit()` and pass them as a target array. The raycaster writes into these pre-allocated objects and returns the hit count instead of allocating new arrays — eliminating GC pressure in the hot path.
 
 ---
 

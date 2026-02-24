@@ -1,7 +1,9 @@
-// Raycasting & BVH – Determines what a ray (e.g. from a mouse click) hits in the scene.
+// Raycasting & BVH – Shoots rays into the scene and finds which triangles they hit.
 //
 // Raycasting shoots an invisible line (ray) into the 3D scene and finds which triangles it
-// intersects. This is used for mouse picking, hit detection, and physics queries.
+// intersects. Common uses include collision detection, line-of-sight checks, ground placement
+// (projecting objects onto terrain), pseudo-physics (e.g. gravity via downward rays), and
+// mouse/pointer picking.
 //
 // To avoid testing every triangle of every mesh (too slow), we use a BVH (Bounding Volume
 // Hierarchy): a tree of nested bounding boxes. We first test the ray against large boxes,
