@@ -57,7 +57,14 @@ import {
 } from '../math/index'
 import { Mesh } from '../scene/mesh'
 import { Node } from '../scene/node'
-import { packColorsUnorm8, packEmissiveFloat16, packNormalsSnorm8, packUVsFloat16, packWeightsUnorm8 } from './pack'
+import {
+  packColorsUnorm8,
+  packEmissiveFloat16,
+  packInterleavedFloat16x4x2,
+  packNormalsSnorm8,
+  packUVsFloat16,
+  packWeightsUnorm8,
+} from './pack'
 import {
   collectMeshes,
   computeBillboardMatrix,
@@ -276,11 +283,16 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
       gl.STATIC_DRAW,
     )
 
+    // Interleaved tiledNormal + noiseColor (float16x4 × 2, stride 16 bytes)
     tiledNormalBuffer = gl.createBuffer()!
     gl.bindBuffer(gl.ARRAY_BUFFER, tiledNormalBuffer)
     gl.bufferData(
       gl.ARRAY_BUFFER,
-      packEmissiveFloat16(geometry.tiledNormalData ?? new Float32Array(geometry.vertexCount * 4), geometry.vertexCount),
+      packInterleavedFloat16x4x2(
+        geometry.tiledNormalData ?? new Float32Array(geometry.vertexCount * 4),
+        geometry.noiseColorData ?? new Float32Array(geometry.vertexCount * 4),
+        geometry.vertexCount,
+      ),
       gl.STATIC_DRAW,
     )
   }
@@ -353,10 +365,12 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
     gl.enableVertexAttribArray(6)
     gl.vertexAttribPointer(6, 4, gl.HALF_FLOAT, false, 0, 0)
 
-    // Tiled normal data (location 7) — float16x4
+    // Tiled normal data (location 7) + noise color data (location 8) — interleaved float16x4, stride 16
     gl.bindBuffer(gl.ARRAY_BUFFER, tiledNormalBuffer!)
     gl.enableVertexAttribArray(7)
-    gl.vertexAttribPointer(7, 4, gl.HALF_FLOAT, false, 0, 0)
+    gl.vertexAttribPointer(7, 4, gl.HALF_FLOAT, false, 16, 0)
+    gl.enableVertexAttribArray(8)
+    gl.vertexAttribPointer(8, 4, gl.HALF_FLOAT, false, 16, 8)
   } else {
     gl.disableVertexAttribArray(3)
 
@@ -379,6 +393,7 @@ const ensureGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry) => {
     gl.disableVertexAttribArray(5)
     gl.disableVertexAttribArray(6)
     gl.disableVertexAttribArray(7)
+    gl.disableVertexAttribArray(8)
   }
 
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuffer)
@@ -470,13 +485,18 @@ const ensureOutlineGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry)
     gl.bindBuffer(gl.ARRAY_BUFFER, emissiveBuf)
     gl.bufferData(gl.ARRAY_BUFFER, combinedEmissive, gl.STATIC_DRAW)
 
-    const baseTiledNormal = packEmissiveFloat16(geometry.tiledNormalData ?? new Float32Array(vc * 4), vc)
-    const combinedTiledNormal = new Uint16Array(vc * 2 * 4)
-    combinedTiledNormal.set(baseTiledNormal, 0)
-    combinedTiledNormal.set(baseTiledNormal, vc * 4)
+    // Interleaved tiledNormal + noiseColor (float16x4 × 2, stride 16 bytes)
+    const baseInterleaved = packInterleavedFloat16x4x2(
+      geometry.tiledNormalData ?? new Float32Array(vc * 4),
+      geometry.noiseColorData ?? new Float32Array(vc * 4),
+      vc,
+    )
+    const combinedInterleaved = new Uint16Array(vc * 2 * 8)
+    combinedInterleaved.set(baseInterleaved, 0)
+    combinedInterleaved.set(baseInterleaved, vc * 8)
     tiledNormalBuf = gl.createBuffer()!
     gl.bindBuffer(gl.ARRAY_BUFFER, tiledNormalBuf)
-    gl.bufferData(gl.ARRAY_BUFFER, combinedTiledNormal, gl.STATIC_DRAW)
+    gl.bufferData(gl.ARRAY_BUFFER, combinedInterleaved, gl.STATIC_DRAW)
   }
 
   // Combined joints + weights for skinned meshes
@@ -564,9 +584,12 @@ const ensureOutlineGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry)
     gl.enableVertexAttribArray(6)
     gl.vertexAttribPointer(6, 4, gl.HALF_FLOAT, false, 0, 0)
 
+    // Tiled normal (location 7) + noise color (location 8) — interleaved, stride 16
     gl.bindBuffer(gl.ARRAY_BUFFER, tiledNormalBuf!)
     gl.enableVertexAttribArray(7)
-    gl.vertexAttribPointer(7, 4, gl.HALF_FLOAT, false, 0, 0)
+    gl.vertexAttribPointer(7, 4, gl.HALF_FLOAT, false, 16, 0)
+    gl.enableVertexAttribArray(8)
+    gl.vertexAttribPointer(8, 4, gl.HALF_FLOAT, false, 16, 8)
   } else {
     gl.disableVertexAttribArray(3)
 
@@ -587,6 +610,7 @@ const ensureOutlineGPUBuffers = (gl: WebGL2RenderingContext, geometry: Geometry)
     gl.disableVertexAttribArray(5)
     gl.disableVertexAttribArray(6)
     gl.disableVertexAttribArray(7)
+    gl.disableVertexAttribArray(8)
   }
 
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf)

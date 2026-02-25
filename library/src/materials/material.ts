@@ -9,7 +9,10 @@
 // colors directly from geometry attributes, not from material uniforms. Palette entries can
 // include per-material tiled AO textures (tiledAo, tiledAoIntensity, tiledAoScale) that
 // repeat across surfaces using world-space XY coordinates, combining multiplicatively with
-// the world AO map.
+// the world AO map. Palette entries can also specify a secondary color (color2) for noise
+// color blending — the shader blends between color and color2 using a procedural 3D dot
+// noise function evaluated in world space, creating organic color variation (e.g. grass)
+// without additional textures. The noiseScale parameter controls the spatial frequency.
 //
 // Texture maps add per-pixel detail from images:
 //   - colorMap – Multiplies the base color by a texture sample (diffuse/albedo map).
@@ -60,6 +63,8 @@ export interface CustomShader {
 
 export interface PaletteEntry {
   color: [number, number, number]
+  color2?: [number, number, number]
+  noiseScale?: number
   emissive?: [number, number, number]
   emissiveIntensity?: number
   tiledAo?: Texture

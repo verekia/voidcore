@@ -91,6 +91,7 @@ Instead of `const result = vec3Add(a, b)` which allocates a new array every call
 ### Coordinate System
 
 VoidCore uses a **Z-up, right-handed** coordinate system:
+
 - **+X** is right
 - **+Y** is forward
 - **+Z** is up
@@ -99,7 +100,7 @@ This matches many CAD/engineering conventions. Some engines use Y-up (notably Th
 
 ### Column-Major Matrices
 
-Matrices are stored in column-major order, meaning the first four elements are the first *column*, not the first row. This matches what WebGPU and WebGL expect, so matrices can be uploaded to the GPU without transposition. Key matrix operations include:
+Matrices are stored in column-major order, meaning the first four elements are the first _column_, not the first row. This matches what WebGPU and WebGL expect, so matrices can be uploaded to the GPU without transposition. Key matrix operations include:
 
 - **mat4Compose** — Builds a matrix from position, rotation (quaternion), and scale.
 - **mat4Perspective** — Builds a perspective projection matrix from field-of-view, aspect ratio, and near/far planes.
@@ -125,11 +126,13 @@ The scene graph is a tree structure where every 3D object is a **Node** (`scene/
 ### Transforms
 
 Each node stores a local transform as three components:
+
 - **position** (Vec3) — Where the node is, relative to its parent.
 - **rotation** (Quat) — How the node is oriented, relative to its parent.
 - **scale** (Vec3) — How the node is scaled, relative to its parent.
 
 From these, two matrices are computed:
+
 - **Local matrix** = `mat4Compose(position, rotation, scale)` — The transform relative to the parent.
 - **World matrix** = `parent.worldMatrix × localMatrix` — The transform relative to the world origin.
 
@@ -152,12 +155,14 @@ A **Geometry** (`geometry/geometry.ts`) holds the raw arrays that describe the s
 ### Vertex Attributes
 
 Each vertex has:
+
 - **Position** (Float32, 3 components) — Where the vertex is in 3D space.
 - **Normal** (Float32, 3 components) — A unit-length vector perpendicular to the surface. Used for lighting calculations (how much light hits this point depends on the angle between the normal and the light direction).
 - **UV** (Float32, 2 components, optional) — Texture coordinates that map a 2D image onto the 3D surface. (0,0) is one corner of the texture, (1,1) is the opposite corner.
 - **Index buffer** (Uint16 or Uint32) — Defines which vertices form each triangle. Three consecutive indices = one triangle. Index buffers save memory by letting multiple triangles share vertices.
 
 Optional attributes for advanced features:
+
 - **Colors / Emissive Colors** — Per-vertex colors baked from a palette (see Materials).
 - **Joints / Weights** — Bone indices and blend weights for skeletal animation.
 - **Material Indices** — Per-vertex palette entry index for the `bakePalette()` system.
@@ -166,13 +171,13 @@ Optional attributes for advanced features:
 
 When uploading to the GPU, not every attribute needs full 32-bit float precision. VoidCore packs attributes into smaller formats to reduce memory bandwidth (`renderer/pack.ts`):
 
-| Attribute | CPU Format | GPU Format | Savings |
-|-----------|-----------|------------|---------|
-| Normals | Float32×3 (12 bytes) | Snorm8×4 (4 bytes) | 3× smaller. Unit-length normals only need [-1,1] range; 8-bit gives 1/127 precision. |
-| UVs | Float32×2 (8 bytes) | Float16×2 (4 bytes) | 2× smaller. Texture coordinates rarely need more than ~3 decimal digits. |
-| Bone weights | Float32×4 (16 bytes) | Unorm8×4 (4 bytes) | 4× smaller. Weights are [0,1] and sum to 1.0; 1/255 precision is enough. |
-| Vertex colors | Float32×4 (16 bytes) | Unorm8×4 (4 bytes) | 4× smaller. Palette-baked colors are [0,1] range. |
-| Emissive | Float32×4 (16 bytes) | Float16×4 (8 bytes) | 2× smaller. Emissive can exceed 1.0 (HDR), so half-float is needed. |
+| Attribute     | CPU Format           | GPU Format          | Savings                                                                              |
+| ------------- | -------------------- | ------------------- | ------------------------------------------------------------------------------------ |
+| Normals       | Float32×3 (12 bytes) | Snorm8×4 (4 bytes)  | 3× smaller. Unit-length normals only need [-1,1] range; 8-bit gives 1/127 precision. |
+| UVs           | Float32×2 (8 bytes)  | Float16×2 (4 bytes) | 2× smaller. Texture coordinates rarely need more than ~3 decimal digits.             |
+| Bone weights  | Float32×4 (16 bytes) | Unorm8×4 (4 bytes)  | 4× smaller. Weights are [0,1] and sum to 1.0; 1/255 precision is enough.             |
+| Vertex colors | Float32×4 (16 bytes) | Unorm8×4 (4 bytes)  | 4× smaller. Palette-baked colors are [0,1] range.                                    |
+| Emissive      | Float32×4 (16 bytes) | Float16×4 (8 bytes) | 2× smaller. Emissive can exceed 1.0 (HDR), so half-float is needed.                  |
 
 The bone weight packing includes a normalization step that ensures the four quantized values sum to exactly 255 — without this, rounding errors cause the skin matrix to drift, and vertices shift noticeably at large distances from the origin.
 
@@ -183,6 +188,7 @@ VoidCore generates common shapes procedurally (`geometry/primitives.ts`): Plane,
 ### Bounding Boxes
 
 Every Geometry computes an axis-aligned bounding box (AABB) from its vertex positions. This AABB is used for:
+
 - **Frustum culling** — If the AABB (transformed to world space) is entirely outside the camera's view frustum, skip drawing the mesh.
 - **Raycasting** — First test the ray against the AABB (fast); only test individual triangles if the ray hits the AABB.
 
@@ -252,6 +258,7 @@ Each frame, the renderer executes a multi-pass pipeline. Both the WebGPU (`rende
 ### 3. Mesh Collection and Culling
 
 A single pass over the scene graph (`shared.ts: collectMeshes`) performs:
+
 - **Distance culling** — Meshes with a `maxDistance` are hidden (including their shadows) when the camera is farther than that distance. Uses squared-distance comparison (no square root) for zero allocation.
 - **Frustum culling** — Each mesh's world-space AABB is tested against the camera's view frustum (six clip planes). Meshes entirely outside the frustum are skipped.
 - **Shadow caster collection** — Meshes outside the camera frustum but inside the light's shadow frustum are still collected for shadow rendering (so they can cast shadows into the visible area).
@@ -261,6 +268,7 @@ A single pass over the scene graph (`shared.ts: collectMeshes`) performs:
 Meshes are sorted to minimize GPU state changes and ensure correct draw order (`renderer/sort.ts`).
 
 The sort uses a **32-bit composite key** per mesh:
+
 - **Bit 30: Layer** — 0 = opaque, 1 = transparent. This ensures all opaque meshes draw before any transparent mesh.
 - **Opaque keys** prioritize state change reduction: pipeline ID (bits 29–22) → material ID (bits 21–10) → depth (bits 9–0, nearest first for early-Z).
 - **Transparent keys** prioritize correct depth order: depth (bits 29–20, farthest first) → pipeline → material.
@@ -280,6 +288,7 @@ A depth-only render from the light's perspective into a shadow map texture. Only
 ### 7. Main Render Pass (MSAA + MRT)
 
 The main pass draws all visible meshes into two render targets simultaneously (Multiple Render Targets):
+
 - **Color target** — The regular scene color.
 - **Emissive target** — Only emissive/glowing contributions, used by the bloom pass.
 
@@ -288,6 +297,7 @@ Multi-sample anti-aliasing (MSAA, 4× samples) smooths jagged triangle edges. Af
 ### 8. Bloom Post-Processing
 
 The emissive target feeds a bloom chain:
+
 1. **Downsample** — A 13-tap filter progressively shrinks the emissive image through several mip levels. The first level uses Karis averaging to suppress firefly artifacts (tiny extremely bright pixels).
 2. **Upsample** — A 9-tap tent filter blurs back up, additively blending each level.
 
@@ -349,6 +359,7 @@ VoidCore uses **shadow mapping** — a technique where the scene is rendered fro
 ### Shadow Map Generation
 
 A **DirectionalLight** simulates an infinitely distant light source (like the sun) with parallel rays. Shadow configuration lives on the light itself:
+
 - **shadowMapSize** — The orthographic box size (how large an area the shadow covers).
 - **shadowNear / shadowFar** — Near and far planes for the shadow volume.
 - **shadowBias / shadowSlopeBias** — Depth offsets to prevent shadow acne (a moiré artifact caused by floating-point precision when a surface tests its own depth).
@@ -435,6 +446,7 @@ When instancing multiple copies of the same animated character, each instance ne
 glTF (GL Transmission Format) is the standard format for 3D models on the web — like JPEG for images. VoidCore loads the binary variant (.glb), which packages everything into a single file.
 
 The loader (`loaders/gltf.ts`) works in several passes:
+
 1. **Parse the GLB binary** — Extract the JSON chunk (scene description) and BIN chunk (raw vertex/animation data).
 2. **Create nodes** — For each glTF node, create a Mesh, Group, or bone with its transform. For each mesh primitive, read vertex attributes from binary accessors, optionally decoding Draco-compressed geometry.
 3. **Build hierarchy** — Connect parent-child relationships.
@@ -484,11 +496,13 @@ For per-frame raycasts (e.g., collision tests, ground snapping, continuous point
 ### PerspectiveCamera
 
 A **PerspectiveCamera** (`scene/camera.ts`) uses perspective projection: objects farther away appear smaller, matching human vision. It's defined by:
+
 - **fov** — Field of view in degrees (how "wide" the lens is, default 60°).
 - **near / far** — Clipping planes (objects outside this range are invisible).
 - **aspect** — Viewport width/height ratio (set automatically by the renderer).
 
 The camera produces two matrices:
+
 - **Projection matrix** — Converts 3D eye-space coordinates to clip space (applies the perspective effect).
 - **View matrix** — Converts world-space coordinates to eye-space (where is the camera looking from and at what?).
 
@@ -499,6 +513,7 @@ The GPU multiplies these together into a **view-projection matrix** that transfo
 **OrbitControls** (`controls/orbit.ts`) provide mouse/touch camera interaction. The camera's position is defined in **spherical coordinates** (azimuth angle, elevation angle, distance) relative to a target point.
 
 Input mapping:
+
 - **Left drag / 1-finger** → Orbit (rotate azimuth and elevation).
 - **Right drag / 2-finger** → Pan (shift the target point).
 - **Scroll / pinch** → Zoom (change distance).
@@ -514,6 +529,7 @@ The **Scheduler** (`scheduler.ts`) manages a single `requestAnimationFrame` loop
 ### How It Works
 
 Callbacks are registered with:
+
 - **Priority** (numeric, lower runs first, can be negative) — Control execution order. For example, animation updates might run at priority -1, physics at 0, rendering at 1.
 - **FPS throttle** (optional, per-callback) — Limit a callback to at most N executions per second.
 
@@ -536,6 +552,7 @@ A **Sprite** (`scene/sprite.ts`) is a flat rectangular plane that automatically 
 All sprites share a single 1×1 `PlaneGeometry` (avoiding per-sprite allocation). The renderer computes a **billboard world matrix** on the CPU by extracting the camera's right and up vectors from the view matrix, then building a new matrix that uses these as the sprite's local X/Y axes while preserving its world position and scale.
 
 **SpriteMaterial** properties:
+
 - **rotation** — 2D rotation (radians) around the view axis.
 - **sizeAttenuation** — When true (default), sprites shrink with distance like normal geometry. When false, sprites maintain constant screen size regardless of distance (useful for labels or HUD markers).
 

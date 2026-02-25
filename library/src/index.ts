@@ -61,6 +61,9 @@ export { Raycaster, buildMeshBVH, prebuildBVH, createRaycastHit, type RaycastHit
 export { loadGLTF, type GLTFResult } from './loaders/gltf'
 export { loadKTX2 } from './loaders/ktx2'
 
+// Shader snippets
+export { DOT_NOISE_WGSL, DOT_NOISE_GLSL } from './renderer/shaders'
+
 // Helpers
 export { DirectionalLightHelper } from './helpers/directional-light-helper'
 

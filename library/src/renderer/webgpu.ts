@@ -58,7 +58,14 @@ import {
 } from '../math/index'
 import { Mesh } from '../scene/mesh'
 import { Node } from '../scene/node'
-import { packColorsUnorm8, packEmissiveFloat16, packNormalsSnorm8, packUVsFloat16, packWeightsUnorm8 } from './pack'
+import {
+  packColorsUnorm8,
+  packEmissiveFloat16,
+  packInterleavedFloat16x4x2,
+  packNormalsSnorm8,
+  packUVsFloat16,
+  packWeightsUnorm8,
+} from './pack'
 import {
   collectMeshes,
   computeBillboardMatrix,
@@ -189,22 +196,34 @@ const SKINNED_VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
   { arrayStride: 4, attributes: [{ shaderLocation: 4, offset: 0, format: 'unorm8x4' as GPUVertexFormat }] },
 ]
 
-// Vertex-color Lambert: pos + normal + uv + color + emissive + tiledNormal
+// Vertex-color Lambert: pos + normal + uv + color + emissive + tiledNormal/noiseColor (interleaved)
 const VC_VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
   ...VERTEX_BUFFER_LAYOUT,
   { arrayStride: 4, attributes: [{ shaderLocation: 3, offset: 0, format: 'unorm8x4' as GPUVertexFormat }] },
   { arrayStride: 8, attributes: [{ shaderLocation: 6, offset: 0, format: 'float16x4' as GPUVertexFormat }] },
-  { arrayStride: 8, attributes: [{ shaderLocation: 7, offset: 0, format: 'float16x4' as GPUVertexFormat }] },
+  {
+    arrayStride: 16,
+    attributes: [
+      { shaderLocation: 7, offset: 0, format: 'float16x4' as GPUVertexFormat },
+      { shaderLocation: 8, offset: 8, format: 'float16x4' as GPUVertexFormat },
+    ],
+  },
 ]
 
-// Vertex-color Lambert skinned: pos + normal + uv + color + joints + weights + emissive + tiledNormal
+// Vertex-color Lambert skinned: pos + normal + uv + color + joints + weights + emissive + tiledNormal/noiseColor (interleaved)
 const VC_SKINNED_VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout[] = [
   ...VERTEX_BUFFER_LAYOUT,
   { arrayStride: 4, attributes: [{ shaderLocation: 3, offset: 0, format: 'unorm8x4' as GPUVertexFormat }] },
   { arrayStride: 4, attributes: [{ shaderLocation: 4, offset: 0, format: 'uint8x4' as GPUVertexFormat }] },
   { arrayStride: 4, attributes: [{ shaderLocation: 5, offset: 0, format: 'unorm8x4' as GPUVertexFormat }] },
   { arrayStride: 8, attributes: [{ shaderLocation: 6, offset: 0, format: 'float16x4' as GPUVertexFormat }] },
-  { arrayStride: 8, attributes: [{ shaderLocation: 7, offset: 0, format: 'float16x4' as GPUVertexFormat }] },
+  {
+    arrayStride: 16,
+    attributes: [
+      { shaderLocation: 7, offset: 0, format: 'float16x4' as GPUVertexFormat },
+      { shaderLocation: 8, offset: 8, format: 'float16x4' as GPUVertexFormat },
+    ],
+  },
 ]
 
 // Shadow depth pass: position only
@@ -1929,21 +1948,22 @@ export class WebGPURenderer implements Renderer {
       })
       d.queue.writeBuffer(emissiveBuf, 0, packedEmissive.buffer, packedEmissive.byteOffset, packedEmissive.byteLength)
 
-      // Tiled normal data (float16x4) — per-vertex [layerIdx/255, intensity, scale, 0]
-      const packedTiledNormal = packEmissiveFloat16(
+      // Interleaved tiledNormal + noiseColor (float16x4 × 2, stride 16 bytes)
+      const packedInterleaved = packInterleavedFloat16x4x2(
         geometry.tiledNormalData ?? new Float32Array(geometry.vertexCount * 4),
+        geometry.noiseColorData ?? new Float32Array(geometry.vertexCount * 4),
         geometry.vertexCount,
       )
       tiledNormalBuf = d.createBuffer({
-        size: Math.max(packedTiledNormal.byteLength, 4),
+        size: Math.max(packedInterleaved.byteLength, 4),
         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
       })
       d.queue.writeBuffer(
         tiledNormalBuf,
         0,
-        packedTiledNormal.buffer,
-        packedTiledNormal.byteOffset,
-        packedTiledNormal.byteLength,
+        packedInterleaved.buffer,
+        packedInterleaved.byteOffset,
+        packedInterleaved.byteLength,
       )
     }
 
@@ -2096,20 +2116,25 @@ export class WebGPURenderer implements Renderer {
         combinedEmissive.byteLength,
       )
 
-      const baseTiledNormal = packEmissiveFloat16(geometry.tiledNormalData ?? new Float32Array(vc * 4), vc)
-      const combinedTiledNormal = new Uint16Array(vc * 2 * 4)
-      combinedTiledNormal.set(baseTiledNormal, 0)
-      combinedTiledNormal.set(baseTiledNormal, vc * 4)
+      // Interleaved tiledNormal + noiseColor (float16x4 × 2, stride 16 bytes)
+      const baseInterleaved = packInterleavedFloat16x4x2(
+        geometry.tiledNormalData ?? new Float32Array(vc * 4),
+        geometry.noiseColorData ?? new Float32Array(vc * 4),
+        vc,
+      )
+      const combinedInterleaved = new Uint16Array(vc * 2 * 8)
+      combinedInterleaved.set(baseInterleaved, 0)
+      combinedInterleaved.set(baseInterleaved, vc * 8)
       tiledNormalBuf = d.createBuffer({
-        size: combinedTiledNormal.byteLength,
+        size: combinedInterleaved.byteLength,
         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
       })
       d.queue.writeBuffer(
         tiledNormalBuf,
         0,
-        combinedTiledNormal.buffer,
-        combinedTiledNormal.byteOffset,
-        combinedTiledNormal.byteLength,
+        combinedInterleaved.buffer,
+        combinedInterleaved.byteOffset,
+        combinedInterleaved.byteLength,
       )
     }
 

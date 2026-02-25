@@ -19,6 +19,9 @@
 // tiled normal maps are packed into tiledNormalData (float16x4: layerIndex/255, intensity,
 // scale, 0) and tiledNormalTextures, uploaded as a second 2D array texture. Tiled normals
 // use a cotangent-frame technique (screen-space derivatives) so no tangent attribute is needed.
+// Per-material noise color blending is packed into noiseColorData (float16x4: color2.r,
+// color2.g, color2.b, noiseScale). When noiseScale > 0, the shader blends between the
+// primary and secondary color using a procedural dot noise function in world space.
 //
 // new Geometry(data)                  – Wraps raw arrays into a Geometry object.
 // bakePalette(geometry, palette)      – Bakes palette entries into vertex colors/emissiveColors (cached by reference).
@@ -65,6 +68,7 @@ export class Geometry {
   tiledAoScales?: Float32Array
   tiledNormalData?: Float32Array
   tiledNormalTextures?: import('../materials/texture').Texture[]
+  noiseColorData?: Float32Array
 
   _smoothNormals?: Float32Array
   _gpuBuffers: unknown = null
@@ -157,10 +161,20 @@ export const bakePalette = (geometry: Geometry, palette: PaletteEntry[]): Geomet
     }
   }
 
+  // Check if any palette entry has color2 for noise color blending
+  let hasNoiseColor = false
+  for (const entry of palette) {
+    if (entry.color2) {
+      hasNoiseColor = true
+      break
+    }
+  }
+
   const vc = geometry.vertexCount
   const colors = new Float32Array(vc * 4)
   const emissiveColors = new Float32Array(vc * 4)
   const tiledNormalData = tiledNormalTextures.length > 0 ? new Float32Array(vc * 4) : undefined
+  const noiseColorData = hasNoiseColor ? new Float32Array(vc * 4) : undefined
   const matIndices = geometry.materialIndices
 
   for (let i = 0; i < vc; i++) {
@@ -187,6 +201,13 @@ export const bakePalette = (geometry: Geometry, palette: PaletteEntry[]): Geomet
       tiledNormalData[o + 2] = entry.tiledNormal ? (entry.tiledNormalScale ?? 1.0) : 0
       tiledNormalData[o + 3] = 0
     }
+    // Pack noise color data: [color2.r, color2.g, color2.b, noiseScale]
+    if (noiseColorData) {
+      noiseColorData[o] = entry.color2?.[0] ?? 0
+      noiseColorData[o + 1] = entry.color2?.[1] ?? 0
+      noiseColorData[o + 2] = entry.color2?.[2] ?? 0
+      noiseColorData[o + 3] = entry.color2 ? (entry.noiseScale ?? 1.0) : 0
+    }
   }
 
   const result = new Geometry({
@@ -212,6 +233,11 @@ export const bakePalette = (geometry: Geometry, palette: PaletteEntry[]): Geomet
     result.tiledNormalData = tiledNormalData
   }
 
+  // Attach noise color data if any entry has color2
+  if (noiseColorData) {
+    result.noiseColorData = noiseColorData
+  }
+
   if (!byPalette) {
     byPalette = new WeakMap()
     coloredGeometryCache.set(geometry, byPalette)
@@ -232,6 +258,7 @@ export const mergeGeometries = (geometries: Geometry[]): Geometry => {
   let hasColors = false
   let hasMaterialIndices = false
   let hasTiledNormalData = false
+  let hasNoiseColorData = false
   for (const geo of geometries) {
     totalVertices += geo.vertexCount
     totalIndices += geo.indexCount
@@ -239,6 +266,7 @@ export const mergeGeometries = (geometries: Geometry[]): Geometry => {
     if (geo.colors) hasColors = true
     if (geo.materialIndices) hasMaterialIndices = true
     if (geo.tiledNormalData) hasTiledNormalData = true
+    if (geo.noiseColorData) hasNoiseColorData = true
   }
 
   const positions = new Float32Array(totalVertices * 3)
@@ -249,6 +277,7 @@ export const mergeGeometries = (geometries: Geometry[]): Geometry => {
   const emissiveColors = hasColors ? new Float32Array(totalVertices * 4) : undefined
   const materialIndices = hasMaterialIndices ? new Uint8Array(totalVertices) : undefined
   const tiledNormalData = hasTiledNormalData ? new Float32Array(totalVertices * 4) : undefined
+  const noiseColorData = hasNoiseColorData ? new Float32Array(totalVertices * 4) : undefined
 
   let vOff = 0
   let iOff = 0
@@ -284,6 +313,9 @@ export const mergeGeometries = (geometries: Geometry[]): Geometry => {
     if (tiledNormalData && geo.tiledNormalData) {
       tiledNormalData.set(geo.tiledNormalData, vOff * 4)
     }
+    if (noiseColorData && geo.noiseColorData) {
+      noiseColorData.set(geo.noiseColorData, vOff * 4)
+    }
     if (materialIndices && geo.materialIndices) {
       materialIndices.set(geo.materialIndices, vOff)
     }
@@ -314,6 +346,11 @@ export const mergeGeometries = (geometries: Geometry[]): Geometry => {
         break
       }
     }
+  }
+
+  // Propagate noise color data
+  if (noiseColorData) {
+    result.noiseColorData = noiseColorData
   }
 
   return result
@@ -486,6 +523,14 @@ export const mergeStaticIntoSkinned = (
     if (normalSrc) {
       result.tiledNormalTextures = normalSrc.tiledNormalTextures
     }
+  }
+
+  // Merge noise color data
+  if (skinned.noiseColorData || staticGeo.noiseColorData) {
+    const merged = new Float32Array(totalVerts * 4)
+    if (skinned.noiseColorData) merged.set(skinned.noiseColorData)
+    if (staticGeo.noiseColorData) merged.set(staticGeo.noiseColorData, skinnedVerts * 4)
+    result.noiseColorData = merged
   }
 
   return result

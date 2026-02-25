@@ -92,6 +92,8 @@ const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
       },
       {
         color: [0.3, 0.65, 0.2],
+        color2: [0.9, 0.8, 0.2],
+        noiseScale: 0.08,
         tiledAo: grassAoTexture,
         tiledAoIntensity: 0.8,
         tiledAoScale: 100,

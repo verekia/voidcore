@@ -26,6 +26,10 @@
 //   packEmissiveFloat16()  – Float32 RGBA emissive (16 bytes/vertex) → Float16x4 (8 bytes/vertex).
 //                            Emissive values can exceed 1.0 (HDR), so half-float precision is
 //                            needed to preserve intensity information.
+//
+//   packInterleavedFloat16x4x2() – Interleaves two Float32 vec4 streams into one stride-16
+//                            Float16 buffer. Used to pack tiledNormalData and noiseColorData
+//                            into a single GPU buffer with two attributes at different offsets.
 
 // ─── Float32-to-Float16 conversion ──────────────────────────────────
 
@@ -134,6 +138,36 @@ export const packEmissiveFloat16 = (emissiveColors: Float32Array, vertexCount: n
   const packed = new Uint16Array(vertexCount * 4)
   for (let i = 0; i < vertexCount * 4; i++) {
     packed[i] = floatToHalf(emissiveColors[i]!)
+  }
+  return packed
+}
+
+/**
+ * Interleave two float32 vec4 streams into a single stride-16 float16 buffer.
+ * Output layout per vertex: [a.x, a.y, a.z, a.w, b.x, b.y, b.z, b.w] as float16.
+ * This packs two vec4 attributes into one GPU buffer with arrayStride=16 bytes.
+ */
+export const packInterleavedFloat16x4x2 = (
+  a: Float32Array | undefined,
+  b: Float32Array | undefined,
+  vertexCount: number,
+): Uint16Array => {
+  const packed = new Uint16Array(vertexCount * 8)
+  for (let i = 0; i < vertexCount; i++) {
+    const srcOff = i * 4
+    const dstOff = i * 8
+    if (a) {
+      packed[dstOff] = floatToHalf(a[srcOff]!)
+      packed[dstOff + 1] = floatToHalf(a[srcOff + 1]!)
+      packed[dstOff + 2] = floatToHalf(a[srcOff + 2]!)
+      packed[dstOff + 3] = floatToHalf(a[srcOff + 3]!)
+    }
+    if (b) {
+      packed[dstOff + 4] = floatToHalf(b[srcOff]!)
+      packed[dstOff + 5] = floatToHalf(b[srcOff + 1]!)
+      packed[dstOff + 6] = floatToHalf(b[srcOff + 2]!)
+      packed[dstOff + 7] = floatToHalf(b[srcOff + 3]!)
+    }
   }
   return packed
 }

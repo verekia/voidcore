@@ -36,6 +36,9 @@
 // texture (group 3, binding 6) with per-vertex data in a float16x4 attribute (location 7):
 // layerIndex/255 in x, intensity in y, scale in z. Normal mapping uses a cotangent frame
 // (screen-space derivatives) for static meshes and triplanar projection for skinned meshes.
+// Per-material noise color blending uses a second float16x4 attribute (location 8) interleaved
+// with the tiled normal data: [color2.r, color2.g, color2.b, noiseScale]. When noiseScale > 0,
+// a procedural 3D dot noise function blends between the primary and secondary vertex color.
 //
 // Custom shader builders (buildLambertWGSL, buildBasicWGSL, etc.) generate shader source
 // with user-provided WGSL code injected at hook points. Variables at hook points use `var`
@@ -352,6 +355,60 @@ ${OBJECT_BINDING}
 @group(3) @binding(5) var<uniform> tiledAoScales: array<vec4<f32>, 4>;
 @group(3) @binding(6) var tiledNormalArray: texture_2d_array<f32>;
 
+// Dot Noise by Xor — procedural value noise via dot products with a gold matrix
+fn dot_noise(p: vec3<f32>) -> f32 {
+  let gold = mat3x3<f32>(
+    vec3<f32>(1.0, 0.6180339887, 0.3819660113),
+    vec3<f32>(0.6180339887, 0.3819660113, 1.0),
+    vec3<f32>(0.3819660113, 1.0, 0.6180339887)
+  );
+  let fp = fract(p);
+  let ip = p - fp;
+  let sp = fp * fp * (3.0 - 2.0 * fp);
+  let c000 = fract(dot(ip + vec3<f32>(0.0, 0.0, 0.0), gold[0]) * 13.37) - 0.5;
+  let c001 = fract(dot(ip + vec3<f32>(0.0, 0.0, 1.0), gold[0]) * 13.37) - 0.5;
+  let c010 = fract(dot(ip + vec3<f32>(0.0, 1.0, 0.0), gold[0]) * 13.37) - 0.5;
+  let c011 = fract(dot(ip + vec3<f32>(0.0, 1.0, 1.0), gold[0]) * 13.37) - 0.5;
+  let c100 = fract(dot(ip + vec3<f32>(1.0, 0.0, 0.0), gold[0]) * 13.37) - 0.5;
+  let c101 = fract(dot(ip + vec3<f32>(1.0, 0.0, 1.0), gold[0]) * 13.37) - 0.5;
+  let c110 = fract(dot(ip + vec3<f32>(1.0, 1.0, 0.0), gold[0]) * 13.37) - 0.5;
+  let c111 = fract(dot(ip + vec3<f32>(1.0, 1.0, 1.0), gold[0]) * 13.37) - 0.5;
+  let n0 = mix(mix(c000, c100, sp.x), mix(c010, c110, sp.x), sp.y);
+  let n1 = mix(mix(c001, c101, sp.x), mix(c011, c111, sp.x), sp.y);
+  let oct1 = mix(n0, n1, sp.z);
+  let p2 = p * 2.0;
+  let fp2 = fract(p2);
+  let ip2 = p2 - fp2;
+  let sp2 = fp2 * fp2 * (3.0 - 2.0 * fp2);
+  let d000 = fract(dot(ip2 + vec3<f32>(0.0, 0.0, 0.0), gold[1]) * 17.31) - 0.5;
+  let d001 = fract(dot(ip2 + vec3<f32>(0.0, 0.0, 1.0), gold[1]) * 17.31) - 0.5;
+  let d010 = fract(dot(ip2 + vec3<f32>(0.0, 1.0, 0.0), gold[1]) * 17.31) - 0.5;
+  let d011 = fract(dot(ip2 + vec3<f32>(0.0, 1.0, 1.0), gold[1]) * 17.31) - 0.5;
+  let d100 = fract(dot(ip2 + vec3<f32>(1.0, 0.0, 0.0), gold[1]) * 17.31) - 0.5;
+  let d101 = fract(dot(ip2 + vec3<f32>(1.0, 0.0, 1.0), gold[1]) * 17.31) - 0.5;
+  let d110 = fract(dot(ip2 + vec3<f32>(1.0, 1.0, 0.0), gold[1]) * 17.31) - 0.5;
+  let d111 = fract(dot(ip2 + vec3<f32>(1.0, 1.0, 1.0), gold[1]) * 17.31) - 0.5;
+  let m0 = mix(mix(d000, d100, sp2.x), mix(d010, d110, sp2.x), sp2.y);
+  let m1 = mix(mix(d001, d101, sp2.x), mix(d011, d111, sp2.x), sp2.y);
+  let oct2 = mix(m0, m1, sp2.z);
+  let p3 = p * 4.0;
+  let fp3 = fract(p3);
+  let ip3 = p3 - fp3;
+  let sp3 = fp3 * fp3 * (3.0 - 2.0 * fp3);
+  let e000 = fract(dot(ip3 + vec3<f32>(0.0, 0.0, 0.0), gold[2]) * 23.71) - 0.5;
+  let e001 = fract(dot(ip3 + vec3<f32>(0.0, 0.0, 1.0), gold[2]) * 23.71) - 0.5;
+  let e010 = fract(dot(ip3 + vec3<f32>(0.0, 1.0, 0.0), gold[2]) * 23.71) - 0.5;
+  let e011 = fract(dot(ip3 + vec3<f32>(0.0, 1.0, 1.0), gold[2]) * 23.71) - 0.5;
+  let e100 = fract(dot(ip3 + vec3<f32>(1.0, 0.0, 0.0), gold[2]) * 23.71) - 0.5;
+  let e101 = fract(dot(ip3 + vec3<f32>(1.0, 0.0, 1.0), gold[2]) * 23.71) - 0.5;
+  let e110 = fract(dot(ip3 + vec3<f32>(1.0, 1.0, 0.0), gold[2]) * 23.71) - 0.5;
+  let e111 = fract(dot(ip3 + vec3<f32>(1.0, 1.0, 1.0), gold[2]) * 23.71) - 0.5;
+  let q0 = mix(mix(e000, e100, sp3.x), mix(e010, e110, sp3.x), sp3.y);
+  let q1 = mix(mix(e001, e101, sp3.x), mix(e011, e111, sp3.x), sp3.y);
+  let oct3 = mix(q0, q1, sp3.z);
+  return oct1 + oct2 + oct3;
+}
+
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
   @location(0) worldPos: vec3<f32>,
@@ -361,6 +418,7 @@ struct VertexOutput {
   @location(4) color: vec4<f32>,
   @location(5) vcEmissive: vec4<f32>,
   @location(6) tiledNormalInfo: vec4<f32>,
+  @location(7) noiseColorInfo: vec4<f32>,
 };
 
 @vertex
@@ -371,6 +429,7 @@ fn vs_main(
   @location(3) a_color: vec4<f32>,
   @location(6) a_emissive: vec4<f32>,
   @location(7) a_tiledNormal: vec4<f32>,
+  @location(8) a_noiseColor: vec4<f32>,
 ) -> VertexOutput {
   var out: VertexOutput;
   let flag = a_normal.w;
@@ -386,6 +445,7 @@ fn vs_main(
   out.color = a_color;
   out.vcEmissive = a_emissive;
   out.tiledNormalInfo = a_tiledNormal;
+  out.noiseColorInfo = a_noiseColor;
   out.position = frame.viewProjection * worldPos;
   return out;
 }
@@ -459,7 +519,13 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
     normal = normalize(mix(normal, perturbedNormal, tnIntensity));
   }
 
-  let baseColor = material.baseColor * in.color.rgb;
+  var baseColor = material.baseColor * in.color.rgb;
+  // Noise color blending: blend between baseColor and noiseColor using dot noise
+  let noiseScale = in.noiseColorInfo.a;
+  if (noiseScale > 0.0) {
+    let t = dot_noise(in.worldPos * noiseScale) / 6.0 + 0.5;
+    baseColor = mix(baseColor, material.baseColor * in.noiseColorInfo.rgb, t);
+  }
   let alpha = material.opacity;
   let emissive = in.vcEmissive.rgb;
 
@@ -499,6 +565,60 @@ ${OBJECT_BINDING}
 @group(3) @binding(5) var<uniform> tiledAoScales: array<vec4<f32>, 4>;
 @group(3) @binding(6) var tiledNormalArray: texture_2d_array<f32>;
 
+// Dot Noise by Xor — procedural value noise via dot products with a gold matrix
+fn dot_noise(p: vec3<f32>) -> f32 {
+  let gold = mat3x3<f32>(
+    vec3<f32>(1.0, 0.6180339887, 0.3819660113),
+    vec3<f32>(0.6180339887, 0.3819660113, 1.0),
+    vec3<f32>(0.3819660113, 1.0, 0.6180339887)
+  );
+  let fp = fract(p);
+  let ip = p - fp;
+  let sp = fp * fp * (3.0 - 2.0 * fp);
+  let c000 = fract(dot(ip + vec3<f32>(0.0, 0.0, 0.0), gold[0]) * 13.37) - 0.5;
+  let c001 = fract(dot(ip + vec3<f32>(0.0, 0.0, 1.0), gold[0]) * 13.37) - 0.5;
+  let c010 = fract(dot(ip + vec3<f32>(0.0, 1.0, 0.0), gold[0]) * 13.37) - 0.5;
+  let c011 = fract(dot(ip + vec3<f32>(0.0, 1.0, 1.0), gold[0]) * 13.37) - 0.5;
+  let c100 = fract(dot(ip + vec3<f32>(1.0, 0.0, 0.0), gold[0]) * 13.37) - 0.5;
+  let c101 = fract(dot(ip + vec3<f32>(1.0, 0.0, 1.0), gold[0]) * 13.37) - 0.5;
+  let c110 = fract(dot(ip + vec3<f32>(1.0, 1.0, 0.0), gold[0]) * 13.37) - 0.5;
+  let c111 = fract(dot(ip + vec3<f32>(1.0, 1.0, 1.0), gold[0]) * 13.37) - 0.5;
+  let n0 = mix(mix(c000, c100, sp.x), mix(c010, c110, sp.x), sp.y);
+  let n1 = mix(mix(c001, c101, sp.x), mix(c011, c111, sp.x), sp.y);
+  let oct1 = mix(n0, n1, sp.z);
+  let p2 = p * 2.0;
+  let fp2 = fract(p2);
+  let ip2 = p2 - fp2;
+  let sp2 = fp2 * fp2 * (3.0 - 2.0 * fp2);
+  let d000 = fract(dot(ip2 + vec3<f32>(0.0, 0.0, 0.0), gold[1]) * 17.31) - 0.5;
+  let d001 = fract(dot(ip2 + vec3<f32>(0.0, 0.0, 1.0), gold[1]) * 17.31) - 0.5;
+  let d010 = fract(dot(ip2 + vec3<f32>(0.0, 1.0, 0.0), gold[1]) * 17.31) - 0.5;
+  let d011 = fract(dot(ip2 + vec3<f32>(0.0, 1.0, 1.0), gold[1]) * 17.31) - 0.5;
+  let d100 = fract(dot(ip2 + vec3<f32>(1.0, 0.0, 0.0), gold[1]) * 17.31) - 0.5;
+  let d101 = fract(dot(ip2 + vec3<f32>(1.0, 0.0, 1.0), gold[1]) * 17.31) - 0.5;
+  let d110 = fract(dot(ip2 + vec3<f32>(1.0, 1.0, 0.0), gold[1]) * 17.31) - 0.5;
+  let d111 = fract(dot(ip2 + vec3<f32>(1.0, 1.0, 1.0), gold[1]) * 17.31) - 0.5;
+  let m0 = mix(mix(d000, d100, sp2.x), mix(d010, d110, sp2.x), sp2.y);
+  let m1 = mix(mix(d001, d101, sp2.x), mix(d011, d111, sp2.x), sp2.y);
+  let oct2 = mix(m0, m1, sp2.z);
+  let p3 = p * 4.0;
+  let fp3 = fract(p3);
+  let ip3 = p3 - fp3;
+  let sp3 = fp3 * fp3 * (3.0 - 2.0 * fp3);
+  let e000 = fract(dot(ip3 + vec3<f32>(0.0, 0.0, 0.0), gold[2]) * 23.71) - 0.5;
+  let e001 = fract(dot(ip3 + vec3<f32>(0.0, 0.0, 1.0), gold[2]) * 23.71) - 0.5;
+  let e010 = fract(dot(ip3 + vec3<f32>(0.0, 1.0, 0.0), gold[2]) * 23.71) - 0.5;
+  let e011 = fract(dot(ip3 + vec3<f32>(0.0, 1.0, 1.0), gold[2]) * 23.71) - 0.5;
+  let e100 = fract(dot(ip3 + vec3<f32>(1.0, 0.0, 0.0), gold[2]) * 23.71) - 0.5;
+  let e101 = fract(dot(ip3 + vec3<f32>(1.0, 0.0, 1.0), gold[2]) * 23.71) - 0.5;
+  let e110 = fract(dot(ip3 + vec3<f32>(1.0, 1.0, 0.0), gold[2]) * 23.71) - 0.5;
+  let e111 = fract(dot(ip3 + vec3<f32>(1.0, 1.0, 1.0), gold[2]) * 23.71) - 0.5;
+  let q0 = mix(mix(e000, e100, sp3.x), mix(e010, e110, sp3.x), sp3.y);
+  let q1 = mix(mix(e001, e101, sp3.x), mix(e011, e111, sp3.x), sp3.y);
+  let oct3 = mix(q0, q1, sp3.z);
+  return oct1 + oct2 + oct3;
+}
+
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
   @location(0) worldPos: vec3<f32>,
@@ -508,6 +628,7 @@ struct VertexOutput {
   @location(4) color: vec4<f32>,
   @location(5) vcEmissive: vec4<f32>,
   @location(6) tiledNormalInfo: vec4<f32>,
+  @location(7) noiseColorInfo: vec4<f32>,
 };
 
 @vertex
@@ -520,6 +641,7 @@ fn vs_main(
   @location(5) a_weights: vec4<f32>,
   @location(6) a_emissive: vec4<f32>,
   @location(7) a_tiledNormal: vec4<f32>,
+  @location(8) a_noiseColor: vec4<f32>,
 ) -> VertexOutput {
   var out: VertexOutput;
   let flag = a_normal.w;
@@ -544,6 +666,7 @@ fn vs_main(
   out.color = a_color;
   out.vcEmissive = a_emissive;
   out.tiledNormalInfo = a_tiledNormal;
+  out.noiseColorInfo = a_noiseColor;
   out.position = frame.viewProjection * vec4<f32>(worldPos, 1.0);
   return out;
 }
@@ -616,7 +739,13 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
     normal = normalize(mix(normal, blended, tnIntensity));
   }
 
-  let baseColor = material.baseColor * in.color.rgb;
+  var baseColor = material.baseColor * in.color.rgb;
+  // Noise color blending: blend between baseColor and noiseColor using dot noise
+  let noiseScale = in.noiseColorInfo.a;
+  if (noiseScale > 0.0) {
+    let t = dot_noise(in.worldPos * noiseScale) / 6.0 + 0.5;
+    baseColor = mix(baseColor, material.baseColor * in.noiseColorInfo.rgb, t);
+  }
   let alpha = material.opacity;
   let emissive = in.vcEmissive.rgb;
 
