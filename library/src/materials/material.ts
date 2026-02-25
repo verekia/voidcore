@@ -25,6 +25,11 @@
 // glow" effect). At 0, the raw emissive color is used. At 1 (default), high-intensity emissive
 // areas desaturate toward white, simulating the overexposed look of real glowing surfaces.
 //
+// Wrap lighting controls how much diffuse light "wraps" around to unlit faces. At 0 (default),
+// standard Lambert shading clamps NdotL to zero — all back-facing surfaces look identical.
+// Increasing wrapLighting (0–1) lets some light variation through to the dark side, so
+// individual faces remain distinguishable even when unlit.
+//
 // Transparency is supported via sorted alpha blending. Set `transparent: true` and an
 // `opacity` value (0–1) to make a material see-through. Transparent meshes are drawn
 // back-to-front after all opaque meshes, with blending enabled and depth writes off.
@@ -92,6 +97,7 @@ export class Material {
 
   // Lambert-specific
   receiveShadow: boolean
+  wrapLighting: number
 
   // Emissive
   emissiveBrightness: number
@@ -116,6 +122,7 @@ export class Material {
     this.color = opts.color ?? [1, 1, 1]
     this.vertexColors = opts.vertexColors ?? false
     this.receiveShadow = opts.receiveShadow ?? true
+    this.wrapLighting = opts.wrapLighting ?? 0
     this.opacity = opts.opacity ?? 1.0
     this.transparent = opts.transparent ?? false
     this.side = opts.side ?? (opts.transparent ? 'double' : 'front')
@@ -141,6 +148,7 @@ export interface MaterialOptions {
   color?: [number, number, number]
   vertexColors?: boolean
   receiveShadow?: boolean
+  wrapLighting?: number
   palette?: PaletteEntry[]
   emissiveBrightness?: number
   opacity?: number

@@ -43,7 +43,7 @@ interface CharacterProps {
   timeOffset: number
 }
 
-const characterMaterial = new LambertMaterial({ emissiveBrightness: 0.2 })
+const characterMaterial = new LambertMaterial({ emissiveBrightness: 0.2, wrapLighting: 0.5 })
 const raycaster = new Raycaster()
 const rayOrigin = new Float32Array([0, 0, 200])
 const rayDir = new Float32Array([0, 0, -1])

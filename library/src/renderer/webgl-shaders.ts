@@ -239,6 +239,7 @@ uniform float u_opacity;
 uniform highp sampler2DShadow u_shadowMap;
 uniform bool u_receiveShadow;
 uniform float u_emissiveBrightness;
+uniform float u_wrapLighting;
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
@@ -257,9 +258,13 @@ void main() {
   vec3 baseColor = u_baseColor;
 
   vec3 ambient = u_ambientColor * u_ambientIntensity;
-  float NdotL = max(dot(normal, u_lightDirection), 0.0);
-  float shadow = u_receiveShadow ? sampleShadow(v_worldPos, NdotL) : 1.0;
-  vec3 diffuse = u_lightColor * u_lightIntensity * NdotL * shadow;
+  float rawNdotL = dot(normal, u_lightDirection);
+  float shadow = u_receiveShadow ? sampleShadow(v_worldPos, max(rawNdotL, 0.0)) : 1.0;
+  float wrap = u_wrapLighting;
+  float realNdotL = max(rawNdotL, 0.0);
+  float wrapNdotL = max(rawNdotL + wrap, 0.0) / (1.0 + wrap);
+  float NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
+  vec3 diffuse = u_lightColor * u_lightIntensity * NdotL;
 
   vec3 finalColor = baseColor * (ambient + diffuse);
 
@@ -378,6 +383,7 @@ uniform float u_opacity;
 uniform highp sampler2DShadow u_shadowMap;
 uniform bool u_receiveShadow;
 uniform float u_emissiveBrightness;
+uniform float u_wrapLighting;
 uniform sampler2D u_aoMap;
 uniform float u_aoIntensity;
 uniform highp sampler2DArray u_tiledAoArray;
@@ -499,9 +505,13 @@ void main() {
 
   float ao = mix(1.0, texture(u_aoMap, v_uv).r, u_aoIntensity) * tiledAo;
   vec3 ambient = u_ambientColor * u_ambientIntensity * ao;
-  float NdotL = max(dot(normal, u_lightDirection), 0.0);
-  float shadow = u_receiveShadow ? sampleShadow(v_worldPos, NdotL) : 1.0;
-  vec3 diffuse = u_lightColor * u_lightIntensity * NdotL * shadow;
+  float rawNdotL = dot(normal, u_lightDirection);
+  float shadow = u_receiveShadow ? sampleShadow(v_worldPos, max(rawNdotL, 0.0)) : 1.0;
+  float wrap = u_wrapLighting;
+  float realNdotL = max(rawNdotL, 0.0);
+  float wrapNdotL = max(rawNdotL + wrap, 0.0) / (1.0 + wrap);
+  float NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
+  vec3 diffuse = u_lightColor * u_lightIntensity * NdotL;
 
   vec3 litColor = baseColor * (ambient + diffuse);
   float brightness = dot(emissive, vec3(0.299, 0.587, 0.114));
@@ -588,6 +598,7 @@ uniform float u_opacity;
 uniform highp sampler2DShadow u_shadowMap;
 uniform bool u_receiveShadow;
 uniform float u_emissiveBrightness;
+uniform float u_wrapLighting;
 uniform sampler2D u_colorMap;
 uniform sampler2D u_aoMap;
 uniform float u_aoIntensity;
@@ -614,9 +625,13 @@ void main() {
   float ao = mix(1.0, texture(u_aoMap, v_uv).r, u_aoIntensity);
   vec3 ambient = u_ambientColor * u_ambientIntensity * ao;
 
-  float NdotL = max(dot(normal, u_lightDirection), 0.0);
-  float shadow = u_receiveShadow ? sampleShadow(v_worldPos, NdotL) : 1.0;
-  vec3 diffuse = u_lightColor * u_lightIntensity * NdotL * shadow;
+  float rawNdotL = dot(normal, u_lightDirection);
+  float shadow = u_receiveShadow ? sampleShadow(v_worldPos, max(rawNdotL, 0.0)) : 1.0;
+  float wrap = u_wrapLighting;
+  float realNdotL = max(rawNdotL, 0.0);
+  float wrapNdotL = max(rawNdotL + wrap, 0.0) / (1.0 + wrap);
+  float NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
+  vec3 diffuse = u_lightColor * u_lightIntensity * NdotL;
 
   vec3 finalColor = baseColor * (ambient + diffuse);
 
@@ -792,6 +807,7 @@ uniform float u_opacity;
 uniform highp sampler2DShadow u_shadowMap;
 uniform bool u_receiveShadow;
 uniform float u_emissiveBrightness;
+uniform float u_wrapLighting;
 ${customUniformsDecl ?? ''}
 
 layout(location = 0) out vec4 fragColor;
@@ -811,9 +827,13 @@ void main() {
   vec3 baseColor = u_baseColor;
 
   vec3 ambient = u_ambientColor * u_ambientIntensity;
-  float NdotL = max(dot(normal, u_lightDirection), 0.0);
-  float shadow = u_receiveShadow ? sampleShadow(v_worldPos, NdotL) : 1.0;
-  vec3 diffuse = u_lightColor * u_lightIntensity * NdotL * shadow;
+  float rawNdotL = dot(normal, u_lightDirection);
+  float shadow = u_receiveShadow ? sampleShadow(v_worldPos, max(rawNdotL, 0.0)) : 1.0;
+  float wrap = u_wrapLighting;
+  float realNdotL = max(rawNdotL, 0.0);
+  float wrapNdotL = max(rawNdotL + wrap, 0.0) / (1.0 + wrap);
+  float NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
+  vec3 diffuse = u_lightColor * u_lightIntensity * NdotL;
 
   vec3 finalColor = baseColor * (ambient + diffuse);
   float alpha = u_opacity;

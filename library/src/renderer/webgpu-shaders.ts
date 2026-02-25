@@ -70,7 +70,7 @@ struct MaterialUniforms {
   receiveShadow: f32,
   aoIntensity: f32,
   emissiveBrightness: f32,
-  _pad0: f32,
+  wrapLighting: f32,
 };`
 
 const OBJECT_UNIFORMS = `
@@ -236,12 +236,16 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let alpha = material.opacity;
 
   let ambient = frame.ambientColor * frame.ambientIntensity;
-  let NdotL = max(dot(normal, frame.lightDir), 0.0);
+  let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
-    shadow = sampleShadow(in.worldPos, NdotL);
+    shadow = sampleShadow(in.worldPos, max(rawNdotL, 0.0));
   }
-  let diffuse = frame.lightColor * frame.lightIntensity * NdotL * shadow;
+  let wrap = material.wrapLighting;
+  let realNdotL = max(rawNdotL, 0.0);
+  let wrapNdotL = max(rawNdotL + wrap, 0.0) / (1.0 + wrap);
+  let NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
+  let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
 
   let finalColor = baseColor * (ambient + diffuse);
 
@@ -324,12 +328,16 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let alpha = material.opacity;
 
   let ambient = frame.ambientColor * frame.ambientIntensity;
-  let NdotL = max(dot(normal, frame.lightDir), 0.0);
+  let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
-    shadow = sampleShadow(in.worldPos, NdotL);
+    shadow = sampleShadow(in.worldPos, max(rawNdotL, 0.0));
   }
-  let diffuse = frame.lightColor * frame.lightIntensity * NdotL * shadow;
+  let wrap = material.wrapLighting;
+  let realNdotL = max(rawNdotL, 0.0);
+  let wrapNdotL = max(rawNdotL + wrap, 0.0) / (1.0 + wrap);
+  let NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
+  let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
 
   let finalColor = baseColor * (ambient + diffuse);
 
@@ -534,12 +542,16 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
 
   let ao = mix(1.0, aoSample, material.aoIntensity) * tiledAo;
   let ambient = frame.ambientColor * frame.ambientIntensity * ao;
-  let NdotL = max(dot(normal, frame.lightDir), 0.0);
+  let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
-    shadow = sampleShadow(in.worldPos, NdotL);
+    shadow = sampleShadow(in.worldPos, max(rawNdotL, 0.0));
   }
-  let diffuse = frame.lightColor * frame.lightIntensity * NdotL * shadow;
+  let wrap = material.wrapLighting;
+  let realNdotL = max(rawNdotL, 0.0);
+  let wrapNdotL = max(rawNdotL + wrap, 0.0) / (1.0 + wrap);
+  let NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
+  let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
 
   let litColor = baseColor * (ambient + diffuse);
   let brightness = dot(emissive, vec3<f32>(0.299, 0.587, 0.114));
@@ -755,12 +767,16 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
 
   let ao = mix(1.0, aoSample, material.aoIntensity) * tiledAo;
   let ambient = frame.ambientColor * frame.ambientIntensity * ao;
-  let NdotL = max(dot(normal, frame.lightDir), 0.0);
+  let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
-    shadow = sampleShadow(in.worldPos, NdotL);
+    shadow = sampleShadow(in.worldPos, max(rawNdotL, 0.0));
   }
-  let diffuse = frame.lightColor * frame.lightIntensity * NdotL * shadow;
+  let wrap = material.wrapLighting;
+  let realNdotL = max(rawNdotL, 0.0);
+  let wrapNdotL = max(rawNdotL + wrap, 0.0) / (1.0 + wrap);
+  let NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
+  let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
 
   let litColor = baseColor * (ambient + diffuse);
   let brightness = dot(emissive, vec3<f32>(0.299, 0.587, 0.114));
@@ -846,12 +862,16 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let ao = mix(1.0, aoSample, material.aoIntensity);
   let ambient = frame.ambientColor * frame.ambientIntensity * ao;
 
-  let NdotL = max(dot(normal, frame.lightDir), 0.0);
+  let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
-    shadow = sampleShadow(in.worldPos, NdotL);
+    shadow = sampleShadow(in.worldPos, max(rawNdotL, 0.0));
   }
-  let diffuse = frame.lightColor * frame.lightIntensity * NdotL * shadow;
+  let wrap = material.wrapLighting;
+  let realNdotL = max(rawNdotL, 0.0);
+  let wrapNdotL = max(rawNdotL + wrap, 0.0) / (1.0 + wrap);
+  let NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
+  let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
 
   let finalColor = baseColor * (ambient + diffuse);
 
@@ -1029,12 +1049,16 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   var alpha = material.opacity;
 
   let ambient = frame.ambientColor * frame.ambientIntensity;
-  let NdotL = max(dot(normal, frame.lightDir), 0.0);
+  let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
-    shadow = sampleShadow(in.worldPos, NdotL);
+    shadow = sampleShadow(in.worldPos, max(rawNdotL, 0.0));
   }
-  let diffuse = frame.lightColor * frame.lightIntensity * NdotL * shadow;
+  let wrap = material.wrapLighting;
+  let realNdotL = max(rawNdotL, 0.0);
+  let wrapNdotL = max(rawNdotL + wrap, 0.0) / (1.0 + wrap);
+  let NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
+  let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
 
   var finalColor = baseColor * (ambient + diffuse);
   ${customFragment ?? ''}
@@ -1124,12 +1148,16 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   var alpha = material.opacity;
 
   let ambient = frame.ambientColor * frame.ambientIntensity;
-  let NdotL = max(dot(normal, frame.lightDir), 0.0);
+  let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
-    shadow = sampleShadow(in.worldPos, NdotL);
+    shadow = sampleShadow(in.worldPos, max(rawNdotL, 0.0));
   }
-  let diffuse = frame.lightColor * frame.lightIntensity * NdotL * shadow;
+  let wrap = material.wrapLighting;
+  let realNdotL = max(rawNdotL, 0.0);
+  let wrapNdotL = max(rawNdotL + wrap, 0.0) / (1.0 + wrap);
+  let NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
+  let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
 
   var finalColor = baseColor * (ambient + diffuse);
   ${customFragment ?? ''}

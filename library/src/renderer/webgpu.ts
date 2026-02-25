@@ -1606,7 +1606,7 @@ export class WebGPURenderer implements Renderer {
     })
 
     const shadowSampler = device.createSampler({
-      compare: 'less',
+      compare: 'less-equal',
       magFilter: 'linear',
       minFilter: 'linear',
     })
@@ -2244,6 +2244,7 @@ export class WebGPURenderer implements Renderer {
     data[4] = material.receiveShadow ? 1.0 : 0.0
     data[5] = material.aoIntensity
     data[6] = material.emissiveBrightness
+    data[7] = material.wrapLighting
 
     this.device.queue.writeBuffer(cache.buffer, 0, data.buffer, data.byteOffset, data.byteLength)
   }
