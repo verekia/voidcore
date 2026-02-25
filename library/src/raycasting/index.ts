@@ -16,6 +16,7 @@
 //
 // buildMeshBVH()            – Builds a BVH for a mesh's triangles (done once, cached).
 // prebuildBVH()             – Pre-builds and caches a BVH for a geometry (avoids first-raycast stall).
+// setBVH()                  – Injects an externally-built BVH (e.g. from a web worker) into the cache.
 // Raycaster.set()           – Sets the ray from an origin and direction.
 // Raycaster.setFromCamera() – Creates a ray from screen coordinates through the camera.
 // Raycaster.intersectObject() / intersectObjects() – Returns sorted hits (nearest first).
@@ -54,9 +55,9 @@ export const createRaycastHit = (): RaycastHit => ({
   object: null,
 })
 
-// ─── Internal Types ────────────────────────────────────────────────────────────
+// ─── BVH Types ────────────────────────────────────────────────────────────────
 
-interface MeshBVH {
+export interface MeshBVH {
   floatNodes: Float32Array // BVH node AABB bounds (float view)
   intNodes: Int32Array // BVH node child/count data (int view, same buffer)
   triOrder: Uint32Array // Reordered triangle indices for cache-friendly access
@@ -493,6 +494,11 @@ const getMeshBVH = (geometry: Geometry): MeshBVH => {
 
 export const prebuildBVH = (geometry: Geometry): void => {
   getMeshBVH(geometry)
+}
+
+/** Inject an externally-built BVH (e.g. from a web worker) into the cache for a geometry. */
+export const setBVH = (geometry: Geometry, bvh: MeshBVH): void => {
+  _bvhCache.set(geometry, bvh)
 }
 
 // ─── Mesh Intersection ─────────────────────────────────────────────────────────

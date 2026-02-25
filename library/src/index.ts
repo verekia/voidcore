@@ -55,7 +55,15 @@ export { OrbitControls } from './controls/orbit'
 export { Skeleton, type AnimationClip, type KeyframeTrack, AnimationMixer, AnimationAction } from './animation/index'
 
 // Raycasting
-export { Raycaster, buildMeshBVH, prebuildBVH, createRaycastHit, type RaycastHit } from './raycasting/index'
+export {
+  Raycaster,
+  buildMeshBVH,
+  prebuildBVH,
+  setBVH,
+  createRaycastHit,
+  type RaycastHit,
+  type MeshBVH,
+} from './raycasting/index'
 
 // Loaders
 export { loadGLTF, type GLTFResult } from './loaders/gltf'
@@ -70,6 +78,19 @@ export { DirectionalLightHelper } from './helpers/directional-light-helper'
 // Overlay
 export { createOverlayManager, type OverlayHandle, type OverlayOptions } from './overlay'
 
+// Web Worker
+export {
+  initGeometryWorker,
+  terminateGeometryWorker,
+  hasGeometryWorker,
+  buildBVHAsync,
+  prebuildBVHAsync,
+  bakePaletteAsync,
+  mergeStaticIntoSkinnedAsync,
+  computeSmoothNormalsAsync,
+  mergeGeometriesAsync,
+} from './workers/index'
+
 // React bindings
 export { BakeShadows } from './react/BakeShadows'
 export { Canvas, type CanvasProps } from './react/Canvas'
@@ -82,6 +103,10 @@ export {
   useKTX2,
   useColoredGeometry,
   useColoredStaticGeometry,
+  useWorkerColoredGeometry,
+  useWorkerColoredStaticGeometry,
+  useWorkerMergeStaticIntoSkinned,
+  useWorkerPrebuildBVH,
   useAnimations,
   type UseGLTFOptions,
   type ClonedMesh,

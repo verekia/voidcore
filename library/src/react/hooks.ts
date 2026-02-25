@@ -13,6 +13,12 @@
 // useColoredStaticGeometry(name, palette) – Load a named mesh from the static bundle and bake palette.
 //   .setStaticBundlePath – Set global static bundle GLB path.
 // useAnimations()   – Create an AnimationMixer and return action map.
+//
+// Worker-backed hooks (use initGeometryWorker() for off-main-thread execution):
+// useWorkerColoredGeometry(geometry, palette) – bakePalette via web worker (Suspense).
+// useWorkerColoredStaticGeometry(name, palette) – Load + bake via web worker (Suspense).
+// useWorkerMergeStaticIntoSkinned()  – Merge geometries via web worker (Suspense).
+// useWorkerPrebuildBVH(geometry)     – Build BVH via web worker (Suspense).
 
 import { useContext, useEffect, useRef, useMemo } from 'react'
 
@@ -22,6 +28,7 @@ import { loadGLTF } from '../loaders/gltf'
 import { loadKTX2 } from '../loaders/ktx2'
 import { cloneScene } from '../scene/clone'
 import { Mesh } from '../scene/mesh'
+import { bakePaletteAsync, mergeStaticIntoSkinnedAsync, prebuildBVHAsync } from '../workers/index'
 import { VoidContext } from './context'
 
 import type { AnimationClip } from '../animation/index'
@@ -31,6 +38,7 @@ import type { GLTFResult, LoadOptions } from '../loaders/gltf'
 import type { PaletteEntry } from '../materials/material'
 import type { CompressedTextureFormat } from '../materials/texture'
 import type { Texture } from '../materials/texture'
+import type { Mat4 } from '../math/index'
 import type { Node } from '../scene/node'
 import type { FrameCallback } from './context'
 
@@ -227,6 +235,114 @@ export const useColoredStaticGeometry: UseColoredStaticMesh = ((
 
 useColoredStaticGeometry.setStaticBundlePath = (path: string) => {
   _staticBundlePath = path
+}
+
+// ─── Suspense Cache for Worker Hooks ──────────────────────────────────────────
+
+interface SuspenseCacheEntry<T> {
+  promise?: Promise<T>
+  result?: T
+  error?: unknown
+}
+
+const _suspenseCache = new Map<string, SuspenseCacheEntry<any>>()
+let _nextObjId = 0
+const _objIds = new WeakMap<object, number>()
+
+function getObjId(obj: object): number {
+  let id = _objIds.get(obj)
+  if (id === undefined) {
+    id = _nextObjId++
+    _objIds.set(obj, id)
+  }
+  return id
+}
+
+function useSuspenseAsync<T>(key: string, factory: () => Promise<T>): T {
+  let entry = _suspenseCache.get(key) as SuspenseCacheEntry<T> | undefined
+  if (!entry) {
+    entry = {} as SuspenseCacheEntry<T>
+    _suspenseCache.set(key, entry)
+    entry.promise = factory()
+      .then(result => {
+        entry!.result = result
+      })
+      .catch(error => {
+        entry!.error = error
+      }) as unknown as Promise<T>
+  }
+  if (entry.error) throw entry.error
+  if (entry.result !== undefined) return entry.result
+  throw entry.promise
+}
+
+// ─── useWorkerColoredGeometry ─────────────────────────────────────────────────
+
+/**
+ * Bake palette entries into vertex colors via the geometry worker (Suspense).
+ * Falls back to synchronous bakePalette if no worker is initialized.
+ */
+export const useWorkerColoredGeometry = (geometry: Geometry, palette: PaletteEntry[]): Geometry => {
+  const key = `bake:${getObjId(geometry)}:${getObjId(palette)}`
+  return useSuspenseAsync(key, () => bakePaletteAsync(geometry, palette))
+}
+
+// ─── useWorkerColoredStaticGeometry ───────────────────────────────────────────
+
+interface UseWorkerColoredStaticMesh {
+  (meshName: string, palette: PaletteEntry[]): Geometry
+  /** Set the global static bundle GLB path for all useWorkerColoredStaticGeometry calls. */
+  setStaticBundlePath: (path: string) => void
+}
+
+/**
+ * Load a named mesh from the static bundle and bake palette via the worker (Suspense).
+ * Falls back to synchronous bakePalette if no worker is initialized.
+ */
+export const useWorkerColoredStaticGeometry: UseWorkerColoredStaticMesh = ((
+  meshName: string,
+  palette: PaletteEntry[],
+): Geometry => {
+  if (!_staticBundlePath)
+    throw new Error(
+      'useWorkerColoredStaticGeometry requires a static bundle path — call useWorkerColoredStaticGeometry.setStaticBundlePath() or useColoredStaticGeometry.setStaticBundlePath() first',
+    )
+  const mesh = useGLTF(_staticBundlePath, { meshName }) as Mesh
+  return useWorkerColoredGeometry(mesh.geometry, palette)
+}) as UseWorkerColoredStaticMesh
+
+useWorkerColoredStaticGeometry.setStaticBundlePath = (path: string) => {
+  _staticBundlePath = path
+}
+
+// ─── useWorkerMergeStaticIntoSkinned ──────────────────────────────────────────
+
+/**
+ * Merge a static geometry into a skinned geometry at a bone via the worker (Suspense).
+ * Falls back to synchronous mergeStaticIntoSkinned if no worker is initialized.
+ */
+export const useWorkerMergeStaticIntoSkinned = (
+  skinned: Geometry,
+  staticGeo: Geometry,
+  boneIndex: number,
+  inverseBindMatrix: Mat4,
+  localTransform?: Mat4,
+): Geometry => {
+  const key = `merge:${getObjId(skinned)}:${getObjId(staticGeo)}:${boneIndex}`
+  return useSuspenseAsync(key, () =>
+    mergeStaticIntoSkinnedAsync(skinned, staticGeo, boneIndex, inverseBindMatrix, localTransform),
+  )
+}
+
+// ─── useWorkerPrebuildBVH ─────────────────────────────────────────────────────
+
+/**
+ * Pre-build and cache a BVH for a geometry via the worker (Suspense).
+ * Falls back to synchronous prebuildBVH if no worker is initialized.
+ */
+export const useWorkerPrebuildBVH = (geometry: Geometry): void => {
+  const key = `bvh:${getObjId(geometry)}`
+  useSuspenseAsync(key, () => prebuildBVHAsync(geometry))
 }
 
 // ─── useAnimations ────────────────────────────────────────────────────────────

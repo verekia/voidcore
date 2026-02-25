@@ -9,9 +9,9 @@ import {
   useFrame,
   useGLTF,
   useAnimations,
-  useColoredGeometry,
-  useColoredStaticGeometry,
-  mergeStaticIntoSkinned,
+  useWorkerColoredGeometry,
+  useWorkerColoredStaticGeometry,
+  useWorkerMergeStaticIntoSkinned,
   mat4Create,
   mat4Compose,
   VEC3_ZERO,
@@ -49,12 +49,12 @@ const rayOrigin = new Float32Array([0, 0, 200])
 const rayDir = new Float32Array([0, 0, -1])
 const rayHits = [createRaycastHit()]
 const axeLocalTransform = mat4Compose(mat4Create(), VEC3_ZERO, new Float32Array([0, 0, 1, 0]), VEC3_ONE)
-let cachedMergedGeometry: ReturnType<typeof mergeStaticIntoSkinned> | null = null
 
 const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
   const { scene } = useEngine()
 
-  const axeGeometry = useColoredStaticGeometry('megaxe', megaxePalette)
+  // Worker-backed palette baking (off main thread)
+  const axeGeometry = useWorkerColoredStaticGeometry('megaxe', megaxePalette)
 
   const {
     root,
@@ -66,7 +66,8 @@ const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
     clone: true,
   })
 
-  const bakedBody = useColoredGeometry(bodyMesh.geometry, bodyPalette)
+  // Worker-backed palette baking (off main thread)
+  const bakedBody = useWorkerColoredGeometry(bodyMesh.geometry, bodyPalette)
 
   const clips = useMemo(() => {
     const result: AnimationClip[] = []
@@ -81,25 +82,27 @@ const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
   const startClipIndex = clips.length > 0 ? Math.floor(timeOffset / CLIP_DURATION) % clips.length : 0
   const startTimeIntoClip = timeOffset % CLIP_DURATION
 
+  // Resolve bone info for merge
+  const { handBoneIndex, ibm } = useMemo(() => {
+    const handBone = skeleton.getBone('Hand.R')
+    const idx = handBone ? skeleton.bones.indexOf(handBone) : -1
+    return {
+      handBoneIndex: idx,
+      ibm: idx >= 0 ? skeleton.boneInverseBindMatrices[idx]! : null,
+    }
+  }, [skeleton])
+
+  // Worker-backed merge (off main thread, cached across all characters)
+  const mergedGeometry =
+    handBoneIndex >= 0 && ibm
+      ? useWorkerMergeStaticIntoSkinned(bakedBody, axeGeometry, handBoneIndex, ibm, axeLocalTransform)
+      : bakedBody
+
   useMemo(() => {
     bodyMesh.outline = { thickness: 0.03, color: [0, 0, 0] }
-
-    if (!cachedMergedGeometry) {
-      const handBone = skeleton.getBone('Hand.R')
-      if (handBone) {
-        const handBoneIndex = skeleton.bones.indexOf(handBone)
-        if (handBoneIndex >= 0) {
-          const ibm = skeleton.boneInverseBindMatrices[handBoneIndex]!
-          cachedMergedGeometry = mergeStaticIntoSkinned(bakedBody, axeGeometry, handBoneIndex, ibm, axeLocalTransform)
-        }
-      }
-    }
-
-    if (cachedMergedGeometry) {
-      bodyMesh.geometry = cachedMergedGeometry
-      bodyMesh.material = characterMaterial
-    }
-  }, [bodyMesh, skeleton, bakedBody, axeGeometry])
+    bodyMesh.geometry = mergedGeometry
+    bodyMesh.material = characterMaterial
+  }, [bodyMesh, mergedGeometry])
 
   const { actions } = useAnimations(clips, skeleton)
   const actionList = useMemo(() => clips.map(c => actions[c.name]!), [clips, actions])

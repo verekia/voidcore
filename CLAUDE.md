@@ -15,6 +15,7 @@ VoidCore is a performant 3D graphics engine written in TypeScript. It supports b
 - **Scene graph**: Tree of Nodes with dirty-flag world matrix propagation. Transforms are set via `setPosition(x, y, z)`, `setRotation(x, y, z, w)`, `setScale(x, y, z)` / `setScale(s)` which automatically mark the node dirty. Per-component setters are also available: `setPositionX/Y/Z(v)`, `setScaleX/Y/Z(v)`. `markTransformDirty()` is available for code that writes directly to the underlying Float32Arrays (e.g., `quatFromAxisAngle`).
 - **HTML overlay**: DOM elements tracked to 3D world positions via CSS transforms. Supports node tracking with offset, centering, dirty checking, depth-based z-index, distance scaling, and per-element pointer events.
 - **React bindings**: Optional declarative layer based on React Three Fiber's API design, exported directly from `voidcore`. Uses a custom `react-reconciler` to map JSX elements (`<mesh>`, `<boxGeometry>`, `<lambertMaterial>`, `<directionalLight>`, `<ambientLight>`, etc.) to engine objects. Provides hooks (`useFrame`, `useEngine`, `useGLTF`, `useKTX2`, `useColoredGeometry`, `useColoredStaticGeometry`, `useAnimations`) and a `<Canvas>` root component. `useGLTF` supports `{ meshName }` option to return a single `Mesh` by name instead of the full `GLTFResult`. `useGLTF` with `{ meshName, clone: true }` returns a `ClonedMesh` with its own bone hierarchy, skeleton, and animations for independent instancing. `useColoredGeometry(geometry, palette)` is a memoized wrapper around `bakePalette` for vertex-colored geometry. `useColoredStaticGeometry(meshName, palette)` is a convenience hook combining `useGLTF` + `useColoredGeometry` for named meshes in a static bundle GLB; call `useColoredStaticGeometry.setStaticBundlePath(url)` at module level to configure the bundle path.
+- **Web Worker**: Optional geometry worker offloads CPU-intensive operations (BVH construction, palette baking, mesh merging, smooth normals) to a background thread. Call `initGeometryWorker(worker)` once at startup with a Worker instance pointing at the built `geometry-worker` module. Worker-backed React hooks (`useWorkerColoredGeometry`, `useWorkerColoredStaticGeometry`, `useWorkerMergeStaticIntoSkinned`, `useWorkerPrebuildBVH`) use Suspense for async results. All async functions (`bakePaletteAsync`, `buildBVHAsync`, etc.) fall back to synchronous execution on the main thread if no worker is initialized — the worker is an optimization, not a requirement. The worker is self-contained (inlined math functions, no engine imports) for bundler portability.
 
 ## Project Structure
 
@@ -34,6 +35,9 @@ library/       – The library package (published to npm as "voidcore")
     math/                – Linear algebra (vec3, mat4, quat, AABB, frustum)
     helpers/             – Visual debug helpers (DirectionalLightHelper)
     raycasting/          – Ray-mesh intersection with BVH acceleration
+    workers/             – Web worker for off-main-thread geometry processing
+      geometry-worker.ts – Self-contained worker (BVH, bakePalette, merge, smooth normals)
+      index.ts           – Worker manager + async API (initGeometryWorker, *Async functions)
     renderer/            – Rendering backends and shaders
       renderer.ts        – Interface + factory
       webgpu.ts          – WebGPU backend

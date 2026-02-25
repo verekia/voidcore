@@ -1,6 +1,6 @@
 import { Suspense, useCallback, useEffect, useState } from 'react'
 
-import { Canvas } from 'voidcore'
+import { Canvas, initGeometryWorker } from 'voidcore'
 
 import BackendSwitch from '../components/BackendSwitch'
 import CameraControls from '../components/CameraControls'
@@ -12,6 +12,13 @@ import RotatingCube from '../components/RotatingCube'
 import StatsOverlay from '../components/StatsOverlay'
 
 import type { Engine } from 'voidcore'
+
+// ─── Geometry Worker ─────────────────────────────────────────────────────────
+
+if (typeof window !== 'undefined') {
+  const worker = new Worker(new URL('../../library/src/workers/geometry-worker.ts', import.meta.url))
+  initGeometryWorker(worker)
+}
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 

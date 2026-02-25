@@ -2,10 +2,10 @@ import { Suspense, useMemo } from 'react'
 
 import {
   LambertMaterial,
-  prebuildBVH,
   BakeShadows,
   useKTX2,
-  useColoredStaticGeometry,
+  useWorkerColoredStaticGeometry,
+  useWorkerPrebuildBVH,
   type PaletteEntry,
 } from 'voidcore'
 
@@ -173,10 +173,13 @@ const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
     [grassAoTexture, groundAoTexture, grassNormalTexture, groundNormalTexture],
   )
 
-  const geometry = useColoredStaticGeometry('Eden', palette)
+  // Worker-backed palette baking (off main thread)
+  const geometry = useWorkerColoredStaticGeometry('Eden', palette)
+
+  // Worker-backed BVH construction (off main thread)
+  useWorkerPrebuildBVH(geometry)
 
   const material = useMemo(() => {
-    prebuildBVH(geometry)
     onReady?.()
     return new LambertMaterial({ aoMap: aoTexture, aoIntensity: 2, emissiveBrightness: 0 })
   }, [geometry, aoTexture, onReady])
