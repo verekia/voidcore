@@ -45,10 +45,12 @@ export const initGeometryWorker = (worker: Worker): void => {
       entry.resolve(e.data)
     }
   }
-  _worker.onerror = (e: ErrorEvent) => {
-    // Reject all pending operations on worker error
+  _worker.onerror = () => {
+    // Worker failed to load — null it out so future calls fall back to synchronous execution
+    _worker = null
+    // Reject pending operations (Suspense cache will retry with sync fallback on next render)
     for (const [, entry] of _pending) {
-      entry.reject(new Error(`Geometry worker error: ${e.message}`))
+      entry.reject(new Error('Geometry worker failed'))
     }
     _pending.clear()
   }

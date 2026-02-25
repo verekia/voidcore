@@ -243,6 +243,7 @@ interface SuspenseCacheEntry<T> {
   promise?: Promise<T>
   result?: T
   error?: unknown
+  resolved?: boolean
 }
 
 const _suspenseCache = new Map<string, SuspenseCacheEntry<any>>()
@@ -266,13 +267,14 @@ function useSuspenseAsync<T>(key: string, factory: () => Promise<T>): T {
     entry.promise = factory()
       .then(result => {
         entry!.result = result
+        entry!.resolved = true
       })
-      .catch(error => {
-        entry!.error = error
+      .catch(() => {
+        // Remove failed entry so next render retries (worker may have fallen back to sync)
+        _suspenseCache.delete(key)
       }) as unknown as Promise<T>
   }
-  if (entry.error) throw entry.error
-  if (entry.result !== undefined) return entry.result
+  if (entry.resolved) return entry.result as T
   throw entry.promise
 }
 
