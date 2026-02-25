@@ -240,6 +240,7 @@ uniform highp sampler2DShadow u_shadowMap;
 uniform bool u_receiveShadow;
 uniform float u_emissiveBrightness;
 uniform float u_wrapLighting;
+uniform float u_darkness;
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
@@ -266,7 +267,7 @@ void main() {
   float NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
   vec3 diffuse = u_lightColor * u_lightIntensity * NdotL;
 
-  vec3 finalColor = baseColor * (ambient + diffuse);
+  vec3 finalColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * u_darkness) + diffuse);
 
   fragColor = vec4(finalColor, u_opacity);
   fragEmissive = vec4(0.0, 0.0, 0.0, u_opacity);
@@ -384,6 +385,7 @@ uniform highp sampler2DShadow u_shadowMap;
 uniform bool u_receiveShadow;
 uniform float u_emissiveBrightness;
 uniform float u_wrapLighting;
+uniform float u_darkness;
 uniform sampler2D u_aoMap;
 uniform float u_aoIntensity;
 uniform highp sampler2DArray u_tiledAoArray;
@@ -513,7 +515,7 @@ void main() {
   float NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
   vec3 diffuse = u_lightColor * u_lightIntensity * NdotL;
 
-  vec3 litColor = baseColor * (ambient + diffuse);
+  vec3 litColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * u_darkness) + diffuse);
   float brightness = dot(emissive, vec3(0.299, 0.587, 0.114));
   vec3 screenEmissive = mix(emissive, vec3(brightness), clamp(brightness, 0.0, 1.0) * u_emissiveBrightness);
   vec3 finalColor = litColor + screenEmissive;
@@ -599,6 +601,7 @@ uniform highp sampler2DShadow u_shadowMap;
 uniform bool u_receiveShadow;
 uniform float u_emissiveBrightness;
 uniform float u_wrapLighting;
+uniform float u_darkness;
 uniform sampler2D u_colorMap;
 uniform sampler2D u_aoMap;
 uniform float u_aoIntensity;
@@ -633,7 +636,7 @@ void main() {
   float NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
   vec3 diffuse = u_lightColor * u_lightIntensity * NdotL;
 
-  vec3 finalColor = baseColor * (ambient + diffuse);
+  vec3 finalColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * u_darkness) + diffuse);
 
   fragColor = vec4(finalColor, u_opacity);
   fragEmissive = vec4(0.0, 0.0, 0.0, u_opacity);
@@ -808,6 +811,7 @@ uniform highp sampler2DShadow u_shadowMap;
 uniform bool u_receiveShadow;
 uniform float u_emissiveBrightness;
 uniform float u_wrapLighting;
+uniform float u_darkness;
 ${customUniformsDecl ?? ''}
 
 layout(location = 0) out vec4 fragColor;
@@ -835,7 +839,7 @@ void main() {
   float NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
   vec3 diffuse = u_lightColor * u_lightIntensity * NdotL;
 
-  vec3 finalColor = baseColor * (ambient + diffuse);
+  vec3 finalColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * u_darkness) + diffuse);
   float alpha = u_opacity;
   ${customFragment ?? ''}
 

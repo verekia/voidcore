@@ -28,7 +28,13 @@
 // Wrap lighting controls how much diffuse light "wraps" around to unlit faces. At 0 (default),
 // standard Lambert shading clamps NdotL to zero — all back-facing surfaces look identical.
 // Increasing wrapLighting (0–1) lets some light variation through to the dark side, so
-// individual faces remain distinguishable even when unlit.
+// individual faces remain distinguishable even when unlit. Shadow only affects the real
+// (non-wrapped) diffuse contribution, so the wrap bonus is never occluded.
+//
+// Darkness pushes unlit faces deeper into the dark by reducing their ambient light. At 0
+// (default), all faces receive full ambient. At 1, faces pointing directly away from the
+// light receive zero ambient. Unlike wrapLighting, darkness does not affect the lit side
+// at all — it only adds contrast on the dark side. Both can be combined.
 //
 // Transparency is supported via sorted alpha blending. Set `transparent: true` and an
 // `opacity` value (0–1) to make a material see-through. Transparent meshes are drawn
@@ -98,6 +104,7 @@ export class Material {
   // Lambert-specific
   receiveShadow: boolean
   wrapLighting: number
+  darkness: number
 
   // Emissive
   emissiveBrightness: number
@@ -123,6 +130,7 @@ export class Material {
     this.vertexColors = opts.vertexColors ?? false
     this.receiveShadow = opts.receiveShadow ?? true
     this.wrapLighting = opts.wrapLighting ?? 0
+    this.darkness = opts.darkness ?? 0
     this.opacity = opts.opacity ?? 1.0
     this.transparent = opts.transparent ?? false
     this.side = opts.side ?? (opts.transparent ? 'double' : 'front')
@@ -149,6 +157,7 @@ export interface MaterialOptions {
   vertexColors?: boolean
   receiveShadow?: boolean
   wrapLighting?: number
+  darkness?: number
   palette?: PaletteEntry[]
   emissiveBrightness?: number
   opacity?: number

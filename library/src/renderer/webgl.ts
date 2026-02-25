@@ -177,6 +177,7 @@ interface SceneUniformLocs {
   u_receiveShadow: WebGLUniformLocation | null
   u_emissiveBrightness: WebGLUniformLocation | null
   u_wrapLighting: WebGLUniformLocation | null
+  u_darkness: WebGLUniformLocation | null
   u_colorMap: WebGLUniformLocation | null
   u_aoMap: WebGLUniformLocation | null
   u_aoIntensity: WebGLUniformLocation | null
@@ -204,6 +205,7 @@ const cacheSceneLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): Scen
   u_receiveShadow: gl.getUniformLocation(program, 'u_receiveShadow'),
   u_emissiveBrightness: gl.getUniformLocation(program, 'u_emissiveBrightness'),
   u_wrapLighting: gl.getUniformLocation(program, 'u_wrapLighting'),
+  u_darkness: gl.getUniformLocation(program, 'u_darkness'),
   u_colorMap: gl.getUniformLocation(program, 'u_colorMap'),
   u_aoMap: gl.getUniformLocation(program, 'u_aoMap'),
   u_aoIntensity: gl.getUniformLocation(program, 'u_aoIntensity'),
@@ -1992,6 +1994,7 @@ export class WebGLRenderer implements Renderer {
           gl.uniform1i(locs.u_receiveShadow, mesh.material.receiveShadow ? 1 : 0)
           gl.uniform1f(locs.u_emissiveBrightness, mesh.material.emissiveBrightness)
           gl.uniform1f(locs.u_wrapLighting, mesh.material.wrapLighting)
+          gl.uniform1f(locs.u_darkness, mesh.material.darkness)
         }
       }
 

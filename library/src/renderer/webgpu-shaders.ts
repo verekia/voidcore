@@ -71,6 +71,10 @@ struct MaterialUniforms {
   aoIntensity: f32,
   emissiveBrightness: f32,
   wrapLighting: f32,
+  darkness: f32,
+  _pad0: f32,
+  _pad1: f32,
+  _pad2: f32,
 };`
 
 const OBJECT_UNIFORMS = `
@@ -247,7 +251,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
   let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
 
-  let finalColor = baseColor * (ambient + diffuse);
+  let finalColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * material.darkness) + diffuse);
 
   out.color = vec4<f32>(finalColor * alpha, alpha);
   out.emissive = vec4<f32>(0.0, 0.0, 0.0, alpha);
@@ -339,7 +343,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
   let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
 
-  let finalColor = baseColor * (ambient + diffuse);
+  let finalColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * material.darkness) + diffuse);
 
   out.color = vec4<f32>(finalColor * alpha, alpha);
   out.emissive = vec4<f32>(0.0, 0.0, 0.0, alpha);
@@ -553,7 +557,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
   let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
 
-  let litColor = baseColor * (ambient + diffuse);
+  let litColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * material.darkness) + diffuse);
   let brightness = dot(emissive, vec3<f32>(0.299, 0.587, 0.114));
   let screenEmissive = mix(emissive, vec3<f32>(brightness), saturate(brightness) * material.emissiveBrightness);
   let finalColor = litColor + screenEmissive;
@@ -778,7 +782,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
   let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
 
-  let litColor = baseColor * (ambient + diffuse);
+  let litColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * material.darkness) + diffuse);
   let brightness = dot(emissive, vec3<f32>(0.299, 0.587, 0.114));
   let screenEmissive = mix(emissive, vec3<f32>(brightness), saturate(brightness) * material.emissiveBrightness);
   let finalColor = litColor + screenEmissive;
@@ -873,7 +877,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
   let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
 
-  let finalColor = baseColor * (ambient + diffuse);
+  let finalColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * material.darkness) + diffuse);
 
   out.color = vec4<f32>(finalColor * alpha, alpha);
   out.emissive = vec4<f32>(0.0, 0.0, 0.0, alpha);
@@ -1060,7 +1064,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
   let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
 
-  var finalColor = baseColor * (ambient + diffuse);
+  var finalColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * material.darkness) + diffuse);
   ${customFragment ?? ''}
 
   out.color = vec4<f32>(finalColor * alpha, alpha);
@@ -1159,7 +1163,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let NdotL = wrapNdotL - realNdotL * (1.0 - shadow);
   let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
 
-  var finalColor = baseColor * (ambient + diffuse);
+  var finalColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * material.darkness) + diffuse);
   ${customFragment ?? ''}
 
   out.color = vec4<f32>(finalColor * alpha, alpha);

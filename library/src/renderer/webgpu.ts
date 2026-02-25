@@ -170,8 +170,8 @@ const FRAME_UB_SIZE = 192
 const SHADOW_UB_SIZE = 64
 // ObjectUniforms: mat4(64) + mat4(64) + vec4(16) = 144 bytes
 const OBJECT_UB_SIZE = 144
-// MaterialUniforms: vec3+f32(16) + 4*f32(16) = 32 bytes
-const MATERIAL_UB_SIZE = 32
+// MaterialUniforms: vec3+f32(16) + 4*f32(16) + f32+3*pad(16) = 48 bytes
+const MATERIAL_UB_SIZE = 48
 // Bloom down params: vec2+f32+pad(16)
 const BLOOM_DOWN_UB_SIZE = 16
 // Bloom up params: vec2+pad(16)
@@ -2245,6 +2245,7 @@ export class WebGPURenderer implements Renderer {
     data[5] = material.aoIntensity
     data[6] = material.emissiveBrightness
     data[7] = material.wrapLighting
+    data[8] = material.darkness
 
     this.device.queue.writeBuffer(cache.buffer, 0, data.buffer, data.byteOffset, data.byteLength)
   }

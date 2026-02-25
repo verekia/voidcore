@@ -178,7 +178,7 @@ const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
   const material = useMemo(() => {
     prebuildBVH(geometry)
     onReady?.()
-    return new LambertMaterial({ aoMap: aoTexture, aoIntensity: 2, emissiveBrightness: 0, wrapLighting: 0.3 })
+    return new LambertMaterial({ aoMap: aoTexture, aoIntensity: 2, emissiveBrightness: 0, darkness: 0.5 })
   }, [geometry, aoTexture, onReady])
 
   return (
