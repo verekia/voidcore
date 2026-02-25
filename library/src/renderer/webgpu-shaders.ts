@@ -209,6 +209,7 @@ fn vs_main(
   out.normal = normalize((object.normalMatrix * vec4<f32>(a_normal.xyz, 0.0)).xyz);
   out.uv = a_uv;
   out.position = frame.viewProjection * worldPos;
+  out.position.z += flag * 0.0001 * out.position.w; // Depth bias to prevent outline z-fighting
   return out;
 }
 
@@ -296,6 +297,7 @@ fn vs_main(
   out.normal = skinnedNorm;
   out.uv = a_uv;
   out.position = frame.viewProjection * vec4<f32>(worldPos, 1.0);
+  out.position.z += flag * 0.0001 * out.position.w; // Depth bias to prevent outline z-fighting
   return out;
 }
 
@@ -447,6 +449,7 @@ fn vs_main(
   out.tiledNormalInfo = a_tiledNormal;
   out.noiseColorInfo = a_noiseColor;
   out.position = frame.viewProjection * worldPos;
+  out.position.z += flag * 0.0001 * out.position.w; // Depth bias to prevent outline z-fighting
   return out;
 }
 
@@ -668,6 +671,7 @@ fn vs_main(
   out.tiledNormalInfo = a_tiledNormal;
   out.noiseColorInfo = a_noiseColor;
   out.position = frame.viewProjection * vec4<f32>(worldPos, 1.0);
+  out.position.z += flag * 0.0001 * out.position.w; // Depth bias to prevent outline z-fighting
   return out;
 }
 
@@ -809,6 +813,7 @@ fn vs_main(
   out.normal = normalize((object.normalMatrix * vec4<f32>(a_normal.xyz, 0.0)).xyz);
   out.uv = a_uv;
   out.position = frame.viewProjection * worldPos;
+  out.position.z += flag * 0.0001 * out.position.w; // Depth bias to prevent outline z-fighting
   return out;
 }
 
@@ -997,6 +1002,7 @@ fn vs_main(
   out.uv = a_uv;
   ${customVertex ?? ''}
   out.position = frame.viewProjection * vec4<f32>(out.worldPos, 1.0);
+  out.position.z += flag * 0.0001 * out.position.w; // Depth bias to prevent outline z-fighting
   return out;
 }
 
@@ -1091,6 +1097,7 @@ fn vs_main(
   out.uv = a_uv;
   ${customVertex ?? ''}
   out.position = frame.viewProjection * vec4<f32>(out.worldPos, 1.0);
+  out.position.z += flag * 0.0001 * out.position.w; // Depth bias to prevent outline z-fighting
   return out;
 }
 

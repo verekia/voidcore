@@ -219,6 +219,7 @@ void main() {
   v_normal = normalize((u_normalMatrix * vec4(a_normal.xyz, 0.0)).xyz);
   v_uv = a_uv;
   gl_Position = u_viewProjection * worldPos;
+  gl_Position.z += flag * 0.0001 * gl_Position.w; // Depth bias to prevent outline z-fighting
 }
 `
 
@@ -308,6 +309,7 @@ void main() {
   v_normal = skinnedNorm;
   v_uv = a_uv;
   gl_Position = u_viewProjection * vec4(worldPos, 1.0);
+  gl_Position.z += flag * 0.0001 * gl_Position.w; // Depth bias to prevent outline z-fighting
 }
 `
 
@@ -352,6 +354,7 @@ void main() {
   v_tiledNormal = a_tiledNormal;
   v_noiseColor = a_noiseColor;
   gl_Position = u_viewProjection * worldPos;
+  gl_Position.z += flag * 0.0001 * gl_Position.w; // Depth bias to prevent outline z-fighting
 }
 `
 
@@ -563,6 +566,7 @@ void main() {
   v_tiledNormal = a_tiledNormal;
   v_noiseColor = a_noiseColor;
   gl_Position = u_viewProjection * vec4(worldPos, 1.0);
+  gl_Position.z += flag * 0.0001 * gl_Position.w; // Depth bias to prevent outline z-fighting
 }
 `
 
@@ -720,6 +724,7 @@ void main() {
   v_uv = a_uv;
   ${customVertex ?? ''}
   gl_Position = u_viewProjection * vec4(v_worldPos, 1.0);
+  gl_Position.z += flag * 0.0001 * gl_Position.w; // Depth bias to prevent outline z-fighting
 }
 `
 
@@ -763,6 +768,7 @@ void main() {
   v_uv = a_uv;
   ${customVertex ?? ''}
   gl_Position = u_viewProjection * vec4(v_worldPos, 1.0);
+  gl_Position.z += flag * 0.0001 * gl_Position.w; // Depth bias to prevent outline z-fighting
 }
 `
 
