@@ -96,6 +96,8 @@ layout(std140) uniform FrameBlock {
   float u_slopeBias;
   float u_invMapSize;
   float _biasPad;
+  vec3 u_cameraPos;
+  float u_elapsed;
 };`
 
 const OBJECT_BLOCK = `

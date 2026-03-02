@@ -35,6 +35,7 @@ export {
   CapsuleGeometry,
   CircleGeometry,
 } from './geometry/primitives'
+export { generateGrass, createGrassMaterial, type GrassOptions } from './geometry/grass'
 
 // Materials
 export {
@@ -83,6 +84,7 @@ export {
   useColoredGeometry,
   useColoredStaticGeometry,
   useAnimations,
+  useGrass,
   type UseGLTFOptions,
   type ClonedMesh,
 } from './react/hooks'

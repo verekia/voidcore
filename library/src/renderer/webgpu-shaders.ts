@@ -61,6 +61,8 @@ struct FrameUniforms {
   slopeBias: f32,
   invMapSize: f32,
   _pad0: f32,
+  cameraPos: vec3<f32>,
+  elapsed: f32,
 };`
 
 const MATERIAL_UNIFORMS = `

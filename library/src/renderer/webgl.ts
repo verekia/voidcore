@@ -880,9 +880,9 @@ export class WebGLRenderer implements Renderer {
   private _traversalStack: Node[] = []
 
   // UBOs
-  // FrameBlock (binding 0): 208 bytes = 52 floats (VP + light + shadow data)
+  // FrameBlock (binding 0): 224 bytes = 56 floats (VP + light + shadow data + cameraPos)
   private _frameUBO!: WebGLBuffer
-  private _frameData = new Float32Array(52)
+  private _frameData = new Float32Array(56)
   // ObjectBlock (binding 1, dynamic): mat4 worldMatrix + mat4 normalMatrix + vec4 outlineColorAndThickness = 144 bytes
   // SkinnedObjectBlock (binding 1, dynamic): above + mat4[32] boneMatrices = 2192 bytes
   private _uboAlignment = 256
@@ -1020,10 +1020,10 @@ export class WebGLRenderer implements Renderer {
     this._alignedObjectSize = Math.ceil(144 / this._uboAlignment) * this._uboAlignment
     this._alignedSkinnedSize = Math.ceil(2192 / this._uboAlignment) * this._uboAlignment
 
-    // Frame UBO (208 bytes = 52 floats)
+    // Frame UBO (224 bytes = 56 floats)
     this._frameUBO = gl.createBuffer()!
     gl.bindBuffer(gl.UNIFORM_BUFFER, this._frameUBO)
-    gl.bufferData(gl.UNIFORM_BUFFER, 208, gl.DYNAMIC_DRAW)
+    gl.bufferData(gl.UNIFORM_BUFFER, 224, gl.DYNAMIC_DRAW)
 
     // Dynamic object / skinned UBOs
     this._createDynamicBuffers()
@@ -1352,20 +1352,19 @@ export class WebGLRenderer implements Renderer {
     if (!entry) {
       const names = Object.keys(uniformValues).sort()
       const numFloats = names.length
-      // std140: each float occupies 16 bytes (vec4 alignment)
-      const bufferSize = numFloats * 16
+      // std140: scalar float members have 4-byte base alignment
+      const bufferSize = numFloats * 4
       const ubo = gl.createBuffer()!
       gl.bindBuffer(gl.UNIFORM_BUFFER, ubo)
       gl.bufferData(gl.UNIFORM_BUFFER, bufferSize, gl.DYNAMIC_DRAW)
-      // Staging array: one float per 4 floats (16 bytes) to match std140 layout
-      entry = { ubo, data: new Float32Array(numFloats * 4), names }
+      entry = { ubo, data: new Float32Array(numFloats), names }
       this._customUniformCache.set(material, entry)
     }
 
-    // Pack current values into staging array (std140: each float at 16-byte stride)
+    // Pack current values into staging array (std140: scalar floats at 4-byte stride)
     const { ubo, data, names } = entry
     for (let i = 0; i < names.length; i++) {
-      data[i * 4] = uniformValues[names[i]!]!
+      data[i] = uniformValues[names[i]!]!
     }
     gl.bindBuffer(gl.UNIFORM_BUFFER, ubo)
     gl.bufferSubData(gl.UNIFORM_BUFFER, 0, data)
@@ -1793,7 +1792,7 @@ export class WebGLRenderer implements Renderer {
       gl.bufferSubData(gl.UNIFORM_BUFFER, 0, skinnedBatch, 0, skinnedIdx * alignedSkinnedFloats)
     }
 
-    // ─── Upload frame UBO (52 floats / 208 bytes) ─────────────────
+    // ─── Upload frame UBO (56 floats / 224 bytes) ─────────────────
     // std140 layout:
     //   mat4 u_viewProjection       (floats 0-15)
     //   vec3 u_lightDirection + pad  (floats 16-19)
@@ -1802,6 +1801,7 @@ export class WebGLRenderer implements Renderer {
     //   float u_shadowEnabled + 3 pad (floats 28-31)
     //   mat4 u_shadowVP              (floats 32-47)
     //   float constantBias, slopeBias, invMapSize, pad (floats 48-51)
+    //   vec3 u_cameraPos + u_elapsed  (floats 52-55)
     const fd = this._frameData
     fd.fill(0)
     fd.set(this._vpMatrix, 0)
@@ -1825,6 +1825,10 @@ export class WebGLRenderer implements Renderer {
       fd[49] = dirLight!.shadowSlopeBias
       fd[50] = 1.0 / this.shadowResolution
     }
+    fd[52] = camera.position[0]!
+    fd[53] = camera.position[1]!
+    fd[54] = camera.position[2]!
+    fd[55] = now * 0.001
     gl.bindBuffer(gl.UNIFORM_BUFFER, this._frameUBO)
     gl.bufferSubData(gl.UNIFORM_BUFFER, 0, fd)
     gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, this._frameUBO)

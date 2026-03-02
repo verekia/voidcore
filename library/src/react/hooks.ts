@@ -13,11 +13,13 @@
 // useColoredStaticGeometry(name, palette) – Load a named mesh from the static bundle and bake palette.
 //   .setStaticBundlePath – Set global static bundle GLB path.
 // useAnimations()   – Create an AnimationMixer and return action map.
+// useGrass(geo, palette, opts) – Generate grass blades on grass-marked terrain faces.
 
 import { useContext, useEffect, useRef, useMemo } from 'react'
 
 import { AnimationMixer } from '../animation/index'
 import { bakePalette } from '../geometry/geometry'
+import { generateGrass, createGrassMaterial } from '../geometry/grass'
 import { loadGLTF } from '../loaders/gltf'
 import { loadKTX2 } from '../loaders/ktx2'
 import { cloneScene } from '../scene/clone'
@@ -27,8 +29,9 @@ import { VoidContext } from './context'
 import type { AnimationClip } from '../animation/index'
 import type { Skeleton } from '../animation/skeleton'
 import type { Geometry } from '../geometry/geometry'
+import type { GrassOptions } from '../geometry/grass'
 import type { GLTFResult, LoadOptions } from '../loaders/gltf'
-import type { PaletteEntry } from '../materials/material'
+import type { BasicMaterial, PaletteEntry } from '../materials/material'
 import type { CompressedTextureFormat } from '../materials/texture'
 import type { Texture } from '../materials/texture'
 import type { Node } from '../scene/node'
@@ -247,3 +250,16 @@ export const useAnimations = (animations: AnimationClip[], skeleton: Skeleton) =
 
   return { mixer, actions }
 }
+
+// ─── useGrass ─────────────────────────────────────────────────────────────────
+
+export const useGrass = (
+  geometry: Geometry,
+  palette: PaletteEntry[],
+  options?: GrassOptions,
+): { geometry: Geometry; material: BasicMaterial } =>
+  useMemo(() => {
+    const grassGeo = generateGrass(geometry, palette, options)
+    console.log('Grass vertices:', grassGeo.vertexCount)
+    return { geometry: grassGeo, material: createGrassMaterial(palette, options) }
+  }, [geometry, palette])

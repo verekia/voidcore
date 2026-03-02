@@ -164,8 +164,8 @@ interface RenderTargets {
 
 // ─── Uniform buffer sizes ────────────────────────────────────────────
 
-// FrameUniforms: viewProj(64) + lightDir(12)+intensity(4) + ambient(12)+pad(4) + shadowVP(64) + bias(4)+pad(12) + bloom(4)+pad(12) = 192 bytes
-const FRAME_UB_SIZE = 192
+// FrameUniforms: viewProj(64) + lightDir(12)+intensity(4) + ambient(12)+pad(4) + shadowVP(64) + bias(4)+pad(12) + cameraPos(12)+pad(4) = 208 bytes
+const FRAME_UB_SIZE = 208
 // ShadowUniforms: mat4(64)
 const SHADOW_UB_SIZE = 64
 // ObjectUniforms: mat4(64) + mat4(64) + vec4(16) = 144 bytes
@@ -2546,7 +2546,7 @@ export class WebGPURenderer implements Renderer {
     }
 
     // ─── Update per-frame uniform buffer ──────────────────────────
-    // WGSL layout (192 bytes / 48 floats):
+    // WGSL layout (208 bytes / 52 floats):
     //   viewProjection: mat4x4     (floats 0-15)
     //   lightDir: vec3             (floats 16-18)
     //   lightIntensity: f32        (float 19)
@@ -2559,6 +2559,8 @@ export class WebGPURenderer implements Renderer {
     //   slopeBias: f32             (float 45)
     //   invMapSize: f32            (float 46)
     //   _pad0: f32                 (float 47)
+    //   cameraPos: vec3            (floats 48-50)
+    //   elapsed: f32              (float 51)
     const fd = this._frameData
     fd.fill(0)
     fd.set(this._vpMatrix, 0)
@@ -2580,6 +2582,10 @@ export class WebGPURenderer implements Renderer {
       fd[45] = dirLight!.shadowSlopeBias
       fd[46] = 1.0 / this.shadowResolution
     }
+    fd[48] = camera.position[0]!
+    fd[49] = camera.position[1]!
+    fd[50] = camera.position[2]!
+    fd[51] = now * 0.001
     this.device.queue.writeBuffer(this.frameUB, 0, fd.buffer, fd.byteOffset, fd.byteLength)
 
     // ─── Ensure render targets ──────────────────────────────────
