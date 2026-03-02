@@ -51,12 +51,12 @@ export const useEngine = () => {
 export const useFrame = (callback: FrameCallback) => {
   const contextStore = useContext(VoidContext)
   const store = contextStore ?? getGlobalStore()
-  if (!store) throw new Error('useFrame: no VoidCore engine found — use inside <Canvas> or ensure <Canvas> is mounted')
 
   const callbackRef = useRef(callback)
   callbackRef.current = callback
 
   useEffect(() => {
+    if (!store) return
     const wrapper: FrameCallback = state => callbackRef.current(state)
     store.frameCallbacks.add(wrapper)
     return () => {
