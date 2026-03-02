@@ -11,7 +11,7 @@ import { Engine } from '../engine'
 import { Raycaster } from '../raycasting/index'
 import { PerspectiveCamera } from '../scene/camera'
 import { Scene } from '../scene/scene'
-import { VoidContext, type VoidStore } from './context'
+import { VoidContext, claimGlobalStore, releaseGlobalStore, type VoidStore } from './context'
 import { setupEvents } from './events'
 import { reconciler, type VoidInstance } from './reconciler'
 import { createTunnel, type Tunnel } from './tunnel'
@@ -165,16 +165,18 @@ export const Canvas = ({
         noop, // onDefaultTransitionIndicator
       )
 
+      setStore(storeValue)
+      const ownsGlobal = claimGlobalStore(storeValue)
+
       cleanupRef.current = () => {
         reconciler.updateContainer(null, rootRef.current, null, noop)
         rootRef.current = null
         cleanupEvents()
         unregisterUpdate()
         unregisterRender()
+        if (ownsGlobal) releaseGlobalStore(storeValue)
         engine.dispose()
       }
-
-      setStore(storeValue)
 
       if (onCreated) {
         onCreated({ engine, scene, camera })

@@ -1,7 +1,7 @@
 // Hooks – Public React hooks for VoidCore's declarative API.
 //
-// useEngine()       – Access engine, scene, camera, and canvas from context.
-// useFrame(cb)      – Register a callback that runs every frame (before render).
+// useEngine()       – Access engine, scene, camera, and canvas (works outside <Canvas>).
+// useFrame(cb)      – Register a callback that runs every frame (works outside <Canvas>).
 // useLoader(fn,url) – Suspense-compatible asset loader with caching.
 // useGLTF(url)      – Load a glTF/GLB model (wrapper around useLoader).
 //   With { meshName } – Returns a single Mesh by name instead of the full result.
@@ -24,7 +24,7 @@ import { loadGLTF } from '../loaders/gltf'
 import { loadKTX2 } from '../loaders/ktx2'
 import { cloneScene } from '../scene/clone'
 import { Mesh } from '../scene/mesh'
-import { VoidContext } from './context'
+import { VoidContext, getGlobalStore } from './context'
 
 import type { AnimationClip } from '../animation/index'
 import type { Skeleton } from '../animation/skeleton'
@@ -40,16 +40,18 @@ import type { FrameCallback } from './context'
 // ─── useEngine ────────────────────────────────────────────────────────────────
 
 export const useEngine = () => {
-  const store = useContext(VoidContext)
-  if (!store) throw new Error('useEngine must be used inside <Canvas>')
+  const contextStore = useContext(VoidContext)
+  const store = contextStore ?? getGlobalStore()
+  if (!store) throw new Error('useEngine: no VoidCore engine found — use inside <Canvas> or ensure <Canvas> is mounted')
   return { engine: store.engine, scene: store.scene, camera: store.camera, canvas: store.canvas }
 }
 
 // ─── useFrame ─────────────────────────────────────────────────────────────────
 
 export const useFrame = (callback: FrameCallback) => {
-  const store = useContext(VoidContext)
-  if (!store) throw new Error('useFrame must be used inside <Canvas>')
+  const contextStore = useContext(VoidContext)
+  const store = contextStore ?? getGlobalStore()
+  if (!store) throw new Error('useFrame: no VoidCore engine found — use inside <Canvas> or ensure <Canvas> is mounted')
 
   const callbackRef = useRef(callback)
   callbackRef.current = callback

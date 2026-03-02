@@ -1,7 +1,8 @@
 // Context – React context for sharing VoidCore engine state across the component tree.
 //
 // Holds the engine, scene, camera, canvas ref, raycaster, pointer state, and the set
-// of per-frame callbacks registered by useFrame hooks.
+// of per-frame callbacks registered by useFrame hooks. Also exposes a module-level
+// global store reference so hooks like useFrame and useEngine can work outside <Canvas>.
 
 import { createContext } from 'react'
 
@@ -27,3 +28,17 @@ export interface VoidStore {
 }
 
 export const VoidContext = createContext<VoidStore | null>(null)
+
+// Module-level store reference so hooks like useFrame can work outside <Canvas>.
+// First Canvas to mount claims the global slot; later Canvases don't overwrite it.
+// Only the Canvas that owns the slot clears it on unmount.
+let _globalStore: VoidStore | null = null
+export const claimGlobalStore = (store: VoidStore): boolean => {
+  if (_globalStore) return false
+  _globalStore = store
+  return true
+}
+export const releaseGlobalStore = (store: VoidStore) => {
+  if (_globalStore === store) _globalStore = null
+}
+export const getGlobalStore = () => _globalStore
