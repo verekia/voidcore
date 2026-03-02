@@ -191,11 +191,17 @@ const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
 
   // Load raw mesh (with materialIndices) for grass generation
   const edenMesh = useGLTF(staticBundleSrc, { meshName: 'Eden' }) as Mesh
+  const grassGridMesh = useGLTF(staticBundleSrc, {
+    meshName: 'EdenGrassGrid',
+  }) as Mesh
   const geometry = useColoredGeometry(edenMesh.geometry, palette)
 
-  const grass = useGrass(edenMesh.geometry, palette, {
-    density: 40,
+  const grass = useGrass(grassGridMesh.geometry, palette, {
+    bladesPerPatch: 15,
+    patchRadius: 0.65,
     radius: 80,
+    minWidth: 0.1,
+    maxWidth: 0.2,
   })
 
   const material = useMemo(() => {

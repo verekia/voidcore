@@ -260,6 +260,5 @@ export const useGrass = (
 ): { geometry: Geometry; material: BasicMaterial } =>
   useMemo(() => {
     const grassGeo = generateGrass(geometry, palette, options)
-    console.log('Grass vertices:', grassGeo.vertexCount)
     return { geometry: grassGeo, material: createGrassMaterial(palette, options) }
-  }, [geometry, palette])
+  }, [geometry, palette, options])

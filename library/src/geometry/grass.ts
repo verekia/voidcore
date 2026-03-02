@@ -1,16 +1,18 @@
 // Grass – Stylized billboard triangle grass blades scattered on terrain surfaces.
 //
-// The grass system generates isosceles triangle blades on terrain faces marked with
-// `grass: true` in the palette system. All blades are merged into a single Geometry
-// for a single draw call. All 3 vertices per blade store the base center position;
+// The grass system takes a grid geometry whose vertices are precomputed patch centers.
+// Each vertex becomes one patch, spawning `bladesPerPatch` blades in a disk of `patchRadius`
+// around its center. This creates natural-looking clumps while keeping vertex counts
+// manageable. All blades are merged into a single
+// Geometry for a single draw call. All 3 vertices per blade store the base center position;
 // per-vertex metadata (height factor, blade seed, horizontal sign) is encoded in the
 // normal attribute (snorm8), and blade dimensions (half-width, height) in UVs (float16).
-// A custom vertex shader on a BasicMaterial computes billboard orientation from the
-// camera direction at runtime, plus wind animation and distance culling (degenerate
-// triangles). The fragment shader handles per-blade color variation and base AO
-// darkening — no renderer changes needed, grass is a regular Mesh.
+// A custom vertex shader on a BasicMaterial computes billboard orientation from the camera
+// direction at runtime, plus wind animation and distance culling (degenerate triangles).
+// The fragment shader handles per-blade color variation and base AO darkening — no
+// renderer changes needed, grass is a regular Mesh.
 //
-// generateGrass(geometry, palette, options) – Scatters triangle blades on grass-marked faces.
+// generateGrass(geometry, palette, options) – Scatters patch-based grass blades on grid faces.
 // createGrassMaterial(palette, options)     – Returns a BasicMaterial with grass custom shaders.
 
 import { BasicMaterial } from '../materials/material'
@@ -21,15 +23,19 @@ import type { PaletteEntry } from '../materials/material'
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface GrassOptions {
-  /** Blades per square unit. Default 10. */
-  density?: number
+  // /** Patch centers per square unit. Default 3. */
+  // patchDensity?: number
+  /** Blades per patch. Default 12. */
+  bladesPerPatch?: number
+  /** Disk radius around each patch center. Default 0.5. */
+  patchRadius?: number
   /** Minimum blade height. Default 0.15. */
   minHeight?: number
   /** Maximum blade height. Default 0.4. */
   maxHeight?: number
-  /** Minimum blade width. Default 0.03. */
+  /** Minimum blade width. Default 0.06. */
   minWidth?: number
-  /** Maximum blade width. Default 0.08. */
+  /** Maximum blade width. Default 0.15. */
   maxWidth?: number
   /** RNG seed for deterministic placement. Default 42. */
   seed?: number
@@ -58,11 +64,13 @@ const mulberry32 = (seed: number) => {
 // ─── Geometry Generation ─────────────────────────────────────────────────────
 
 /**
- * Scatters triangle grass blades on terrain faces marked with `grass: true`.
+ * Generates grass blades from a grid geometry whose vertices are precomputed patch centers.
+ * Each vertex becomes one patch, spawning `bladesPerPatch` blades in a disk of `patchRadius`.
  * Returns a Geometry with all blades merged for a single draw call.
  */
 export const generateGrass = (geometry: Geometry, palette: PaletteEntry[], options?: GrassOptions): Geometry => {
-  const density = options?.density ?? 10
+  const bladesPerPatch = options?.bladesPerPatch ?? 12
+  const patchRadius = options?.patchRadius ?? 0.5
   const minHeight = options?.minHeight ?? 0.15
   const maxHeight = options?.maxHeight ?? 0.4
   const minWidth = options?.minWidth ?? 0.06
@@ -70,52 +78,42 @@ export const generateGrass = (geometry: Geometry, palette: PaletteEntry[], optio
   const seed = options?.seed ?? 42
 
   const rng = mulberry32(seed)
-  const matIdx = geometry.materialIndices
-
-  if (!matIdx) {
-    return new Geometry({ positions: new Float32Array(0), normals: new Float32Array(0), indices: new Uint16Array(0) })
-  }
-
-  // Build grass flag lookup
-  const grassFlags = new Uint8Array(palette.length)
-  for (let i = 0; i < palette.length; i++) {
-    grassFlags[i] = palette[i]!.grass ? 1 : 0
-  }
-
   const pos = geometry.positions
-  const idx = geometry.indices
-  const triCount = idx.length / 3
+  const totalPatches = geometry.vertexCount
 
-  // First pass: count blades per triangle
-  let totalBlades = 0
-  const bladeCountPerTri = new Uint32Array(triCount)
+  // TODO: Density-based scatter on triangle faces (for non-grid geometries)
+  // const patchDensity = options?.patchDensity ?? 3
+  // const matIdx = geometry.materialIndices
+  // let grassFlags: Uint8Array | null = null
+  // if (matIdx) {
+  //   grassFlags = new Uint8Array(palette.length)
+  //   for (let i = 0; i < palette.length; i++) {
+  //     grassFlags[i] = palette[i]!.grass ? 1 : 0
+  //   }
+  // }
+  // const idx = geometry.indices
+  // const triCount = idx.length / 3
+  // let totalPatches = 0
+  // const patchCountPerTri = new Uint32Array(triCount)
+  // let fractionalAccum = 0
+  // for (let t = 0; t < triCount; t++) {
+  //   const i0 = idx[t * 3]!, i1 = idx[t * 3 + 1]!, i2 = idx[t * 3 + 2]!
+  //   if (grassFlags && matIdx) {
+  //     if (!grassFlags[matIdx[i0]!] || !grassFlags[matIdx[i1]!] || !grassFlags[matIdx[i2]!]) continue
+  //   }
+  //   const ax = pos[i0 * 3]!, ay = pos[i0 * 3 + 1]!, az = pos[i0 * 3 + 2]!
+  //   const e1x = pos[i1 * 3]! - ax, e1y = pos[i1 * 3 + 1]! - ay, e1z = pos[i1 * 3 + 2]! - az
+  //   const e2x = pos[i2 * 3]! - ax, e2y = pos[i2 * 3 + 1]! - ay, e2z = pos[i2 * 3 + 2]! - az
+  //   const cx = e1y * e2z - e1z * e2y, cy = e1z * e2x - e1x * e2z, cz = e1x * e2y - e1y * e2x
+  //   const area = 0.5 * Math.sqrt(cx * cx + cy * cy + cz * cz)
+  //   fractionalAccum += area * patchDensity
+  //   const count = Math.floor(fractionalAccum)
+  //   fractionalAccum -= count
+  //   patchCountPerTri[t] = count
+  //   totalPatches += count
+  // }
 
-  for (let t = 0; t < triCount; t++) {
-    const i0 = idx[t * 3]!
-    const i1 = idx[t * 3 + 1]!
-    const i2 = idx[t * 3 + 2]!
-
-    if (!grassFlags[matIdx[i0]!] || !grassFlags[matIdx[i1]!] || !grassFlags[matIdx[i2]!]) continue
-
-    // Triangle area via cross product
-    const ax = pos[i0 * 3]!,
-      ay = pos[i0 * 3 + 1]!,
-      az = pos[i0 * 3 + 2]!
-    const e1x = pos[i1 * 3]! - ax,
-      e1y = pos[i1 * 3 + 1]! - ay,
-      e1z = pos[i1 * 3 + 2]! - az
-    const e2x = pos[i2 * 3]! - ax,
-      e2y = pos[i2 * 3 + 1]! - ay,
-      e2z = pos[i2 * 3 + 2]! - az
-    const cx = e1y * e2z - e1z * e2y
-    const cy = e1z * e2x - e1x * e2z
-    const cz = e1x * e2y - e1y * e2x
-    const area = 0.5 * Math.sqrt(cx * cx + cy * cy + cz * cz)
-
-    const count = Math.floor(area * density)
-    bladeCountPerTri[t] = count
-    totalBlades += count
-  }
+  const totalBlades = totalPatches * bladesPerPatch
 
   if (totalBlades === 0) {
     return new Geometry({ positions: new Float32Array(0), normals: new Float32Array(0), indices: new Uint16Array(0) })
@@ -129,45 +127,66 @@ export const generateGrass = (geometry: Geometry, palette: PaletteEntry[], optio
   const outUvs = new Float32Array(totalVerts * 2)
 
   let bladeI = 0
+  const TWO_PI = Math.PI * 2
 
-  for (let t = 0; t < triCount; t++) {
-    const count = bladeCountPerTri[t]!
-    if (count === 0) continue
+  // Each vertex in the grid is a patch center
+  for (let v = 0; v < totalPatches; v++) {
+    const px = pos[v * 3]!
+    const py = pos[v * 3 + 1]!
+    const pz = pos[v * 3 + 2]!
 
-    const i0 = idx[t * 3]!
-    const i1 = idx[t * 3 + 1]!
-    const i2 = idx[t * 3 + 2]!
+    // TODO: Barycentric patch center placement on triangle faces
+    // let u = rng(), v = rng()
+    // if (u + v > 1) { u = 1 - u; v = 1 - v }
+    // const w = 1 - u - v
+    // const px = w * ax + u * bx + v * cx
+    // const py = w * ay + u * by + v * cy
+    // const pz = w * az + u * bz + v * cz
 
-    // Triangle vertex positions
-    const ax = pos[i0 * 3]!,
-      ay = pos[i0 * 3 + 1]!,
-      az = pos[i0 * 3 + 2]!
-    const bx = pos[i1 * 3]!,
-      by = pos[i1 * 3 + 1]!,
-      bz = pos[i1 * 3 + 2]!
-    const cx = pos[i2 * 3]!,
-      cy = pos[i2 * 3 + 1]!,
-      cz = pos[i2 * 3 + 2]!
+    // TODO: Interpolated surface normal at patch center (for tangent-frame disk scatter)
+    // let nx = w * n0x + u * n1x + v * n2x
+    // let ny = w * n0y + u * n1y + v * n2y
+    // let nz = w * n0z + u * n1z + v * n2z
+    // const nLen = Math.sqrt(nx * nx + ny * ny + nz * nz)
+    // if (nLen > 0.0001) { nx /= nLen; ny /= nLen; nz /= nLen }
+    //
+    // // Build tangent frame from surface normal
+    // // Cross normal with Z-up to get tangent; if parallel, use X-right
+    // let tanx: number, tany: number, tanz: number
+    // if (Math.abs(nz) < 0.999) {
+    //   tanx = ny; tany = -nx; tanz = 0 // cross(normal, Z-up)
+    // } else {
+    //   tanx = 0; tany = nz; tanz = -ny // cross(normal, X-right)
+    // }
+    // const tLen = Math.sqrt(tanx * tanx + tany * tany + tanz * tanz)
+    // tanx /= tLen; tany /= tLen; tanz /= tLen
+    //
+    // // Bitangent = cross(normal, tangent)
+    // const btx = ny * tanz - nz * tany
+    // const bty = nz * tanx - nx * tanz
+    // const btz = nx * tany - ny * tanx
 
-    for (let b = 0; b < count; b++) {
-      // Random barycentric coordinates
-      let u = rng()
-      let v = rng()
-      if (u + v > 1) {
-        u = 1 - u
-        v = 1 - v
-      }
-      const w = 1 - u - v
+    // Scatter blades in a disk around the patch center (XY plane)
+    for (let b = 0; b < bladesPerPatch; b++) {
+      const angle = rng() * TWO_PI
+      const r = Math.sqrt(rng()) * patchRadius // sqrt for uniform disk distribution
+      const offsetX = Math.cos(angle) * r
+      const offsetY = Math.sin(angle) * r
 
-      // Interpolate surface position (blade base center)
-      const px = w * ax + u * bx + v * cx
-      const py = w * ay + u * by + v * cy
-      const pz = w * az + u * bz + v * cz
+      const bladeX = px + offsetX
+      const bladeY = py + offsetY
+      const bladeZ = pz
+
+      // TODO: Surface-aligned disk scatter using tangent frame
+      // const cosA = Math.cos(angle)
+      // const sinA = Math.sin(angle)
+      // const bladeX = px + cosA * r * tanx + sinA * r * btx
+      // const bladeY = py + cosA * r * tany + sinA * r * bty
+      // const bladeZ = pz + cosA * r * tanz + sinA * r * btz
 
       // Random blade parameters
       const height = minHeight + rng() * (maxHeight - minHeight)
       const width = minWidth + rng() * (maxWidth - minWidth)
-      rng() // skip (was angle, no longer needed for billboard)
       const bladeSeed = rng()
       const hw = width * 0.5
 
@@ -178,15 +197,15 @@ export const generateGrass = (geometry: Geometry, palette: PaletteEntry[], optio
       const io = bladeI * 3
 
       // v0: base left  — v1: base right  — v2: tip
-      outPos[vo] = px
-      outPos[vo + 1] = py
-      outPos[vo + 2] = pz
-      outPos[vo + 3] = px
-      outPos[vo + 4] = py
-      outPos[vo + 5] = pz
-      outPos[vo + 6] = px
-      outPos[vo + 7] = py
-      outPos[vo + 8] = pz
+      outPos[vo] = bladeX
+      outPos[vo + 1] = bladeY
+      outPos[vo + 2] = bladeZ
+      outPos[vo + 3] = bladeX
+      outPos[vo + 4] = bladeY
+      outPos[vo + 5] = bladeZ
+      outPos[vo + 6] = bladeX
+      outPos[vo + 7] = bladeY
+      outPos[vo + 8] = bladeZ
 
       // Encode per-vertex data in normals: [heightFactor, bladeSeed, horizontalSign]
       // horizontalSign: -1 = left, +1 = right, 0 = tip
@@ -241,7 +260,7 @@ const GRASS_VERTEX_WGSL = /* wgsl */ `
     let dz = out.worldPos.z - frame.cameraPos.z;
     let dist3D = sqrt(distSq + dz * dz);
     let topDown = clamp(abs(dz) / max(dist3D, 0.001), 0.0, 1.0);
-    let lean = topDown * 0.7;
+    let lean = topDown * 0.95;
     let camLen = sqrt(distSq);
     var tx = 0.0;
     var ty = 1.0;
@@ -292,7 +311,7 @@ const GRASS_VERTEX_GLSL = /* glsl */ `
     float dz = v_worldPos.z - u_cameraPos.z;
     float dist3D = sqrt(distSq + dz * dz);
     float topDown = clamp(abs(dz) / max(dist3D, 0.001), 0.0, 1.0);
-    float lean = topDown * 0.7;
+    float lean = topDown * 0.95;
     float camLen = sqrt(distSq);
     float tx = 0.0;
     float ty = 1.0;
