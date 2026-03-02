@@ -36,7 +36,7 @@
     },
     "library": {
       "name": "voidcore",
-      "version": "0.0.12",
+      "version": "0.0.13",
       "dependencies": {
         "react-reconciler": "^0.31.0",
       },
