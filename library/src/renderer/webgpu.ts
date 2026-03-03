@@ -40,6 +40,11 @@
 //                    lambert/basic shaders at vertex and fragment hook points. Custom uniforms
 //                    (float-only) are passed via a uniform buffer at group 3 binding 0,
 //                    accessible as `uniforms.xxx` in shader code.
+//   GI probes     – Optional GIProbeGrid on the scene provides indirect lighting via L1
+//                    Spherical Harmonics stored in a 3D RGBA16F texture. The fragment shader
+//                    samples the nearest probes via hardware trilinear interpolation and adds
+//                    the result to ambient lighting. Bound at group 0 binding 3 (texture_3d)
+//                    and binding 4 (sampler).
 //
 // WebGPURenderer.create()  – Async factory that initializes the GPU device and pipelines.
 // WebGPURenderer.render()  – Draws one frame.
@@ -102,6 +107,7 @@ import type { CompressedTextureFormat, Texture, TextureFormat } from '../materia
 import type { AABB, Mat4, Vec3 } from '../math/index'
 import type { PerspectiveCamera } from '../scene/camera'
 import type { DirectionalLight } from '../scene/light'
+import type { GIProbeGrid } from '../scene/gi-probes'
 import type { Scene } from '../scene/scene'
 import type { Renderer, RendererConfig, FrameStats } from './renderer'
 import type { SortState } from './sort'
@@ -165,7 +171,7 @@ interface RenderTargets {
 // ─── Uniform buffer sizes ────────────────────────────────────────────
 
 // FrameUniforms: viewProj(64) + lightDir(12)+intensity(4) + ambient(12)+pad(4) + shadowVP(64) + bias(4)+pad(12) + cameraPos(12)+pad(4) = 208 bytes
-const FRAME_UB_SIZE = 208
+const FRAME_UB_SIZE = 272
 // ShadowUniforms: mat4(64)
 const SHADOW_UB_SIZE = 64
 // ObjectUniforms: mat4(64) + mat4(64) + vec4(16) = 144 bytes
@@ -339,6 +345,14 @@ export class WebGPURenderer implements Renderer {
   private dummyShadowTextureView!: GPUTextureView
   private _alignedShadowSize = 0
 
+  // GI probe resources
+  private _giProbeTexture: GPUTexture | null = null
+  private _giProbeTextureView: GPUTextureView | null = null
+  private _giProbeSampler!: GPUSampler
+  private _dummyGI3DTexture!: GPUTexture
+  private _dummyGI3DTextureView!: GPUTextureView
+  private _giProbeGrid: GIProbeGrid | null = null
+
   // Render targets
   private renderTargets: RenderTargets | null = null
   // Bloom / blit bind groups (recreated on resize)
@@ -484,6 +498,8 @@ export class WebGPURenderer implements Renderer {
     dummyShadowTexture: GPUTexture,
     shadowTexture: GPUTexture | null,
     compressedFormats: readonly CompressedTextureFormat[],
+    dummyGI3DTexture: GPUTexture,
+    giProbeSampler: GPUSampler,
   ) {
     this.compressedTextureFormats = compressedFormats
     this.device = device
@@ -528,6 +544,11 @@ export class WebGPURenderer implements Renderer {
     this.shadowSampler = shadowSampler
     this.dummyShadowTexture = dummyShadowTexture
     this.dummyShadowTextureView = dummyShadowTexture.createView()
+
+    // GI probe resources
+    this._dummyGI3DTexture = dummyGI3DTexture
+    this._dummyGI3DTextureView = dummyGI3DTexture.createView()
+    this._giProbeSampler = giProbeSampler
 
     // Shadow textures
     if (shadowEnabled) {
@@ -605,14 +626,17 @@ export class WebGPURenderer implements Renderer {
     this._blitPassCA = { view: null!, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }
     this._blitPassDesc = { colorAttachments: [this._blitPassCA] }
 
-    // Create frame bind group with shadow texture + sampler
+    // Create frame bind group with shadow texture + sampler + GI probe texture + sampler
     const shadowTexView = this.shadowTextureView ?? this.dummyShadowTextureView
+    const giTexView = this._giProbeTextureView ?? this._dummyGI3DTextureView
     this.frameBG = device.createBindGroup({
       layout: frameBGL,
       entries: [
         { binding: 0, resource: { buffer: frameUB } },
         { binding: 1, resource: shadowTexView },
         { binding: 2, resource: shadowSampler },
+        { binding: 3, resource: giTexView },
+        { binding: 4, resource: this._giProbeSampler },
       ],
     })
 
@@ -1345,6 +1369,12 @@ export class WebGPURenderer implements Renderer {
           texture: { sampleType: 'depth', viewDimension: '2d' },
         },
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'comparison' } },
+        {
+          binding: 3,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: 'float', viewDimension: '3d' },
+        },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
       ],
     })
 
@@ -1644,6 +1674,29 @@ export class WebGPURenderer implements Renderer {
       })
     }
 
+    // Dummy 1×1×1 3D texture for GI probes (used when no probes are active)
+    const dummyGI3DTexture = device.createTexture({
+      size: [1, 1, 1],
+      format: 'rgba16float',
+      dimension: '3d',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    })
+    device.queue.writeTexture(
+      { texture: dummyGI3DTexture },
+      new ArrayBuffer(8), // 4 × f16 zeros = black
+      { bytesPerRow: 8 },
+      [1, 1, 1],
+    )
+
+    // GI probe sampler (linear filtering for trilinear interpolation)
+    const giProbeSampler = device.createSampler({
+      magFilter: 'linear',
+      minFilter: 'linear',
+      addressModeU: 'clamp-to-edge',
+      addressModeV: 'clamp-to-edge',
+      addressModeW: 'clamp-to-edge',
+    })
+
     // Build supported compressed texture format list (priority order for loader selection)
     const compressedFormats: CompressedTextureFormat[] = []
     if (device.features.has('texture-compression-astc')) compressedFormats.push('astc-4x4')
@@ -1692,6 +1745,8 @@ export class WebGPURenderer implements Renderer {
       dummyShadowTexture,
       shadowTexture,
       compressedFormats,
+      dummyGI3DTexture,
+      giProbeSampler,
     )
     renderer.maxDpr = config.maxDpr === false ? Infinity : (config.maxDpr ?? defaultMaxDpr())
     return renderer
@@ -2319,6 +2374,51 @@ export class WebGPURenderer implements Renderer {
     )
   }
 
+  // ─── GI Probe texture upload ─────────────────────────────────────
+
+  private _updateGIProbes(grid: GIProbeGrid): void {
+    const [rx, ry, rz] = grid.resolution
+    const depth = rz * 3
+
+    // Create or recreate the 3D texture if the grid changed
+    if (this._giProbeGrid !== grid) {
+      this._giProbeTexture?.destroy()
+      this._giProbeTexture = this.device.createTexture({
+        size: [rx, ry, depth],
+        format: 'rgba16float',
+        dimension: '3d',
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+      })
+      this._giProbeTextureView = this._giProbeTexture.createView()
+      this._giProbeGrid = grid
+
+      // Recreate frame bind group with the new GI texture
+      const shadowTexView = this.shadowTextureView ?? this.dummyShadowTextureView
+      this.frameBG = this.device.createBindGroup({
+        layout: this.frameBGL,
+        entries: [
+          { binding: 0, resource: { buffer: this.frameUB } },
+          { binding: 1, resource: shadowTexView },
+          { binding: 2, resource: this.shadowSampler },
+          { binding: 3, resource: this._giProbeTextureView },
+          { binding: 4, resource: this._giProbeSampler },
+        ],
+      })
+    }
+
+    // Upload texture data
+    if (grid.needsUpdate) {
+      const data = grid.getTextureData()
+      this.device.queue.writeTexture(
+        { texture: this._giProbeTexture! },
+        data.buffer,
+        { bytesPerRow: rx * 8, rowsPerImage: ry },
+        [rx, ry, depth],
+      )
+      grid.needsUpdate = false
+    }
+  }
+
   // ─── Render ──────────────────────────────────────────────────────
 
   render(scene: Scene, camera: PerspectiveCamera) {
@@ -2364,6 +2464,10 @@ export class WebGPURenderer implements Renderer {
     // Compute light direction
     const lightDir = this._lightDir
     computeLightDir(lightDir, this._tempVec3, dirLight)
+
+    // Update GI probe texture if present
+    const giGrid = scene.giProbeGrid
+    if (giGrid) this._updateGIProbes(giGrid)
 
     this._frameNum++
     const frameNum = this._frameNum
@@ -2586,6 +2690,28 @@ export class WebGPURenderer implements Renderer {
     fd[49] = camera.position[1]!
     fd[50] = camera.position[2]!
     fd[51] = now * 0.001
+    //   giParams: vec4            (floats 52-55)
+    //   giBoundsMin: vec4         (floats 56-59)
+    //   giBoundsSize: vec4        (floats 60-63)
+    //   giResolution: vec4        (floats 64-67)
+    if (giGrid) {
+      fd[52] = 1.0
+      fd[53] = giGrid.intensity
+      // fd[54], fd[55] = 0 (pad, already zeroed by fill)
+      fd[56] = giGrid.boundsMin[0]
+      fd[57] = giGrid.boundsMin[1]
+      fd[58] = giGrid.boundsMin[2]
+      // fd[59] = 0 (pad)
+      fd[60] = giGrid.boundsMax[0] - giGrid.boundsMin[0]
+      fd[61] = giGrid.boundsMax[1] - giGrid.boundsMin[1]
+      fd[62] = giGrid.boundsMax[2] - giGrid.boundsMin[2]
+      // fd[63] = 0 (pad)
+      fd[64] = giGrid.resolution[0]
+      fd[65] = giGrid.resolution[1]
+      fd[66] = giGrid.resolution[2]
+      // fd[67] = 0 (pad)
+    }
+    // else: fd[52] = 0 (giEnabled=false, already zeroed by fill)
     this.device.queue.writeBuffer(this.frameUB, 0, fd.buffer, fd.byteOffset, fd.byteLength)
 
     // ─── Ensure render targets ──────────────────────────────────
@@ -2909,6 +3035,8 @@ export class WebGPURenderer implements Renderer {
     this.shadowUB.destroy()
     this.shadowTexture?.destroy()
     this.dummyShadowTexture.destroy()
+    this._giProbeTexture?.destroy()
+    this._dummyGI3DTexture.destroy()
     this._resizeObserver?.disconnect()
     this._resizeObserver = null
     this.device.destroy()

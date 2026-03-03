@@ -42,6 +42,11 @@
 // does not use lighting. Custom uniforms are declared as a std140 UBO (CustomBlock at
 // binding point 2), accessible as `uniforms.xxx` in both vertex and fragment.
 //
+// GI (Global Illumination) probes are sampled in all Lambert fragments via a 3D RGBA16F
+// texture containing L1 spherical harmonic coefficients. The sampleGI() function reads
+// the frame uniforms for grid bounds/resolution and performs trilinear-interpolated lookup.
+// When no GI probes are active, u_giParams.x is 0 and the function returns vec3(0).
+//
 // Data flow: CPU uploads uniform buffers (UBOs) with matrices and light info. The vertex
 // shader reads per-object transforms from ObjectBlock/SkinnedObjectBlock (binding 1) and
 // per-frame data (view-projection, lights) from FrameBlock (binding 0).
@@ -98,6 +103,10 @@ layout(std140) uniform FrameBlock {
   float _biasPad;
   vec3 u_cameraPos;
   float u_elapsed;
+  vec4 u_giParams;
+  vec4 u_giBoundsMin;
+  vec4 u_giBoundsSize;
+  vec4 u_giResolution;
 };`
 
 const OBJECT_BLOCK = `
@@ -148,6 +157,32 @@ float sampleShadow(vec3 worldPos, float NdotL) {
 
   float bias = u_constantBias + u_slopeBias * (1.0 - NdotL);
   return pcf9(uv, depth - bias, u_invMapSize);
+}
+`
+
+const GI_FUNCTIONS = `
+uniform highp sampler3D u_giProbeTexture;
+
+vec3 sampleGI(vec3 worldPos, vec3 normal) {
+  if (u_giParams.x < 0.5) return vec3(0.0);
+
+  vec3 gridPos = clamp(
+    (worldPos - u_giBoundsMin.xyz) / u_giBoundsSize.xyz,
+    vec3(0.0), vec3(1.0)
+  );
+  vec3 res = u_giResolution.xyz;
+  float depth = res.z * 3.0;
+
+  float x = (0.5 + gridPos.x * (res.x - 1.0)) / res.x;
+  float y = (0.5 + gridPos.y * (res.y - 1.0)) / res.y;
+  float zBase = 0.5 + gridPos.z * (res.z - 1.0);
+
+  vec4 shR = texture(u_giProbeTexture, vec3(x, y, zBase / depth));
+  vec4 shG = texture(u_giProbeTexture, vec3(x, y, (zBase + res.z) / depth));
+  vec4 shB = texture(u_giProbeTexture, vec3(x, y, (zBase + res.z * 2.0) / depth));
+
+  vec4 basis = vec4(1.0, normal.x, normal.y, normal.z);
+  return max(vec3(dot(shR, basis), dot(shG, basis), dot(shB, basis)), vec3(0.0)) * u_giParams.y;
 }
 `
 
@@ -248,6 +283,7 @@ layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
 
 ${SHADOW_FUNCTIONS}
+${GI_FUNCTIONS}
 
 void main() {
   if (v_outlineFlag > 0.5) {
@@ -260,7 +296,8 @@ void main() {
   vec3 normal = normalize(v_normal);
   vec3 baseColor = u_baseColor;
 
-  vec3 ambient = u_ambientColor * u_ambientIntensity;
+  vec3 gi = sampleGI(v_worldPos, normal);
+  vec3 ambient = u_ambientColor * u_ambientIntensity + gi;
   float rawNdotL = dot(normal, u_lightDirection);
   float shadow = u_receiveShadow ? sampleShadow(v_worldPos, max(rawNdotL, 0.0)) : 1.0;
   float wrap = u_wrapLighting;
@@ -398,6 +435,7 @@ layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
 
 ${SHADOW_FUNCTIONS}
+${GI_FUNCTIONS}
 
 // Dot Noise by Xor — procedural value noise via dot products with a gold matrix
 float dot_noise(vec3 p) {
@@ -508,7 +546,8 @@ void main() {
   }
 
   float ao = mix(1.0, texture(u_aoMap, v_uv).r, u_aoIntensity) * tiledAo;
-  vec3 ambient = u_ambientColor * u_ambientIntensity * ao;
+  vec3 gi = sampleGI(v_worldPos, normal);
+  vec3 ambient = (u_ambientColor * u_ambientIntensity + gi) * ao;
   float rawNdotL = dot(normal, u_lightDirection);
   float shadow = u_receiveShadow ? sampleShadow(v_worldPos, max(rawNdotL, 0.0)) : 1.0;
   float wrap = u_wrapLighting;
@@ -612,6 +651,7 @@ layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
 
 ${SHADOW_FUNCTIONS}
+${GI_FUNCTIONS}
 
 void main() {
   if (v_outlineFlag > 0.5) {
@@ -628,7 +668,8 @@ void main() {
   vec3 baseColor = u_baseColor * texColor;
 
   float ao = mix(1.0, texture(u_aoMap, v_uv).r, u_aoIntensity);
-  vec3 ambient = u_ambientColor * u_ambientIntensity * ao;
+  vec3 gi = sampleGI(v_worldPos, normal);
+  vec3 ambient = (u_ambientColor * u_ambientIntensity + gi) * ao;
 
   float rawNdotL = dot(normal, u_lightDirection);
   float shadow = u_receiveShadow ? sampleShadow(v_worldPos, max(rawNdotL, 0.0)) : 1.0;
@@ -820,6 +861,7 @@ layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
 
 ${SHADOW_FUNCTIONS}
+${GI_FUNCTIONS}
 
 void main() {
   if (v_outlineFlag > 0.5) {
@@ -832,7 +874,8 @@ void main() {
   vec3 normal = normalize(v_normal);
   vec3 baseColor = u_baseColor;
 
-  vec3 ambient = u_ambientColor * u_ambientIntensity;
+  vec3 gi = sampleGI(v_worldPos, normal);
+  vec3 ambient = u_ambientColor * u_ambientIntensity + gi;
   float rawNdotL = dot(normal, u_lightDirection);
   float shadow = u_receiveShadow ? sampleShadow(v_worldPos, max(rawNdotL, 0.0)) : 1.0;
   float wrap = u_wrapLighting;

@@ -63,6 +63,10 @@ struct FrameUniforms {
   _pad0: f32,
   cameraPos: vec3<f32>,
   elapsed: f32,
+  giParams: vec4<f32>,
+  giBoundsMin: vec4<f32>,
+  giBoundsSize: vec4<f32>,
+  giResolution: vec4<f32>,
 };`
 
 const MATERIAL_UNIFORMS = `
@@ -97,7 +101,9 @@ struct ObjectUniforms {
 const FRAME_BINDINGS = `
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
 @group(0) @binding(1) var shadowMap: texture_depth_2d;
-@group(0) @binding(2) var shadowSampler: sampler_comparison;`
+@group(0) @binding(2) var shadowSampler: sampler_comparison;
+@group(0) @binding(3) var giProbeTexture: texture_3d<f32>;
+@group(0) @binding(4) var giProbeSampler: sampler;`
 
 const MATERIAL_BINDING = `
 @group(1) @binding(0) var<uniform> material: MaterialUniforms;`
@@ -135,6 +141,28 @@ fn sampleShadow(worldPos: vec3<f32>, NdotL: f32) -> f32 {
 
   let bias = frame.constantBias + frame.slopeBias * (1.0 - NdotL);
   return pcf9(uv, depth - bias, frame.invMapSize);
+}
+
+fn sampleGI(worldPos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+  if (frame.giParams.x < 0.5) { return vec3<f32>(0.0); }
+
+  let gridPos = clamp(
+    (worldPos - frame.giBoundsMin.xyz) / frame.giBoundsSize.xyz,
+    vec3<f32>(0.0), vec3<f32>(1.0)
+  );
+  let res = frame.giResolution.xyz;
+  let depth = res.z * 3.0;
+
+  let x = (0.5 + gridPos.x * (res.x - 1.0)) / res.x;
+  let y = (0.5 + gridPos.y * (res.y - 1.0)) / res.y;
+  let zBase = 0.5 + gridPos.z * (res.z - 1.0);
+
+  let shR = textureSampleLevel(giProbeTexture, giProbeSampler, vec3<f32>(x, y, zBase / depth), 0.0);
+  let shG = textureSampleLevel(giProbeTexture, giProbeSampler, vec3<f32>(x, y, (zBase + res.z) / depth), 0.0);
+  let shB = textureSampleLevel(giProbeTexture, giProbeSampler, vec3<f32>(x, y, (zBase + res.z * 2.0) / depth), 0.0);
+
+  let basis = vec4<f32>(1.0, normal.x, normal.y, normal.z);
+  return max(vec3<f32>(dot(shR, basis), dot(shG, basis), dot(shB, basis)), vec3<f32>(0.0)) * frame.giParams.y;
 }`
 
 // ─── Shadow depth shaders (vertex-only, no fragment) ─────────────────
@@ -241,7 +269,8 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let baseColor = material.baseColor;
   let alpha = material.opacity;
 
-  let ambient = frame.ambientColor * frame.ambientIntensity;
+  let gi = sampleGI(in.worldPos, normal);
+  let ambient = frame.ambientColor * frame.ambientIntensity + gi;
   let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
@@ -333,7 +362,8 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let baseColor = material.baseColor;
   let alpha = material.opacity;
 
-  let ambient = frame.ambientColor * frame.ambientIntensity;
+  let gi = sampleGI(in.worldPos, normal);
+  let ambient = frame.ambientColor * frame.ambientIntensity + gi;
   let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
@@ -547,7 +577,8 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let emissive = in.vcEmissive.rgb;
 
   let ao = mix(1.0, aoSample, material.aoIntensity) * tiledAo;
-  let ambient = frame.ambientColor * frame.ambientIntensity * ao;
+  let gi = sampleGI(in.worldPos, normal);
+  let ambient = (frame.ambientColor * frame.ambientIntensity + gi) * ao;
   let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
@@ -772,7 +803,8 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let emissive = in.vcEmissive.rgb;
 
   let ao = mix(1.0, aoSample, material.aoIntensity) * tiledAo;
-  let ambient = frame.ambientColor * frame.ambientIntensity * ao;
+  let gi = sampleGI(in.worldPos, normal);
+  let ambient = (frame.ambientColor * frame.ambientIntensity + gi) * ao;
   let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
@@ -866,7 +898,8 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let alpha = material.opacity;
 
   let ao = mix(1.0, aoSample, material.aoIntensity);
-  let ambient = frame.ambientColor * frame.ambientIntensity * ao;
+  let gi = sampleGI(in.worldPos, normal);
+  let ambient = (frame.ambientColor * frame.ambientIntensity + gi) * ao;
 
   let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
@@ -1054,7 +1087,8 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   var baseColor = material.baseColor;
   var alpha = material.opacity;
 
-  let ambient = frame.ambientColor * frame.ambientIntensity;
+  let gi = sampleGI(in.worldPos, normal);
+  let ambient = frame.ambientColor * frame.ambientIntensity + gi;
   let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
@@ -1153,7 +1187,8 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   var baseColor = material.baseColor;
   var alpha = material.opacity;
 
-  let ambient = frame.ambientColor * frame.ambientIntensity;
+  let gi = sampleGI(in.worldPos, normal);
+  let ambient = frame.ambientColor * frame.ambientIntensity + gi;
   let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {

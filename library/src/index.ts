@@ -15,6 +15,7 @@ export { Sprite } from './scene/sprite'
 export { Group } from './scene/group'
 export { PerspectiveCamera, type CameraOptions } from './scene/camera'
 export { AmbientLight, type AmbientLightOptions, DirectionalLight, type DirectionalLightOptions } from './scene/light'
+export { GIProbeGrid, type GIProbeGridOptions, type ProbeData } from './scene/gi-probes'
 export { cloneScene, type CloneOptions, type CloneResult } from './scene/clone'
 
 // Geometry
@@ -85,7 +86,9 @@ export {
   useColoredStaticGeometry,
   useAnimations,
   useGrass,
+  useGIProbes,
   type UseGLTFOptions,
+  type UseGIProbesOptions,
   type ClonedMesh,
 } from './react/hooks'
 export { VoidContext, type VoidStore, type FrameCallback } from './react/context'

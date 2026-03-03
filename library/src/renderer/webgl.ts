@@ -41,6 +41,10 @@
 // at vertex and fragment hook points. Custom uniforms (float-only) are passed via a std140
 // UBO (CustomBlock at binding point 2), accessible as `uniforms.xxx` in shader code.
 //
+// GI probes: Optional GIProbeGrid on the scene provides indirect lighting via L1 Spherical
+// Harmonics stored in a 3D RGBA16F texture (TEXTURE_3D on unit 7). The fragment shader samples
+// the nearest probes via hardware trilinear interpolation and adds the result to ambient lighting.
+//
 // WebGLRenderer.render()  – Draws one frame.
 // WebGLRenderer.dispose() – Releases all GPU resources.
 
@@ -111,6 +115,7 @@ import type { CompressedTextureFormat, Texture, TextureFormat } from '../materia
 import type { AABB, Mat4, Vec3 } from '../math/index'
 import type { PerspectiveCamera } from '../scene/camera'
 import type { DirectionalLight } from '../scene/light'
+import type { GIProbeGrid } from '../scene/gi-probes'
 import type { Scene } from '../scene/scene'
 import type { Renderer, RendererConfig, FrameStats } from './renderer'
 import type { SortState } from './sort'
@@ -184,6 +189,7 @@ interface SceneUniformLocs {
   u_tiledAoArray: WebGLUniformLocation | null
   u_tiledAoScales: WebGLUniformLocation | null
   u_tiledNormalArray: WebGLUniformLocation | null
+  u_giProbeTexture: WebGLUniformLocation | null
 }
 
 interface PostUniformLocs {
@@ -212,6 +218,7 @@ const cacheSceneLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): Scen
   u_tiledAoArray: gl.getUniformLocation(program, 'u_tiledAoArray'),
   u_tiledAoScales: gl.getUniformLocation(program, 'u_tiledAoScales'),
   u_tiledNormalArray: gl.getUniformLocation(program, 'u_tiledNormalArray'),
+  u_giProbeTexture: gl.getUniformLocation(program, 'u_giProbeTexture'),
 })
 
 const cachePostLocs = (gl: WebGL2RenderingContext, program: WebGLProgram): PostUniformLocs => ({
@@ -879,10 +886,15 @@ export class WebGLRenderer implements Renderer {
   // Traversal
   private _traversalStack: Node[] = []
 
+  // GI probe resources
+  private _giProbeTexture: WebGLTexture | null = null
+  private _giProbeGrid: GIProbeGrid | null = null
+  private _dummyGI3DTexture!: WebGLTexture
+
   // UBOs
-  // FrameBlock (binding 0): 224 bytes = 56 floats (VP + light + shadow data + cameraPos)
+  // FrameBlock (binding 0): 288 bytes = 72 floats (VP + light + shadow data + cameraPos + GI)
   private _frameUBO!: WebGLBuffer
-  private _frameData = new Float32Array(56)
+  private _frameData = new Float32Array(72)
   // ObjectBlock (binding 1, dynamic): mat4 worldMatrix + mat4 normalMatrix + vec4 outlineColorAndThickness = 144 bytes
   // SkinnedObjectBlock (binding 1, dynamic): above + mat4[32] boneMatrices = 2192 bytes
   private _uboAlignment = 256
@@ -1020,10 +1032,22 @@ export class WebGLRenderer implements Renderer {
     this._alignedObjectSize = Math.ceil(144 / this._uboAlignment) * this._uboAlignment
     this._alignedSkinnedSize = Math.ceil(2192 / this._uboAlignment) * this._uboAlignment
 
-    // Frame UBO (224 bytes = 56 floats)
+    // Frame UBO (288 bytes = 72 floats)
     this._frameUBO = gl.createBuffer()!
     gl.bindBuffer(gl.UNIFORM_BUFFER, this._frameUBO)
-    gl.bufferData(gl.UNIFORM_BUFFER, 224, gl.DYNAMIC_DRAW)
+    gl.bufferData(gl.UNIFORM_BUFFER, 288, gl.DYNAMIC_DRAW)
+
+    // Dummy 1×1×1 3D texture for GI probes (when no probes are active)
+    this._dummyGI3DTexture = gl.createTexture()!
+    gl.activeTexture(gl.TEXTURE7)
+    gl.bindTexture(gl.TEXTURE_3D, this._dummyGI3DTexture)
+    gl.texStorage3D(gl.TEXTURE_3D, 1, gl.RGBA16F, 1, 1, 1)
+    gl.texSubImage3D(gl.TEXTURE_3D, 0, 0, 0, 0, 1, 1, 1, gl.RGBA, gl.HALF_FLOAT, new Uint16Array(4))
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE)
 
     // Dynamic object / skinned UBOs
     this._createDynamicBuffers()
@@ -1562,6 +1586,36 @@ export class WebGLRenderer implements Renderer {
     this._glFbo = fbo
   }
 
+  // ─── GI Probe texture upload ─────────────────────────────────────
+
+  private _updateGIProbes(grid: GIProbeGrid): void {
+    const gl = this.gl
+    const [rx, ry, rz] = grid.resolution
+    const depth = rz * 3
+
+    if (this._giProbeGrid !== grid) {
+      if (this._giProbeTexture) gl.deleteTexture(this._giProbeTexture)
+      this._giProbeTexture = gl.createTexture()!
+      gl.activeTexture(gl.TEXTURE7)
+      gl.bindTexture(gl.TEXTURE_3D, this._giProbeTexture)
+      gl.texStorage3D(gl.TEXTURE_3D, 1, gl.RGBA16F, rx, ry, depth)
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE)
+      this._giProbeGrid = grid
+    }
+
+    if (grid.needsUpdate) {
+      const data = grid.getTextureData()
+      gl.activeTexture(gl.TEXTURE7)
+      gl.bindTexture(gl.TEXTURE_3D, this._giProbeTexture!)
+      gl.texSubImage3D(gl.TEXTURE_3D, 0, 0, 0, 0, rx, ry, depth, gl.RGBA, gl.HALF_FLOAT, data)
+      grid.needsUpdate = false
+    }
+  }
+
   render(scene: Scene, camera: PerspectiveCamera) {
     const gl = this.gl
     const now = performance.now()
@@ -1620,6 +1674,10 @@ export class WebGLRenderer implements Renderer {
     // Compute light direction from world matrix
     const lightDir = this._lightDir
     computeLightDir(lightDir, this._tempVec3, dirLight)
+
+    // Update GI probe texture if present
+    const giGrid = scene.giProbeGrid
+    if (giGrid) this._updateGIProbes(giGrid)
 
     this._frameNum++
     const frameNum = this._frameNum
@@ -1792,7 +1850,7 @@ export class WebGLRenderer implements Renderer {
       gl.bufferSubData(gl.UNIFORM_BUFFER, 0, skinnedBatch, 0, skinnedIdx * alignedSkinnedFloats)
     }
 
-    // ─── Upload frame UBO (56 floats / 224 bytes) ─────────────────
+    // ─── Upload frame UBO (72 floats / 288 bytes) ─────────────────
     // std140 layout:
     //   mat4 u_viewProjection       (floats 0-15)
     //   vec3 u_lightDirection + pad  (floats 16-19)
@@ -1802,6 +1860,10 @@ export class WebGLRenderer implements Renderer {
     //   mat4 u_shadowVP              (floats 32-47)
     //   float constantBias, slopeBias, invMapSize, pad (floats 48-51)
     //   vec3 u_cameraPos + u_elapsed  (floats 52-55)
+    //   vec4 u_giParams               (floats 56-59)
+    //   vec4 u_giBoundsMin            (floats 60-63)
+    //   vec4 u_giBoundsSize           (floats 64-67)
+    //   vec4 u_giResolution           (floats 68-71)
     const fd = this._frameData
     fd.fill(0)
     fd.set(this._vpMatrix, 0)
@@ -1829,6 +1891,23 @@ export class WebGLRenderer implements Renderer {
     fd[53] = camera.position[1]!
     fd[54] = camera.position[2]!
     fd[55] = now * 0.001
+    if (giGrid) {
+      fd[56] = 1.0
+      fd[57] = giGrid.intensity
+      // fd[58], fd[59] = 0 (pad)
+      fd[60] = giGrid.boundsMin[0]
+      fd[61] = giGrid.boundsMin[1]
+      fd[62] = giGrid.boundsMin[2]
+      // fd[63] = 0 (pad)
+      fd[64] = giGrid.boundsMax[0] - giGrid.boundsMin[0]
+      fd[65] = giGrid.boundsMax[1] - giGrid.boundsMin[1]
+      fd[66] = giGrid.boundsMax[2] - giGrid.boundsMin[2]
+      // fd[67] = 0 (pad)
+      fd[68] = giGrid.resolution[0]
+      fd[69] = giGrid.resolution[1]
+      fd[70] = giGrid.resolution[2]
+      // fd[71] = 0 (pad)
+    }
     gl.bindBuffer(gl.UNIFORM_BUFFER, this._frameUBO)
     gl.bufferSubData(gl.UNIFORM_BUFFER, 0, fd)
     gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, this._frameUBO)
@@ -1961,6 +2040,10 @@ export class WebGLRenderer implements Renderer {
     gl.activeTexture(gl.TEXTURE2)
     gl.bindTexture(gl.TEXTURE_2D, this._shadowTexture)
 
+    // Bind GI probe 3D texture to unit 7
+    gl.activeTexture(gl.TEXTURE7)
+    gl.bindTexture(gl.TEXTURE_3D, giGrid ? this._giProbeTexture : this._dummyGI3DTexture)
+
     // Find the split between opaque and transparent meshes
     const transparentStart = findTransparentStart(this._sortState, meshes.length)
 
@@ -2075,6 +2158,7 @@ export class WebGLRenderer implements Renderer {
       const programChanged = this._setProgram(program)
       if (programChanged && isLambert) {
         gl.uniform1i(locs.u_shadowMap, 2)
+        if (locs.u_giProbeTexture !== null) gl.uniform1i(locs.u_giProbeTexture, 7)
       }
       if (hasVC || (!hasCustom && mat._hasTextures && !isSkinned)) {
         this._bindMaterialTextures(mat, locs, hasVC ? mesh.geometry : undefined)
@@ -2276,6 +2360,8 @@ export class WebGLRenderer implements Renderer {
     gl.deleteBuffer(this._shadowUBO)
     gl.deleteTexture(this._shadowTexture)
     gl.deleteFramebuffer(this._shadowFbo)
+    if (this._giProbeTexture) gl.deleteTexture(this._giProbeTexture)
+    gl.deleteTexture(this._dummyGI3DTexture)
     gl.deleteProgram(this.lambertProgram)
     gl.deleteProgram(this.lambertVCProgram)
     gl.deleteProgram(this.lambertTexturedProgram)
