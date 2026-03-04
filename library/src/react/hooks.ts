@@ -277,11 +277,16 @@ export interface UseGIProbesOptions extends GIProbeGridOptions {
 
 export const useGIProbes = (options: UseGIProbesOptions): GIProbeGrid => {
   const { scene } = useEngine()
-  const grid = useMemo(() => {
-    const g = new GIProbeGrid(options)
-    if (options.populate) options.populate(g)
-    return g
-  }, [options.boundsMin, options.boundsMax, options.resolution, options.intensity])
+  // Serialize array deps to strings so inline arrays don't cause grid re-creation
+  const grid = useMemo(
+    () => {
+      const g = new GIProbeGrid(options)
+      if (options.populate) options.populate(g)
+      return g
+    },
+    // eslint-disable-next-line
+    [options.boundsMin?.join(','), options.boundsMax?.join(','), options.resolution?.join(','), options.intensity],
+  )
 
   useEffect(() => {
     scene.giProbeGrid = grid

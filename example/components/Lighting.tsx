@@ -7,7 +7,7 @@ import type { DirectionalLight, Geometry } from 'voidcore'
 const EDEN_POSITION: [number, number, number] = [-50, -70, 0]
 
 const GIProbeDebug = ({ grid, bakeKey }: { grid: GIProbeGrid; bakeKey?: unknown }) => {
-  const helper = useMemo(() => new GIProbeHelper(grid, { radius: 0.6 }), [grid, bakeKey])
+  const helper = useMemo(() => new GIProbeHelper(grid, { radius: 0.4 }), [grid, bakeKey])
   return <primitive object={helper.mesh} />
 }
 
@@ -25,7 +25,7 @@ const Lighting = ({
   const grid = useGIProbes({
     boundsMin: [-55, -75, -2],
     boundsMax: [55, 85, 25],
-    resolution: [12, 17, 3],
+    resolution: [22, 32, 4],
     intensity: 1.0,
   })
 
