@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useLayoutEffect } from 'react'
+import { useEffect, useMemo, useRef, useState, useLayoutEffect } from 'react'
 
 import { bakeGIProbes, GIProbeHelper, useGIProbes, type GIProbeGrid } from 'voidcore'
 
@@ -35,12 +35,14 @@ const Lighting = ({
   }, [grid, giEnabled])
 
   // Bake probes from actual scene geometry when it becomes available
+  const [bakeCount, setBakeCount] = useState(0)
   useEffect(() => {
     if (!edenGeometry) return
     bakeGIProbes(grid, [{ geometry: edenGeometry, position: EDEN_POSITION }], {
       skyColor: [0.4, 0.6, 0.9],
       skyIntensity: 0.15,
     })
+    setBakeCount(c => c + 1)
   }, [grid, edenGeometry])
 
   return (
@@ -57,7 +59,7 @@ const Lighting = ({
         shadowBias={0}
         shadowSlopeBias={0}
       />
-      {debugGIProbes && <GIProbeDebug grid={grid} bakeKey={edenGeometry} />}
+      {debugGIProbes && bakeCount > 0 && <GIProbeDebug grid={grid} bakeKey={bakeCount} />}
     </>
   )
 }
