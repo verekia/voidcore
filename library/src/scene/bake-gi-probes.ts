@@ -25,10 +25,10 @@
 //
 // The optional `surfaceOnly` flag keeps only probes on the outer surface of the world mesh.
 // First, every probe is classified as inside or outside using the nearest-triangle signed
-// distance. Then only "boundary" probes are kept — those that have at least one of their 6
-// axis-aligned neighbors with a different inside/outside classification. All other probes
-// (deep interior AND far exterior) are zeroed out. This gives exactly one layer of probes
-// hugging the mesh surface with full coverage, no wasted probes, and no need for maxDistance.
+// distance. Then only outside probes that neighbor at least one inside cell are kept — giving
+// a single layer of probes hugging the exterior of the mesh. Inside probes (embedded in
+// terrain) and distant outside probes (floating in empty space) are all zeroed out. This
+// gives full coverage with no wasted probes and no need for maxDistance.
 //
 // bakeGIProbes(grid, meshes, options?) – Fills the grid with baked indirect lighting data.
 
@@ -277,10 +277,10 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
 
 /**
  * Classify every probe as inside (1) or outside (0) the mesh using the nearest
- * triangle's signed distance. Then zero out all probes that are NOT on the
- * boundary — i.e. probes whose 6 axis-neighbors all share the same classification.
- * Boundary probes must also be within proximity of actual geometry (2× max cell step)
- * to avoid false boundaries from noisy classification of distant probes.
+ * triangle's signed distance. Then keep only outside probes that neighbor at least
+ * one inside cell — a single layer hugging the mesh exterior. Inside probes are
+ * always culled. Boundary probes must also be within proximity of actual geometry
+ * (2× max cell step) to avoid false boundaries from noisy classification of distant probes.
  */
 const _cullToSurface = (grid: GIProbeGrid, triData: TriangleData): void => {
   const [rx, ry, rz] = grid.resolution
@@ -339,36 +339,38 @@ const _cullToSurface = (grid: GIProbeGrid, triData: TriangleData): void => {
     }
   }
 
-  // 2) Keep only boundary probes that are also near geometry
+  // 2) Keep only outside boundary probes (outside probes neighboring at least one inside cell).
+  //    This gives a single-layer shell on the exterior of the mesh, rather than a two-layer
+  //    boundary (inside+outside) which wastes probes embedded under surfaces.
   for (let iz = 0; iz < rz; iz++) {
     for (let iy = 0; iy < ry; iy++) {
       for (let ix = 0; ix < rx; ix++) {
         const idx = iz * ry * rx + iy * rx + ix
         const val = inside[idx]!
-        let isBoundary = false
 
-        // Check 6 axis-aligned neighbors
-        if (ix > 0 && inside[idx - 1] !== val) isBoundary = true
-        else if (ix < rx - 1 && inside[idx + 1] !== val) isBoundary = true
-        else if (iy > 0 && inside[idx - rx] !== val) isBoundary = true
-        else if (iy < ry - 1 && inside[idx + rx] !== val) isBoundary = true
-        else if (iz > 0 && inside[idx - ry * rx] !== val) isBoundary = true
-        else if (iz < rz - 1 && inside[idx + ry * rx] !== val) isBoundary = true
-
-        // Inside probes on grid edges are boundary (grid edge = implicit outside neighbor)
-        if (!isBoundary && val === 1) {
-          if (ix === 0 || ix === rx - 1 || iy === 0 || iy === ry - 1 || iz === 0 || iz === rz - 1) {
-            isBoundary = true
-          }
+        // Inside probes are always culled — we only keep exterior probes
+        if (val === 1) {
+          const probeOff = idx * 12
+          for (let k = 0; k < 12; k++) grid.data[probeOff + k] = 0
+          continue
         }
 
-        // Boundary probes must also be near actual geometry to avoid false boundaries
+        // Outside probe: keep only if it neighbors at least one inside cell
+        let hasInsideNeighbor = false
+        if (ix > 0 && inside[idx - 1] === 1) hasInsideNeighbor = true
+        else if (ix < rx - 1 && inside[idx + 1] === 1) hasInsideNeighbor = true
+        else if (iy > 0 && inside[idx - rx] === 1) hasInsideNeighbor = true
+        else if (iy < ry - 1 && inside[idx + rx] === 1) hasInsideNeighbor = true
+        else if (iz > 0 && inside[idx - ry * rx] === 1) hasInsideNeighbor = true
+        else if (iz < rz - 1 && inside[idx + ry * rx] === 1) hasInsideNeighbor = true
+
+        // Outside probes must also be near actual geometry to avoid false boundaries
         // from noisy inside/outside classification of distant probes
-        if (isBoundary && nearestDistSq[idx]! > proxThresholdSq) {
-          isBoundary = false
+        if (hasInsideNeighbor && nearestDistSq[idx]! > proxThresholdSq) {
+          hasInsideNeighbor = false
         }
 
-        if (!isBoundary) {
+        if (!hasInsideNeighbor) {
           const probeOff = idx * 12
           for (let k = 0; k < 12; k++) grid.data[probeOff + k] = 0
         }
