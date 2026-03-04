@@ -182,12 +182,15 @@ vec3 sampleGI(vec3 worldPos, vec3 normal) {
   vec4 shG = texture(u_giProbeTexture, vec3(x, y, (zBase + res.z) / depth));
   vec4 shB = texture(u_giProbeTexture, vec3(x, y, (zBase + res.z * 2.0) / depth));
 
-  // dcWeight (u_giParams.z): 0 = directional-only (no self-reinforcement),
-  // 1 = full incident radiance with cosine convolution (L1 ratio = 2/3).
+  // dcWeight (u_giParams.z) controls DC chromaticity:
+  //   0 = desaturated DC (luminance only) + full-color directional — no self-reinforcement
+  //   1 = full per-channel DC + cosine-convolved directional (L1 ratio 2/3) — physically based
   float dcW = u_giParams.z;
+  float dcLum = 0.299 * shR.x + 0.587 * shG.x + 0.114 * shB.x;
+  vec3 dc = vec3(mix(dcLum, shR.x, dcW), mix(dcLum, shG.x, dcW), mix(dcLum, shB.x, dcW));
   float cosW = 1.0 - dcW * 0.3333;
-  vec4 basis = vec4(dcW, normal.x * cosW, normal.y * cosW, normal.z * cosW);
-  vec3 raw = max(vec3(dot(shR, basis), dot(shG, basis), dot(shB, basis)), vec3(0.0));
+  vec3 n3 = vec3(normal.x, normal.y, normal.z) * cosW;
+  vec3 raw = max(dc + vec3(dot(shR.yzw, n3), dot(shG.yzw, n3), dot(shB.yzw, n3)), vec3(0.0));
   float rawMax = max(raw.r, max(raw.g, raw.b));
   vec3 tint = rawMax > 0.001 ? raw / rawMax : vec3(1.0);
   return mix(vec3(1.0), tint, min(rawMax * u_giParams.y, 1.0));

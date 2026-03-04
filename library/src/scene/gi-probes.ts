@@ -12,12 +12,12 @@
 //   irradiance(n) = c0 + c1*n.x + c2*n.y + c3*n.z
 // where c0..c3 are per-channel coefficients stored as incident radiance.
 //
-// The `dcWeight` property (0–1) controls how the SH is evaluated at shade time:
-//   dcWeight=0 (default): directional-only evaluation — drops the DC term to prevent
-//     surfaces from being tinted by their own color (no self-reinforcement).
-//   dcWeight=1: full incident radiance with cosine convolution at shade time (L1 cosine
-//     lobe ratio = 2/3 for directional terms). More physically based but may reinforce
-//     surface colors in monochromatic environments.
+// The `dcWeight` property (0–1) controls DC chromaticity at shade time:
+//   dcWeight=0 (default): desaturated DC (luminance only) + full-color directional terms.
+//     Preserves GI strength without reinforcing surface colors.
+//   dcWeight=1: full per-channel DC + cosine-convolved directional (L1 cosine lobe
+//     ratio = 2/3). More physically based but may reinforce colors in monochromatic
+//     environments.
 //
 // Data is uploaded to the GPU as a single 3D RGBA16F texture (gridX × gridY × gridZ*3).
 // The three color channels (R, G, B) are tiled along the Z axis:
@@ -57,9 +57,9 @@ export interface GIProbeGridOptions {
   resolution: [number, number, number]
   /** Intensity multiplier for the GI contribution (default 1.0). */
   intensity?: number
-  /** Weight of the DC (constant) term in SH evaluation (0–1, default 0).
-   *  0 = directional-only (no self-reinforcement), 1 = full incident radiance
-   *  with cosine convolution at shade time (physically based but may reinforce colors). */
+  /** DC chromaticity weight (0–1, default 0).
+   *  0 = desaturated DC (luminance) + colored directional (no self-reinforcement).
+   *  1 = full per-channel DC + cosine-convolved directional (physically based). */
   dcWeight?: number
 }
 
@@ -83,7 +83,7 @@ export class GIProbeGrid {
   readonly resolution: [number, number, number]
   /** Intensity multiplier for the GI contribution. */
   intensity: number
-  /** Weight of the DC (constant) term in SH evaluation (0 = directional only, 1 = full). */
+  /** DC chromaticity weight (0 = desaturated luminance, 1 = full per-channel color). */
   dcWeight: number
 
   /**

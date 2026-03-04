@@ -161,12 +161,15 @@ fn sampleGI(worldPos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
   let shG = textureSampleLevel(giProbeTexture, giProbeSampler, vec3<f32>(x, y, (zBase + res.z) / depth), 0.0);
   let shB = textureSampleLevel(giProbeTexture, giProbeSampler, vec3<f32>(x, y, (zBase + res.z * 2.0) / depth), 0.0);
 
-  // dcWeight (giParams.z): 0 = directional-only (no self-reinforcement),
-  // 1 = full incident radiance with cosine convolution (L1 ratio = 2/3).
+  // dcWeight (giParams.z) controls DC chromaticity:
+  //   0 = desaturated DC (luminance only) + full-color directional — no self-reinforcement
+  //   1 = full per-channel DC + cosine-convolved directional (L1 ratio 2/3) — physically based
   let dcW = frame.giParams.z;
+  let dcLum = 0.299 * shR.x + 0.587 * shG.x + 0.114 * shB.x;
+  let dc = vec3<f32>(mix(dcLum, shR.x, dcW), mix(dcLum, shG.x, dcW), mix(dcLum, shB.x, dcW));
   let cosW = 1.0 - dcW * 0.3333;
-  let basis = vec4<f32>(dcW, normal.x * cosW, normal.y * cosW, normal.z * cosW);
-  let raw = max(vec3<f32>(dot(shR, basis), dot(shG, basis), dot(shB, basis)), vec3<f32>(0.0));
+  let n3 = vec3<f32>(normal.x, normal.y, normal.z) * cosW;
+  let raw = max(dc + vec3<f32>(dot(shR.yzw, n3), dot(shG.yzw, n3), dot(shB.yzw, n3)), vec3<f32>(0.0));
   let rawMax = max(raw.r, max(raw.g, raw.b));
   let tint = select(vec3<f32>(1.0), raw / rawMax, rawMax > 0.001);
   return mix(vec3<f32>(1.0), tint, min(rawMax * frame.giParams.y, 1.0));
