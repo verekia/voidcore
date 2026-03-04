@@ -8,7 +8,7 @@
 //   - Its vertex colors (from bakePalette or direct assignment)
 //   - Its face normal (only front-facing triangles contribute — light bounces off surfaces)
 //   - The solid angle it subtends from the probe (area / distance², clamped)
-//   - The direction from the probe, projected onto the L1 SH basis [1, x, y, z]
+//   - The negated direction from the probe (light travels triangle→probe), projected onto L1 SH
 //
 // After accumulating geometry contributions, an optional sky color is added for probes
 // with upward visibility (the Z+ hemisphere), simulating ambient sky illumination.
@@ -157,19 +157,23 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
           const cb = triData.data[off + 9]!
 
           // Accumulate SH L1: basis functions are [1, dir.x, dir.y, dir.z]
+          // Negate direction: light arriving at the probe FROM the triangle travels
+          // in the opposite direction (triangle→probe, not probe→triangle).
+          // This way, evaluating SH with the surface normal correctly reduces
+          // self-illumination (a wall's own color doesn't reinforce itself).
           const w = formFactor
           rDC += cr * w
-          rX += cr * w * dirX
-          rY += cr * w * dirY
-          rZ += cr * w * dirZ
+          rX -= cr * w * dirX
+          rY -= cr * w * dirY
+          rZ -= cr * w * dirZ
           gDC += cg * w
-          gX += cg * w * dirX
-          gY += cg * w * dirY
-          gZ += cg * w * dirZ
+          gX -= cg * w * dirX
+          gY -= cg * w * dirY
+          gZ -= cg * w * dirZ
           bDC += cb * w
-          bX += cb * w * dirX
-          bY += cb * w * dirY
-          bZ += cb * w * dirZ
+          bX -= cb * w * dirX
+          bY -= cb * w * dirY
+          bZ -= cb * w * dirZ
           totalWeight += w
         }
 
