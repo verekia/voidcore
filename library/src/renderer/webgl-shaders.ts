@@ -182,20 +182,17 @@ vec3 sampleGI(vec3 worldPos, vec3 normal) {
   vec4 shG = texture(u_giProbeTexture, vec3(x, y, (zBase + res.z) / depth));
   vec4 shB = texture(u_giProbeTexture, vec3(x, y, (zBase + res.z * 2.0) / depth));
 
-  // dcWeight (u_giParams.z) controls DC chromaticity:
-  //   0 = desaturated DC (luminance only) + full-color directional — no self-reinforcement
-  //   1 = full per-channel DC + cosine-convolved directional (L1 ratio 2/3) — physically based
-  float dcW = u_giParams.z;
-  float dcLum = 0.299 * shR.x + 0.587 * shG.x + 0.114 * shB.x;
-  vec3 dc = vec3(mix(dcLum, shR.x, dcW), mix(dcLum, shG.x, dcW), mix(dcLum, shB.x, dcW));
-  float cosW = 2.0 - dcW * 1.3333;
-  vec3 n3 = vec3(normal.x, normal.y, normal.z) * cosW;
-  // Collapse directional SH to a single luminance-weighted scalar so that
-  // directions only modulate brightness, not chromaticity. Per-channel
-  // directional evaluation causes wrong hues (e.g. purple stains on orange
-  // surfaces) when R/G/B directional terms point in different directions.
+  // Full-color DC + scalar directional tinted by DC chromaticity.
+  // Directional SH is collapsed to luminance so it only modulates brightness,
+  // not chromaticity — prevents wrong-hue stains (e.g. purple on orange)
+  // when per-channel directional terms point in different directions.
+  // DC chromaticity is applied to the directional term so colored GI is preserved.
+  vec3 dc = vec3(shR.x, shG.x, shB.x);
+  float dcLum = 0.299 * dc.r + 0.587 * dc.g + 0.114 * dc.b;
+  vec3 dcChr = dcLum > 0.001 ? dc / dcLum : vec3(1.0);
+  vec3 n3 = normal * 0.6667; // L1 cosine convolution (2/3)
   float dirScalar = 0.299 * dot(shR.yzw, n3) + 0.587 * dot(shG.yzw, n3) + 0.114 * dot(shB.yzw, n3);
-  vec3 raw = max(dc + vec3(dirScalar), vec3(0.0));
+  vec3 raw = max(dc + dcChr * dirScalar, vec3(0.0));
   float rawMax = max(raw.r, max(raw.g, raw.b));
   vec3 tint = rawMax > 0.001 ? raw / rawMax : vec3(1.0);
   // Normalize tint to unit luminance so GI only shifts chromaticity, not brightness.

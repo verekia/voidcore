@@ -161,20 +161,17 @@ fn sampleGI(worldPos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
   let shG = textureSampleLevel(giProbeTexture, giProbeSampler, vec3<f32>(x, y, (zBase + res.z) / depth), 0.0);
   let shB = textureSampleLevel(giProbeTexture, giProbeSampler, vec3<f32>(x, y, (zBase + res.z * 2.0) / depth), 0.0);
 
-  // dcWeight (giParams.z) controls DC chromaticity:
-  //   0 = desaturated DC (luminance only) + full-color directional — no self-reinforcement
-  //   1 = full per-channel DC + cosine-convolved directional (L1 ratio 2/3) — physically based
-  let dcW = frame.giParams.z;
-  let dcLum = 0.299 * shR.x + 0.587 * shG.x + 0.114 * shB.x;
-  let dc = vec3<f32>(mix(dcLum, shR.x, dcW), mix(dcLum, shG.x, dcW), mix(dcLum, shB.x, dcW));
-  let cosW = 2.0 - dcW * 1.3333;
-  let n3 = vec3<f32>(normal.x, normal.y, normal.z) * cosW;
-  // Collapse directional SH to a single luminance-weighted scalar so that
-  // directions only modulate brightness, not chromaticity. Per-channel
-  // directional evaluation causes wrong hues (e.g. purple stains on orange
-  // surfaces) when R/G/B directional terms point in different directions.
+  // Full-color DC + scalar directional tinted by DC chromaticity.
+  // Directional SH is collapsed to luminance so it only modulates brightness,
+  // not chromaticity — prevents wrong-hue stains (e.g. purple on orange)
+  // when per-channel directional terms point in different directions.
+  // DC chromaticity is applied to the directional term so colored GI is preserved.
+  let dc = vec3<f32>(shR.x, shG.x, shB.x);
+  let dcLum = 0.299 * dc.r + 0.587 * dc.g + 0.114 * dc.b;
+  let dcChr = select(vec3<f32>(1.0), dc / dcLum, dcLum > 0.001);
+  let n3 = normal * 0.6667; // L1 cosine convolution (2/3)
   let dirScalar = 0.299 * dot(shR.yzw, n3) + 0.587 * dot(shG.yzw, n3) + 0.114 * dot(shB.yzw, n3);
-  let raw = max(dc + vec3<f32>(dirScalar), vec3<f32>(0.0));
+  let raw = max(dc + dcChr * dirScalar, vec3<f32>(0.0));
   let rawMax = max(raw.r, max(raw.g, raw.b));
   var tint = select(vec3<f32>(1.0), raw / rawMax, rawMax > 0.001);
   // Normalize tint to unit luminance so GI only shifts chromaticity, not brightness.
