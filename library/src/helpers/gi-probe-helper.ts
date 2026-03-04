@@ -1,10 +1,10 @@
 // GI Probe Helper – Debug visualization for GI probe grids.
 //
 // Renders each probe in a GIProbeGrid as a small colored sphere. The sphere color represents
-// the probe's constant (DC) irradiance — the omnidirectional ambient color at that location.
-// This lets you see the spatial distribution of indirect lighting across the scene.
+// the probe's full L1 irradiance — evaluated per-vertex using the SH basis [1, n.x, n.y, n.z]
+// so each sphere shows directional color variation, not just a flat ambient tint.
 //
-// Colors are auto-normalized so the brightest probe maps to full white, making the relative
+// Colors are auto-normalized so the brightest vertex maps to full white, making the relative
 // spatial variation clearly visible regardless of absolute GI intensity.
 //
 // Probes with zero DC values (inactive/culled by maxDistance) are skipped entirely — no geometry
@@ -194,8 +194,10 @@ export class GIProbeHelper {
   }
 
   /**
-   * Write normalized probe DC colors into the normals array.
-   * The brightest channel across all probes maps to 1.0.
+   * Write full L1 SH-evaluated colors into the normals array.
+   * For each vertex, evaluates irradiance(n) = c0 + c1*n.x + c2*n.y + c3*n.z
+   * using the vertex's sphere normal direction.
+   * The brightest value across all probes maps to 1.0.
    * Only writes to active (non-zero DC) probes matching _buildMergedSpheres.
    */
   private _writeColors(grid: GIProbeGrid): void {
@@ -203,31 +205,66 @@ export class GIProbeHelper {
     const normals = this._geometry.normals
     const probeCount = rx * ry * rz
 
-    // Find max DC value across all active probes for normalization
-    let maxDC = 0
-    for (let i = 0; i < probeCount; i++) {
-      const off = i * 12
-      maxDC = Math.max(maxDC, Math.abs(grid.data[off]!), Math.abs(grid.data[off + 4]!), Math.abs(grid.data[off + 8]!))
+    // Pre-compute sphere normals for each vertex (shared by all probes)
+    const sphereNormals = new Float32Array(VERTS_PER_PROBE * 3)
+    let vi = 0
+    for (let sy2 = 0; sy2 <= HS; sy2++) {
+      const phi = (sy2 / HS) * Math.PI
+      const sinPhi = Math.sin(phi)
+      const cosPhi = Math.cos(phi)
+      for (let sx2 = 0; sx2 <= WS; sx2++) {
+        const theta = (sx2 / WS) * Math.PI * 2
+        sphereNormals[vi * 3] = sinPhi * Math.cos(theta)
+        sphereNormals[vi * 3 + 1] = sinPhi * Math.sin(theta)
+        sphereNormals[vi * 3 + 2] = cosPhi
+        vi++
+      }
     }
 
-    const invMax = maxDC > 0.001 ? 1.0 / maxDC : 1.0
+    // Find max evaluated irradiance across all active probes for normalization.
+    // Sample a few representative directions (±X, ±Y, ±Z) to find the peak.
+    const dirs = [
+      [1, 0, 0],
+      [-1, 0, 0],
+      [0, 1, 0],
+      [0, -1, 0],
+      [0, 0, 1],
+      [0, 0, -1],
+    ]
+    let maxVal = 0
+    for (let i = 0; i < probeCount; i++) {
+      if (!_isProbeActive(grid.data, i)) continue
+      const off = i * 12
+      for (const d of dirs) {
+        const r = grid.data[off]! + grid.data[off + 1]! * d[0]! + grid.data[off + 2]! * d[1]! + grid.data[off + 3]! * d[2]!
+        const g = grid.data[off + 4]! + grid.data[off + 5]! * d[0]! + grid.data[off + 6]! * d[1]! + grid.data[off + 7]! * d[2]!
+        const b = grid.data[off + 8]! + grid.data[off + 9]! * d[0]! + grid.data[off + 10]! * d[1]! + grid.data[off + 11]! * d[2]!
+        maxVal = Math.max(maxVal, r, g, b)
+      }
+    }
 
-    // Write colors only for active probes (same order as _buildMergedSpheres)
+    const invMax = maxVal > 0.001 ? 1.0 / maxVal : 1.0
+
+    // Write per-vertex L1 SH colors for active probes (same order as _buildMergedSpheres)
     let activeIdx = 0
     for (let i = 0; i < probeCount; i++) {
       if (!_isProbeActive(grid.data, i)) continue
 
-      const dataOff = i * 12
-      const cr = grid.data[dataOff]! * invMax
-      const cg = grid.data[dataOff + 4]! * invMax
-      const cb = grid.data[dataOff + 8]! * invMax
+      const off = i * 12
+      const rDC = grid.data[off]!, rSHx = grid.data[off + 1]!, rSHy = grid.data[off + 2]!, rSHz = grid.data[off + 3]!
+      const gDC = grid.data[off + 4]!, gSHx = grid.data[off + 5]!, gSHy = grid.data[off + 6]!, gSHz = grid.data[off + 7]!
+      const bDC = grid.data[off + 8]!, bSHx = grid.data[off + 9]!, bSHy = grid.data[off + 10]!, bSHz = grid.data[off + 11]!
 
       const vBase = activeIdx * VERTS_PER_PROBE
       for (let v = 0; v < VERTS_PER_PROBE; v++) {
+        const nx = sphereNormals[v * 3]!
+        const ny = sphereNormals[v * 3 + 1]!
+        const nz = sphereNormals[v * 3 + 2]!
+
         const p = (vBase + v) * 3
-        normals[p] = cr
-        normals[p + 1] = cg
-        normals[p + 2] = cb
+        normals[p] = (rDC + rSHx * nx + rSHy * ny + rSHz * nz) * invMax
+        normals[p + 1] = (gDC + gSHx * nx + gSHy * ny + gSHz * nz) * invMax
+        normals[p + 2] = (bDC + bSHx * nx + bSHy * ny + bSHz * nz) * invMax
       }
 
       activeIdx++
