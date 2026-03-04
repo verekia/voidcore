@@ -104,13 +104,17 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
           continue
         }
 
-        // Skip probes inside geometry by counting front-facing vs back-facing
-        // triangles within the search radius. Probes inside solid meshes see mostly
-        // backfaces and would otherwise pick up colors from distant surfaces visible
-        // through the mesh walls (e.g. green grass bleeding into an orange rock).
+        // Skip probes inside geometry and compute adaptive search radius.
+        // Count front-facing vs back-facing triangles within the search radius.
+        // Probes inside solid meshes see mostly backfaces → zero them out.
+        // Also find the nearest front-facing triangle to limit the effective radius:
+        // a probe 0.5 units from a rock surface shouldn't accumulate color from
+        // grass 3 units away on the other side of the wall.
+        let effectiveRadiusSq = radiusSq
         {
           let frontCount = 0
           let backCount = 0
+          let nearestFrontSq = Infinity
           for (let t = 0; t < triData.count; t++) {
             const off = t * 13
             const dx = triData.data[off]! - px
@@ -123,12 +127,22 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
             const ny = triData.data[off + 4]!
             const nz = triData.data[off + 5]!
             const facing = -(dx * invDist * nx + dy * invDist * ny + dz * invDist * nz)
-            if (facing > 0) frontCount++
-            else backCount++
+            if (facing > 0) {
+              frontCount++
+              if (distSq < nearestFrontSq) nearestFrontSq = distSq
+            } else {
+              backCount++
+            }
           }
           if (backCount > frontCount) {
             for (let k = 0; k < 12; k++) grid.data[probeOff + k] = 0
             continue
+          }
+          // Adaptive radius: limit to 3× the nearest front-facing surface distance.
+          // Prevents color bleeding through walls (no occlusion in the baking).
+          if (nearestFrontSq < Infinity) {
+            const adaptiveSq = nearestFrontSq * 9 // (3×dist)²
+            if (adaptiveSq < effectiveRadiusSq) effectiveRadiusSq = adaptiveSq
           }
         }
 
@@ -153,12 +167,12 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
           const cy = triData.data[off + 1]! // centroid y
           const cz = triData.data[off + 2]! // centroid z
 
-          // Distance check
+          // Distance check (uses adaptive radius to prevent color bleed through walls)
           const dx = cx - px
           const dy = cy - py
           const dz = cz - pz
           const distSq = dx * dx + dy * dy + dz * dz
-          if (distSq > radiusSq) continue
+          if (distSq > effectiveRadiusSq) continue
 
           const dist = Math.sqrt(distSq)
           if (dist < 0.01) continue // Skip degenerate (probe inside triangle)
