@@ -111,7 +111,6 @@ const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
         tiledNormal: grassNormalTexture,
         tiledNormalIntensity: 0.6,
         tiledNormalScale: 100,
-        grass: true,
       },
       {
         color: [0.5, 0.32, 0.15],
@@ -202,6 +201,8 @@ const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
     radius: 80,
     minWidth: 0.1,
     maxWidth: 0.2,
+    color: [0.4, 0.6, 0.133],
+    color2: [0.2, 0.4, 0.05],
   })
 
   const material = useMemo(() => {

@@ -11,7 +11,7 @@ const Lighting = () => {
       <directionalLight
         ref={lightRef}
         args={[{ color: [1, 1, 1], intensity: 0.5 }]}
-        position={[10, 40, 100]}
+        position={[60, 40, 100]}
         castShadow
         shadowMapSize={130}
         shadowNear={-20}

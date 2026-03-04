@@ -1211,6 +1211,8 @@ fn vs_main(
   return out;
 }
 
+${PCF_AND_SHADOW}
+
 struct FragmentOutput {
   @location(0) color: vec4<f32>,
   @location(1) emissive: vec4<f32>,
@@ -1274,6 +1276,8 @@ fn vs_main(
   out.position = frame.viewProjection * vec4<f32>(out.worldPos, 1.0);
   return out;
 }
+
+${PCF_AND_SHADOW}
 
 struct FragmentOutput {
   @location(0) color: vec4<f32>,

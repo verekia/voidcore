@@ -921,12 +921,18 @@ in vec3 v_worldPos;
 in vec3 v_normal;
 in vec2 v_uv;
 
+${FRAME_BLOCK}
+
 uniform vec3 u_baseColor;
 uniform float u_opacity;
+uniform highp sampler2DShadow u_shadowMap;
+uniform bool u_receiveShadow;
 ${customUniformsDecl ?? ''}
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
+
+${SHADOW_FUNCTIONS}
 
 void main() {
   vec3 finalColor = u_baseColor;

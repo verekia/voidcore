@@ -1999,6 +1999,8 @@ export class WebGLRenderer implements Renderer {
           gl.uniform1f(locs.u_emissiveBrightness, mesh.material.emissiveBrightness)
           gl.uniform1f(locs.u_wrapLighting, mesh.material.wrapLighting)
           gl.uniform1f(locs.u_darkness, mesh.material.darkness)
+        } else if (mesh.material._hasCustomShader) {
+          gl.uniform1i(locs.u_receiveShadow, 1)
         }
       }
 
@@ -2073,7 +2075,7 @@ export class WebGLRenderer implements Renderer {
       }
 
       const programChanged = this._setProgram(program)
-      if (programChanged && isLambert) {
+      if (programChanged && (isLambert || hasCustom)) {
         gl.uniform1i(locs.u_shadowMap, 2)
       }
       if (hasVC || (!hasCustom && mat._hasTextures && !isSkinned)) {
@@ -2144,7 +2146,7 @@ export class WebGLRenderer implements Renderer {
         }
 
         const programChanged = this._setProgram(program)
-        if (programChanged && isLambert) {
+        if (programChanged && (isLambert || hasCustom)) {
           gl.uniform1i(locs.u_shadowMap, 2)
         }
         if (hasVC || (!hasCustom && mat._hasTextures && !isSkinned)) {

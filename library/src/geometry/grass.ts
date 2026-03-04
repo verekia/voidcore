@@ -9,8 +9,9 @@
 // normal attribute (snorm8), and blade dimensions (half-width, height) in UVs (float16).
 // A custom vertex shader on a BasicMaterial computes billboard orientation from the camera
 // direction at runtime, plus wind animation and distance culling (degenerate triangles).
-// The fragment shader handles per-blade color variation and base AO darkening — no
-// renderer changes needed, grass is a regular Mesh.
+// The fragment shader handles per-blade color variation, base AO darkening, and shadow
+// receiving (PCF-filtered shadow map sampling) — no renderer changes needed, grass is
+// a regular Mesh.
 //
 // generateGrass(geometry, palette, options) – Scatters patch-based grass blades on grid faces.
 // createGrassMaterial(palette, options)     – Returns a BasicMaterial with grass custom shaders.
@@ -82,36 +83,6 @@ export const generateGrass = (geometry: Geometry, palette: PaletteEntry[], optio
   const totalPatches = geometry.vertexCount
 
   // TODO: Density-based scatter on triangle faces (for non-grid geometries)
-  // const patchDensity = options?.patchDensity ?? 3
-  // const matIdx = geometry.materialIndices
-  // let grassFlags: Uint8Array | null = null
-  // if (matIdx) {
-  //   grassFlags = new Uint8Array(palette.length)
-  //   for (let i = 0; i < palette.length; i++) {
-  //     grassFlags[i] = palette[i]!.grass ? 1 : 0
-  //   }
-  // }
-  // const idx = geometry.indices
-  // const triCount = idx.length / 3
-  // let totalPatches = 0
-  // const patchCountPerTri = new Uint32Array(triCount)
-  // let fractionalAccum = 0
-  // for (let t = 0; t < triCount; t++) {
-  //   const i0 = idx[t * 3]!, i1 = idx[t * 3 + 1]!, i2 = idx[t * 3 + 2]!
-  //   if (grassFlags && matIdx) {
-  //     if (!grassFlags[matIdx[i0]!] || !grassFlags[matIdx[i1]!] || !grassFlags[matIdx[i2]!]) continue
-  //   }
-  //   const ax = pos[i0 * 3]!, ay = pos[i0 * 3 + 1]!, az = pos[i0 * 3 + 2]!
-  //   const e1x = pos[i1 * 3]! - ax, e1y = pos[i1 * 3 + 1]! - ay, e1z = pos[i1 * 3 + 2]! - az
-  //   const e2x = pos[i2 * 3]! - ax, e2y = pos[i2 * 3 + 1]! - ay, e2z = pos[i2 * 3 + 2]! - az
-  //   const cx = e1y * e2z - e1z * e2y, cy = e1z * e2x - e1x * e2z, cz = e1x * e2y - e1y * e2x
-  //   const area = 0.5 * Math.sqrt(cx * cx + cy * cy + cz * cz)
-  //   fractionalAccum += area * patchDensity
-  //   const count = Math.floor(fractionalAccum)
-  //   fractionalAccum -= count
-  //   patchCountPerTri[t] = count
-  //   totalPatches += count
-  // }
 
   const totalBlades = totalPatches * bladesPerPatch
 
@@ -292,6 +263,8 @@ const GRASS_FRAGMENT_WGSL = /* wgsl */ `
   finalColor = mix(baseGreen, varYellow, bladeSeed);
   let ao = mix(0.7, 1.0, heightFactor);
   finalColor = finalColor * ao;
+  let shadow = sampleShadow(in.worldPos, 1.0);
+  finalColor = finalColor * shadow;
 `
 
 const GRASS_VERTEX_GLSL = /* glsl */ `
@@ -343,14 +316,15 @@ const GRASS_FRAGMENT_GLSL = /* glsl */ `
   finalColor = mix(baseGreen, varYellow, bladeSeed);
   float ao = mix(0.7, 1.0, heightFactor);
   finalColor = finalColor * ao;
+  float shadow = sampleShadow(v_worldPos, 1.0);
+  finalColor *= shadow;
 `
 
 // ─── Material Creation ───────────────────────────────────────────────────────
 
 /**
  * Creates a BasicMaterial with custom shaders for grass rendering.
- * Uses `options.color`/`color2` if provided, otherwise reads from the first
- * `grass: true` palette entry, otherwise uses built-in defaults.
+ * Uses `options.color`/`color2` if provided, otherwise uses built-in defaults.
  */
 export const createGrassMaterial = (palette: PaletteEntry[], options?: GrassOptions): BasicMaterial => {
   let baseColor: [number, number, number] = [0.933, 0.733, 0.467]
@@ -359,14 +333,6 @@ export const createGrassMaterial = (palette: PaletteEntry[], options?: GrassOpti
   if (options?.color) {
     baseColor = options.color
     varColor = options.color2 ?? [Math.min(1, baseColor[0] + 0.3), Math.min(1, baseColor[1] + 0.15), baseColor[2]]
-  } else {
-    for (const entry of palette) {
-      if (entry.grass) {
-        baseColor = entry.color
-        varColor = entry.color2 ?? [Math.min(1, baseColor[0] + 0.3), Math.min(1, baseColor[1] + 0.15), baseColor[2]]
-        break
-      }
-    }
   }
 
   const radius = options?.radius ?? 30

@@ -84,8 +84,6 @@ export interface PaletteEntry {
   tiledNormal?: Texture
   tiledNormalIntensity?: number
   tiledNormalScale?: number
-  /** Marks this palette entry as a grass surface for grass blade scattering. */
-  grass?: boolean
 }
 
 export type MaterialType = 'basic' | 'lambert'
