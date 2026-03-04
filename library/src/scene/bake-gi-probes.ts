@@ -76,23 +76,41 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
         const py = bMin[1] + iy * stepY
         const pz = bMin[2] + iz * stepZ
 
-        // Skip probes too far from any mesh surface
-        if (maxDistSq > 0) {
-          let nearestSq = Infinity
-          for (let t = 0; t < triData.count; t++) {
-            const off = t * 13
-            const dx = triData.data[off]! - px
-            const dy = triData.data[off + 1]! - py
-            const dz = triData.data[off + 2]! - pz
-            const dSq = dx * dx + dy * dy + dz * dz
-            if (dSq < nearestSq) {
-              nearestSq = dSq
-              if (nearestSq <= maxDistSq) break // Early exit: close enough
-            }
+        // Find nearest triangle for distance/inside checks
+        let nearestSq = Infinity
+        let nearestIdx = -1
+        for (let t = 0; t < triData.count; t++) {
+          const off = t * 13
+          const dx = triData.data[off]! - px
+          const dy = triData.data[off + 1]! - py
+          const dz = triData.data[off + 2]! - pz
+          const dSq = dx * dx + dy * dy + dz * dz
+          if (dSq < nearestSq) {
+            nearestSq = dSq
+            nearestIdx = t
           }
-          if (nearestSq > maxDistSq) {
-            // Zero out this probe (neutral tint in shader)
-            const probeOff = (iz * ry * rx + iy * rx + ix) * 12
+        }
+
+        const probeOff = (iz * ry * rx + iy * rx + ix) * 12
+
+        // Skip probes too far from any mesh surface
+        if (maxDistSq > 0 && nearestSq > maxDistSq) {
+          for (let k = 0; k < 12; k++) grid.data[probeOff + k] = 0
+          continue
+        }
+
+        // Skip probes inside geometry (on the backface side of nearest triangle).
+        // If the vector from triangle centroid to probe is opposite to the face
+        // normal, the probe is behind the surface.
+        if (nearestIdx >= 0) {
+          const nOff = nearestIdx * 13
+          const toPx = px - triData.data[nOff]!
+          const toPy = py - triData.data[nOff + 1]!
+          const toPz = pz - triData.data[nOff + 2]!
+          const fnx = triData.data[nOff + 3]!
+          const fny = triData.data[nOff + 4]!
+          const fnz = triData.data[nOff + 5]!
+          if (toPx * fnx + toPy * fny + toPz * fnz < 0) {
             for (let k = 0; k < 12; k++) grid.data[probeOff + k] = 0
             continue
           }
@@ -235,7 +253,6 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
         }
 
         // Write raw SH coefficients
-        const probeOff = (iz * ry * rx + iy * rx + ix) * 12
         grid.data[probeOff] = rDC
         grid.data[probeOff + 1] = rX
         grid.data[probeOff + 2] = rY
