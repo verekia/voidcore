@@ -22,6 +22,7 @@ const CHARACTER_COUNT = 400
 const IndexPage = () => {
   const [engine, setEngine] = useState<Engine | null>(null)
   const [edenReady, setEdenReady] = useState(false)
+  const [debugGIProbes, setDebugGIProbes] = useState(false)
   const onEdenReady = useCallback(() => setEdenReady(true), [])
 
   useEffect(() => {
@@ -34,7 +35,6 @@ const IndexPage = () => {
 
   const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
   const forceWebGL = params?.has('webgl')
-  const debugGIProbes = params?.has('giprobes') ?? false
 
   return (
     <>
@@ -67,6 +67,14 @@ const IndexPage = () => {
       </Canvas>
       <StatsOverlay engine={engine} />
       <BackendSwitch engine={engine} />
+      <button
+        onClick={() => setDebugGIProbes(v => !v)}
+        className={`fixed top-12 right-2.5 z-[1000] cursor-pointer rounded px-3 py-2 font-mono text-sm ${
+          debugGIProbes ? 'bg-yellow-600/80 text-white' : 'bg-black/60 text-white'
+        }`}
+      >
+        GI Probes {debugGIProbes ? 'ON' : 'OFF'}
+      </button>
     </>
   )
 }

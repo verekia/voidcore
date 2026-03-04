@@ -43,7 +43,7 @@ const Lighting = ({ debugGIProbes = false }: { debugGIProbes?: boolean }) => {
   const grid = useGIProbes({
     boundsMin: [-55, -75, -2],
     boundsMax: [55, 85, 25],
-    resolution: [12, 17, 4],
+    resolution: [12, 17, 3],
     intensity: 1.0,
     populate: populateProbes,
   })

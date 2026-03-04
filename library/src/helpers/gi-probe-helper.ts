@@ -4,12 +4,13 @@
 // the probe's constant (DC) irradiance — the omnidirectional ambient color at that location.
 // This lets you see the spatial distribution of indirect lighting across the scene.
 //
+// Colors are auto-normalized so the brightest probe maps to full white, making the relative
+// spatial variation clearly visible regardless of absolute GI intensity.
+//
 // Implementation: Generates a merged geometry with one low-poly sphere per probe. Probe colors
 // are stored in the normal attribute (abusing normals as a per-vertex color channel), and a
 // custom shader on a BasicMaterial reads the raw normals in the vertex stage — bypassing the
-// normal-matrix transform — then outputs them as fragment color. A `colorScale` custom uniform
-// normalizes the stored values to maximize snorm8 precision and reproduces the original
-// brightness in the fragment shader.
+// normal-matrix transform — then outputs them as fragment color.
 //
 // new GIProbeHelper(grid, opts?) – Creates the helper. Add helper.mesh to the scene.
 // helper.update(grid)            – Rebuilds colors when probe data changes.
@@ -34,7 +35,6 @@ export interface GIProbeHelperOptions {
 export class GIProbeHelper {
   mesh: Mesh
   private _geometry: Geometry
-  private _material: BasicMaterial
   private _radius: number
 
   constructor(grid: GIProbeGrid, options?: GIProbeHelperOptions) {
@@ -49,31 +49,29 @@ export class GIProbeHelper {
       uvs,
     })
 
-    // Write probe colors into normals and get the scale factor
-    const colorScale = this._writeColors(grid)
+    // Write normalized probe colors into normals
+    this._writeColors(grid)
 
-    this._material = new BasicMaterial({
+    const material = new BasicMaterial({
       color: [1, 1, 1],
       customShader: {
-        uniforms: { colorScale },
         // Bypass normal-matrix transform: use raw attribute as color data
         vertexWGSL: 'out.normal = a_normal.xyz;',
         vertexGLSL: 'v_normal = a_normal.xyz;',
-        // Output the "normal" (actually probe color) scaled back to original range
-        fragmentWGSL: 'finalColor = max(in.normal * uniforms.colorScale, vec3f(0.0));',
-        fragmentGLSL: 'finalColor = max(v_normal * uniforms.colorScale, vec3(0.0));',
+        // Display normalized probe color (brightest probe = white)
+        fragmentWGSL: 'finalColor = max(in.normal, vec3f(0.0));',
+        fragmentGLSL: 'finalColor = max(v_normal, vec3(0.0));',
       },
     })
 
-    this.mesh = new Mesh(this._geometry, this._material)
+    this.mesh = new Mesh(this._geometry, material)
     this.mesh.frustumCulled = false
     this.mesh.castShadow = false
   }
 
   /** Rebuild probe colors when grid data changes. */
   update(grid: GIProbeGrid): void {
-    const colorScale = this._writeColors(grid)
-    this._material.customShader!.uniforms!.colorScale = colorScale
+    this._writeColors(grid)
     this._geometry.needsUpdate = true
   }
 
@@ -183,10 +181,10 @@ export class GIProbeHelper {
   }
 
   /**
-   * Write probe DC colors into the normals array. Returns the colorScale factor
-   * that maps the stored normalized values back to original brightness.
+   * Write normalized probe DC colors into the normals array.
+   * The brightest channel across all probes maps to 1.0.
    */
-  private _writeColors(grid: GIProbeGrid): number {
+  private _writeColors(grid: GIProbeGrid): void {
     const [rx, ry, rz] = grid.resolution
     const normals = this._geometry.normals
 
@@ -224,8 +222,5 @@ export class GIProbeHelper {
         }
       }
     }
-
-    // Return the scale factor to reconstruct original colors in the shader
-    return maxDC > 0.001 ? maxDC : 1.0
   }
 }
