@@ -17,6 +17,11 @@
 // Probes beyond this distance get zeroed out (neutral tint in the shader). This avoids
 // wasting computation on probes floating in empty space (e.g. high in the air above terrain).
 //
+// Probes inside solid geometry are detected by counting front-facing vs back-facing triangles
+// within the search radius. Interior probes see mostly backfaces and would otherwise pick up
+// colors from distant surfaces visible through the mesh walls (e.g. green grass bleeding
+// into an orange rock). These probes are zeroed out to prevent color contamination.
+//
 // bakeGIProbes(grid, meshes, options?) – Fills the grid with baked indirect lighting data.
 
 import type { Geometry } from '../geometry/geometry'
@@ -99,18 +104,29 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
           continue
         }
 
-        // Skip probes inside geometry (on the backface side of nearest triangle).
-        // If the vector from triangle centroid to probe is opposite to the face
-        // normal, the probe is behind the surface.
-        if (nearestIdx >= 0) {
-          const nOff = nearestIdx * 13
-          const toPx = px - triData.data[nOff]!
-          const toPy = py - triData.data[nOff + 1]!
-          const toPz = pz - triData.data[nOff + 2]!
-          const fnx = triData.data[nOff + 3]!
-          const fny = triData.data[nOff + 4]!
-          const fnz = triData.data[nOff + 5]!
-          if (toPx * fnx + toPy * fny + toPz * fnz < 0) {
+        // Skip probes inside geometry by counting front-facing vs back-facing
+        // triangles within the search radius. Probes inside solid meshes see mostly
+        // backfaces and would otherwise pick up colors from distant surfaces visible
+        // through the mesh walls (e.g. green grass bleeding into an orange rock).
+        {
+          let frontCount = 0
+          let backCount = 0
+          for (let t = 0; t < triData.count; t++) {
+            const off = t * 13
+            const dx = triData.data[off]! - px
+            const dy = triData.data[off + 1]! - py
+            const dz = triData.data[off + 2]! - pz
+            const distSq = dx * dx + dy * dy + dz * dz
+            if (distSq > radiusSq || distSq < 0.0001) continue
+            const invDist = 1 / Math.sqrt(distSq)
+            const nx = triData.data[off + 3]!
+            const ny = triData.data[off + 4]!
+            const nz = triData.data[off + 5]!
+            const facing = -(dx * invDist * nx + dy * invDist * ny + dz * invDist * nz)
+            if (facing > 0) frontCount++
+            else backCount++
+          }
+          if (backCount > frontCount) {
             for (let k = 0; k < 12; k++) grid.data[probeOff + k] = 0
             continue
           }
