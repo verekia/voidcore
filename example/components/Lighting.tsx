@@ -23,9 +23,9 @@ const Lighting = ({
   const lightRef = useRef<DirectionalLight>(null)
 
   const grid = useGIProbes({
-    boundsMin: [-55, -75, -2],
-    boundsMax: [55, 85, 25],
-    resolution: [22, 16, 7],
+    boundsMin: [-55, -60, -55],
+    boundsMax: [55, 65, 20],
+    resolution: [22, 16, 15],
     intensity: 1.0,
   })
 
@@ -39,7 +39,7 @@ const Lighting = ({
   useEffect(() => {
     if (!edenGeometry) return
     bakeGIProbes(grid, [{ geometry: edenGeometry, position: EDEN_POSITION }], {
-      maxDistance: 15,
+      maxDistance: 5,
       skyColor: [0.4, 0.6, 0.9],
       skyIntensity: 0.15,
     })
