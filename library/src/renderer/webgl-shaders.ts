@@ -182,7 +182,9 @@ vec3 sampleGI(vec3 worldPos, vec3 normal) {
   vec4 shG = texture(u_giProbeTexture, vec3(x, y, (zBase + res.z) / depth));
   vec4 shB = texture(u_giProbeTexture, vec3(x, y, (zBase + res.z * 2.0) / depth));
 
-  vec4 basis = vec4(1.0, normal.x, normal.y, normal.z);
+  // Drop DC term (basis.x=0) — only directional SH drives the tint so that
+  // surfaces don't get reinforced by their own color bouncing back.
+  vec4 basis = vec4(0.0, normal.x, normal.y, normal.z);
   vec3 raw = max(vec3(dot(shR, basis), dot(shG, basis), dot(shB, basis)), vec3(0.0));
   float rawMax = max(raw.r, max(raw.g, raw.b));
   vec3 tint = rawMax > 0.001 ? raw / rawMax : vec3(1.0);

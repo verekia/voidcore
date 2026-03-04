@@ -161,7 +161,9 @@ fn sampleGI(worldPos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
   let shG = textureSampleLevel(giProbeTexture, giProbeSampler, vec3<f32>(x, y, (zBase + res.z) / depth), 0.0);
   let shB = textureSampleLevel(giProbeTexture, giProbeSampler, vec3<f32>(x, y, (zBase + res.z * 2.0) / depth), 0.0);
 
-  let basis = vec4<f32>(1.0, normal.x, normal.y, normal.z);
+  // Drop DC term (basis.x=0) — only directional SH drives the tint so that
+  // surfaces don't get reinforced by their own color bouncing back.
+  let basis = vec4<f32>(0.0, normal.x, normal.y, normal.z);
   let raw = max(vec3<f32>(dot(shR, basis), dot(shG, basis), dot(shB, basis)), vec3<f32>(0.0));
   let rawMax = max(raw.r, max(raw.g, raw.b));
   let tint = select(vec3<f32>(1.0), raw / rawMax, rawMax > 0.001);
