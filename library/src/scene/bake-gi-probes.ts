@@ -6,7 +6,7 @@
 //
 // Each triangle contributes color based on:
 //   - Its vertex colors (from bakePalette or direct assignment)
-//   - Its face normal (both sides contribute via abs(facing) — avoids artifacts with vertical walls)
+//   - Its face normal (only front-facing triangles contribute — light bounces off surfaces)
 //   - The solid angle it subtends from the probe (area / distance², clamped)
 //   - The direction from the probe, projected onto the L1 SH basis [1, x, y, z]
 //
@@ -140,9 +140,9 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
           const ny = triData.data[off + 4]!
           const nz = triData.data[off + 5]!
 
-          // Use absolute facing so both sides of surfaces contribute color
-          // (prevents vertical walls from being invisible to probes above them)
-          const facing = Math.abs(dirX * nx + dirY * ny + dirZ * nz)
+          // Only count front-facing triangles (normal faces toward probe)
+          const facing = -(dirX * nx + dirY * ny + dirZ * nz) // dot(normal, -dir)
+          if (facing <= 0) continue
 
           // Triangle area
           const area = triData.data[off + 6]!
