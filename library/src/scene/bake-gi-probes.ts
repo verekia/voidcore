@@ -288,7 +288,7 @@ const CELL_EXTERIOR = 2 // Reachable from grid boundary (outside)
  * 1) Mark probes near mesh geometry as "occupied" (the shell)
  * 2) Flood fill from grid boundary through non-occupied probes → "exterior"
  * 3) Everything not reached is "interior"
- * 4) Keep only exterior probes adjacent to an occupied or interior cell
+ * 4) Keep only occupied probes adjacent to an exterior cell (sits on the surface)
  */
 const _cullToSurface = (grid: GIProbeGrid, triData: TriangleData): void => {
   const [rx, ry, rz] = grid.resolution
@@ -371,31 +371,31 @@ const _cullToSurface = (grid: GIProbeGrid, triData: TriangleData): void => {
     }
   }
 
-  // 3) Keep only exterior probes that neighbor at least one non-exterior cell
-  //    (occupied or interior). This gives a single layer hugging the mesh surface.
+  // 3) Keep only occupied probes that neighbor at least one exterior cell.
+  //    This places the shell directly on the mesh surface rather than one layer outside it.
   for (let iz = 0; iz < rz; iz++) {
     for (let iy = 0; iy < ry; iy++) {
       for (let ix = 0; ix < rx; ix++) {
         const idx = iz * xySlice + iy * rx + ix
         const cell = cells[idx]!
 
-        // Non-exterior probes (occupied + interior) are always culled
-        if (cell !== CELL_EXTERIOR) {
+        // Exterior and interior probes are always culled
+        if (cell !== CELL_OCCUPIED) {
           const probeOff = idx * 12
           for (let k = 0; k < 12; k++) grid.data[probeOff + k] = 0
           continue
         }
 
-        // Exterior probe: keep only if adjacent to a non-exterior cell
-        let hasNonExterior = false
-        if (ix > 0 && cells[idx - 1] !== CELL_EXTERIOR) hasNonExterior = true
-        else if (ix < rx - 1 && cells[idx + 1] !== CELL_EXTERIOR) hasNonExterior = true
-        else if (iy > 0 && cells[idx - rx] !== CELL_EXTERIOR) hasNonExterior = true
-        else if (iy < ry - 1 && cells[idx + rx] !== CELL_EXTERIOR) hasNonExterior = true
-        else if (iz > 0 && cells[idx - xySlice] !== CELL_EXTERIOR) hasNonExterior = true
-        else if (iz < rz - 1 && cells[idx + xySlice] !== CELL_EXTERIOR) hasNonExterior = true
+        // Occupied probe: keep only if adjacent to at least one exterior cell
+        let hasExterior = false
+        if (ix > 0 && cells[idx - 1] === CELL_EXTERIOR) hasExterior = true
+        else if (ix < rx - 1 && cells[idx + 1] === CELL_EXTERIOR) hasExterior = true
+        else if (iy > 0 && cells[idx - rx] === CELL_EXTERIOR) hasExterior = true
+        else if (iy < ry - 1 && cells[idx + rx] === CELL_EXTERIOR) hasExterior = true
+        else if (iz > 0 && cells[idx - xySlice] === CELL_EXTERIOR) hasExterior = true
+        else if (iz < rz - 1 && cells[idx + xySlice] === CELL_EXTERIOR) hasExterior = true
 
-        if (!hasNonExterior) {
+        if (!hasExterior) {
           const probeOff = idx * 12
           for (let k = 0; k < 12; k++) grid.data[probeOff + k] = 0
         }
