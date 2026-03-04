@@ -171,7 +171,11 @@ fn sampleGI(worldPos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
   let n3 = vec3<f32>(normal.x, normal.y, normal.z) * cosW;
   let raw = max(dc + vec3<f32>(dot(shR.yzw, n3), dot(shG.yzw, n3), dot(shB.yzw, n3)), vec3<f32>(0.0));
   let rawMax = max(raw.r, max(raw.g, raw.b));
-  let tint = select(vec3<f32>(1.0), raw / rawMax, rawMax > 0.001);
+  var tint = select(vec3<f32>(1.0), raw / rawMax, rawMax > 0.001);
+  // Normalize tint to unit luminance so GI only shifts chromaticity, not brightness.
+  // Without this, saturated colors (e.g. orange) darken the ambient significantly.
+  let tintLum = 0.299 * tint.r + 0.587 * tint.g + 0.114 * tint.b;
+  tint = select(tint, tint / tintLum, tintLum > 0.001);
   return mix(vec3<f32>(1.0), tint, min(rawMax * frame.giParams.y, 1.0));
 }`
 

@@ -193,6 +193,10 @@ vec3 sampleGI(vec3 worldPos, vec3 normal) {
   vec3 raw = max(dc + vec3(dot(shR.yzw, n3), dot(shG.yzw, n3), dot(shB.yzw, n3)), vec3(0.0));
   float rawMax = max(raw.r, max(raw.g, raw.b));
   vec3 tint = rawMax > 0.001 ? raw / rawMax : vec3(1.0);
+  // Normalize tint to unit luminance so GI only shifts chromaticity, not brightness.
+  // Without this, saturated colors (e.g. orange) darken the ambient significantly.
+  float tintLum = 0.299 * tint.r + 0.587 * tint.g + 0.114 * tint.b;
+  if (tintLum > 0.001) tint /= tintLum;
   return mix(vec3(1.0), tint, min(rawMax * u_giParams.y, 1.0));
 }
 `
