@@ -16,6 +16,7 @@ export { Group } from './scene/group'
 export { PerspectiveCamera, type CameraOptions } from './scene/camera'
 export { AmbientLight, type AmbientLightOptions, DirectionalLight, type DirectionalLightOptions } from './scene/light'
 export { GIProbeGrid, type GIProbeGridOptions, type ProbeData } from './scene/gi-probes'
+export { bakeGIProbes, type BakeGIMesh, type BakeGIOptions } from './scene/bake-gi-probes'
 export { cloneScene, type CloneOptions, type CloneResult } from './scene/clone'
 
 // Geometry

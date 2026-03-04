@@ -14,7 +14,13 @@ import {
 
 import { staticBundleSrc, cityAoSrc, grassAoSrc, grassNormalSrc, groundAoSrc, groundNormalSrc } from './assets'
 
-const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
+const EdenMesh = ({
+  onReady,
+  onGeometry,
+}: {
+  onReady?: () => void
+  onGeometry?: (geometry: import('voidcore').Geometry) => void
+}) => {
   const aoTexture = useKTX2(cityAoSrc)
   const grassAoTexture = useKTX2(grassAoSrc)
   const groundAoTexture = useKTX2(groundAoSrc)
@@ -207,13 +213,14 @@ const EdenMesh = ({ onReady }: { onReady?: () => void }) => {
   const material = useMemo(() => {
     prebuildBVH(geometry)
     onReady?.()
+    onGeometry?.(geometry)
     return new LambertMaterial({
       aoMap: aoTexture,
       aoIntensity: 2,
       emissiveBrightness: 0,
       darkness: 0.5,
     })
-  }, [geometry, aoTexture, onReady])
+  }, [geometry, aoTexture, onReady, onGeometry])
 
   return (
     <Suspense fallback={null}>
