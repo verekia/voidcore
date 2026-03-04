@@ -17,6 +17,12 @@
 // Probes beyond this distance get zeroed out (neutral tint in the shader). This avoids
 // wasting computation on probes floating in empty space (e.g. high in the air above terrain).
 //
+// The optional `cullInterior` flag detects probes that are inside solid terrain geometry.
+// For each probe, it finds the nearest triangle and checks the signed distance from the probe
+// to that triangle's plane: if negative (probe is on the back-face side), the probe is buried
+// underground and gets zeroed out. This prevents incorrect lighting from probes embedded in
+// terrain surfaces.
+//
 // bakeGIProbes(grid, meshes, options?) – Fills the grid with baked indirect lighting data.
 
 import type { Geometry } from '../geometry/geometry'
@@ -40,6 +46,11 @@ export interface BakeGIOptions {
   skyColor?: [number, number, number]
   /** Sky intensity multiplier (default: 0.15). */
   skyIntensity?: number
+  /** Cull probes that are inside terrain geometry.
+   *  For each probe, finds the nearest triangle and checks if the probe is on the
+   *  back-face side of that triangle's plane. If so, the probe is underground and
+   *  gets zeroed out. Default: false. */
+  cullInterior?: boolean
 }
 
 /**
@@ -63,6 +74,7 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
   const maxDistSq = maxDistance > 0 ? maxDistance * maxDistance : 0
   const skyColor = options?.skyColor ?? [0.4, 0.6, 0.9]
   const skyIntensity = options?.skyIntensity ?? 0.15
+  const cullInterior = options?.cullInterior ?? false
 
   // Pre-extract all triangle data from meshes (centroid, normal, color, area)
   // to avoid per-probe per-mesh iteration overhead
@@ -77,8 +89,9 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
         const pz = bMin[2] + iz * stepZ
 
         // Skip probes too far from any mesh surface
-        if (maxDistSq > 0) {
+        if (maxDistSq > 0 || cullInterior) {
           let nearestSq = Infinity
+          let nearestIdx = -1
           for (let t = 0; t < triData.count; t++) {
             const off = t * 13
             const dx = triData.data[off]! - px
@@ -87,14 +100,32 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
             const dSq = dx * dx + dy * dy + dz * dz
             if (dSq < nearestSq) {
               nearestSq = dSq
-              if (nearestSq <= maxDistSq) break // Early exit: close enough
+              nearestIdx = t
+              if (!cullInterior && nearestSq <= maxDistSq) break // Early exit: close enough
             }
           }
-          if (nearestSq > maxDistSq) {
+          if (maxDistSq > 0 && nearestSq > maxDistSq) {
             // Zero out this probe (neutral tint in shader)
             const probeOff = (iz * ry * rx + iy * rx + ix) * 12
             for (let k = 0; k < 12; k++) grid.data[probeOff + k] = 0
             continue
+          }
+          // Cull probes inside terrain: check if probe is on the back-face side
+          // of the nearest triangle's plane (signed distance < 0 means underground)
+          if (cullInterior && nearestIdx >= 0) {
+            const off = nearestIdx * 13
+            // Vector from triangle centroid to probe
+            const toPx = px - triData.data[off]!
+            const toPy = py - triData.data[off + 1]!
+            const toPz = pz - triData.data[off + 2]!
+            // Dot with face normal: negative means probe is on the back side
+            const signedDist =
+              toPx * triData.data[off + 3]! + toPy * triData.data[off + 4]! + toPz * triData.data[off + 5]!
+            if (signedDist < 0) {
+              const probeOff = (iz * ry * rx + iy * rx + ix) * 12
+              for (let k = 0; k < 12; k++) grid.data[probeOff + k] = 0
+              continue
+            }
           }
         }
 

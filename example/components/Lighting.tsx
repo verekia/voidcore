@@ -40,6 +40,7 @@ const Lighting = ({
     if (!edenGeometry) return
     bakeGIProbes(grid, [{ geometry: edenGeometry, position: EDEN_POSITION }], {
       maxDistance: 5,
+      cullInterior: true,
       skyColor: [0.4, 0.6, 0.9],
       skyIntensity: 0.15,
     })
