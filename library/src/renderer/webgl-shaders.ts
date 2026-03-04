@@ -182,9 +182,11 @@ vec3 sampleGI(vec3 worldPos, vec3 normal) {
   vec4 shG = texture(u_giProbeTexture, vec3(x, y, (zBase + res.z) / depth));
   vec4 shB = texture(u_giProbeTexture, vec3(x, y, (zBase + res.z * 2.0) / depth));
 
-  // Drop DC term (basis.x=0) — only directional SH drives the tint so that
-  // surfaces don't get reinforced by their own color bouncing back.
-  vec4 basis = vec4(0.0, normal.x, normal.y, normal.z);
+  // dcWeight (u_giParams.z): 0 = directional-only (no self-reinforcement),
+  // 1 = full incident radiance with cosine convolution (L1 ratio = 2/3).
+  float dcW = u_giParams.z;
+  float cosW = 1.0 - dcW * 0.3333;
+  vec4 basis = vec4(dcW, normal.x * cosW, normal.y * cosW, normal.z * cosW);
   vec3 raw = max(vec3(dot(shR, basis), dot(shG, basis), dot(shB, basis)), vec3(0.0));
   float rawMax = max(raw.r, max(raw.g, raw.b));
   vec3 tint = rawMax > 0.001 ? raw / rawMax : vec3(1.0);

@@ -1,17 +1,18 @@
 // GI Probe Helper – Debug visualization for GI probe grids.
 //
-// Renders each probe in a GIProbeGrid as a small colored sphere. The sphere color represents
-// the probe's constant (DC) irradiance — the omnidirectional ambient color at that location.
-// This lets you see the spatial distribution of indirect lighting across the scene.
+// Renders each probe in a GIProbeGrid as a small colored sphere showing its full L1 SH
+// irradiance — each vertex on the sphere is colored by evaluating the SH in that vertex's
+// direction, so you can see both the average color and the directional variation at each
+// probe location. This is much more informative than showing only the DC (constant) term.
 //
-// Colors are auto-normalized so the brightest probe maps to full white, making the relative
-// spatial variation clearly visible regardless of absolute GI intensity.
+// Colors are auto-normalized so the brightest value across all probes maps to full white,
+// making the relative spatial and directional variation clearly visible.
 //
 // Probes with zero DC values (inactive/culled by maxDistance) are skipped entirely — no geometry
 // is generated for them.
 //
-// Implementation: Generates a merged geometry with one low-poly sphere per active probe. Probe
-// colors are stored in the normal attribute (abusing normals as a per-vertex color channel), and
+// Implementation: Generates a merged geometry with one low-poly sphere per active probe. Per-vertex
+// SH-evaluated colors are stored in the normal attribute (abusing normals as a color channel), and
 // a custom shader on a BasicMaterial reads the raw normals in the vertex stage — bypassing the
 // normal-matrix transform — then outputs them as fragment color.
 //
@@ -45,12 +46,15 @@ export class GIProbeHelper {
   mesh: Mesh
   private _geometry: Geometry
   private _radius: number
+  /** Per-vertex unit sphere directions (xyz), same layout as normals. */
+  private _directions: Float32Array
 
   constructor(grid: GIProbeGrid, options?: GIProbeHelperOptions) {
     this._radius = options?.radius ?? 0.4
 
     // Build merged sphere geometry (only for active probes)
-    const { positions, normals, uvs, indices } = this._buildMergedSpheres(grid)
+    const { positions, normals, uvs, indices, directions } = this._buildMergedSpheres(grid)
+    this._directions = directions
     this._geometry = new Geometry({
       positions,
       normals,
@@ -58,7 +62,7 @@ export class GIProbeHelper {
       uvs,
     })
 
-    // Write normalized probe colors into normals
+    // Write L1 SH-evaluated probe colors into normals
     this._writeColors(grid)
 
     const material = new BasicMaterial({
@@ -91,12 +95,14 @@ export class GIProbeHelper {
   /**
    * Build merged sphere geometry for active probes only. Positions are computed from the
    * grid's bounds and resolution. Normals are placeholder (overwritten by _writeColors).
+   * Also returns a directions array with per-vertex unit sphere directions for SH evaluation.
    */
   private _buildMergedSpheres(grid: GIProbeGrid): {
     positions: Float32Array
     normals: Float32Array
     uvs: Float32Array
     indices: Uint16Array | Uint32Array
+    directions: Float32Array
   } {
     const [rx, ry, rz] = grid.resolution
     const probeCount = rx * ry * rz
@@ -126,6 +132,7 @@ export class GIProbeHelper {
     const totalIndices = activeCount * idxPerProbe
     const positions = new Float32Array(totalVerts * 3)
     const normals = new Float32Array(totalVerts * 3)
+    const directions = new Float32Array(totalVerts * 3)
     const uvs = new Float32Array(totalVerts * 2)
     const useUint32 = totalVerts > 65535
     const indices = useUint32 ? new Uint32Array(totalIndices) : new Uint16Array(totalIndices)
@@ -171,10 +178,15 @@ export class GIProbeHelper {
           positions[p + 1] = cy + ny * r
           positions[p + 2] = cz + nz * r
 
-          // Normals will be overwritten by _writeColors; just zero for now
+          // Store unit sphere direction for SH evaluation in _writeColors
+          directions[p] = nx
+          directions[p + 1] = ny
+          directions[p + 2] = nz
+
+          // Normals will be overwritten by _writeColors
           normals[p] = 0
           normals[p + 1] = 0
-          normals[p + 2] = 1 // Default to avoid zero-length normal issues
+          normals[p + 2] = 1
 
           const uv = (vOff + vi) * 2
           uvs[uv] = u
@@ -190,44 +202,60 @@ export class GIProbeHelper {
       }
     }
 
-    return { positions, normals, uvs, indices }
+    return { positions, normals, uvs, indices, directions }
   }
 
   /**
-   * Write normalized probe DC colors into the normals array.
-   * The brightest channel across all probes maps to 1.0.
-   * Only writes to active (non-zero DC) probes matching _buildMergedSpheres.
+   * Evaluate full L1 SH per vertex and write normalized colors into normals.
+   * Each vertex gets: color(dir) = c0 + c1*dir.x + c2*dir.y + c3*dir.z per channel.
+   * The brightest value across all probes/vertices maps to 1.0.
    */
   private _writeColors(grid: GIProbeGrid): void {
     const [rx, ry, rz] = grid.resolution
     const normals = this._geometry.normals
+    const dirs = this._directions
     const probeCount = rx * ry * rz
 
-    // Find max DC value across all active probes for normalization
-    let maxDC = 0
+    // First pass: find max SH-evaluated value across all active probes for normalization.
+    // Sample a few representative directions per probe (±X, ±Y, ±Z) for efficiency.
+    let maxVal = 0
     for (let i = 0; i < probeCount; i++) {
+      if (!_isProbeActive(grid.data, i)) continue
       const off = i * 12
-      maxDC = Math.max(maxDC, Math.abs(grid.data[off]!), Math.abs(grid.data[off + 4]!), Math.abs(grid.data[off + 8]!))
+      const rDC = grid.data[off]!,     rX = grid.data[off + 1]!, rY = grid.data[off + 2]!, rZ = grid.data[off + 3]!
+      const gDC = grid.data[off + 4]!, gX = grid.data[off + 5]!, gY = grid.data[off + 6]!, gZ = grid.data[off + 7]!
+      const bDC = grid.data[off + 8]!, bX = grid.data[off + 9]!, bY = grid.data[off + 10]!, bZ = grid.data[off + 11]!
+      // Max possible value: DC + |directional| (when direction aligns perfectly)
+      maxVal = Math.max(maxVal,
+        rDC + Math.abs(rX), rDC + Math.abs(rY), rDC + Math.abs(rZ),
+        gDC + Math.abs(gX), gDC + Math.abs(gY), gDC + Math.abs(gZ),
+        bDC + Math.abs(bX), bDC + Math.abs(bY), bDC + Math.abs(bZ),
+      )
     }
 
-    const invMax = maxDC > 0.001 ? 1.0 / maxDC : 1.0
+    const invMax = maxVal > 0.001 ? 1.0 / maxVal : 1.0
 
-    // Write colors only for active probes (same order as _buildMergedSpheres)
+    // Second pass: evaluate SH per vertex and write colors
     let activeIdx = 0
     for (let i = 0; i < probeCount; i++) {
       if (!_isProbeActive(grid.data, i)) continue
 
-      const dataOff = i * 12
-      const cr = grid.data[dataOff]! * invMax
-      const cg = grid.data[dataOff + 4]! * invMax
-      const cb = grid.data[dataOff + 8]! * invMax
+      const off = i * 12
+      const rDC = grid.data[off]!,     rX = grid.data[off + 1]!, rY = grid.data[off + 2]!, rZ = grid.data[off + 3]!
+      const gDC = grid.data[off + 4]!, gX = grid.data[off + 5]!, gY = grid.data[off + 6]!, gZ = grid.data[off + 7]!
+      const bDC = grid.data[off + 8]!, bX = grid.data[off + 9]!, bY = grid.data[off + 10]!, bZ = grid.data[off + 11]!
 
       const vBase = activeIdx * VERTS_PER_PROBE
       for (let v = 0; v < VERTS_PER_PROBE; v++) {
         const p = (vBase + v) * 3
-        normals[p] = cr
-        normals[p + 1] = cg
-        normals[p + 2] = cb
+        const dx = dirs[p]!
+        const dy = dirs[p + 1]!
+        const dz = dirs[p + 2]!
+
+        // Evaluate L1 SH: c0 + c1*dir.x + c2*dir.y + c3*dir.z
+        normals[p] = Math.max(0, (rDC + rX * dx + rY * dy + rZ * dz) * invMax)
+        normals[p + 1] = Math.max(0, (gDC + gX * dx + gY * dy + gZ * dz) * invMax)
+        normals[p + 2] = Math.max(0, (bDC + bX * dx + bY * dy + bZ * dz) * invMax)
       }
 
       activeIdx++

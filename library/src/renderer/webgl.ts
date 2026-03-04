@@ -1894,7 +1894,8 @@ export class WebGLRenderer implements Renderer {
     if (giGrid) {
       fd[56] = 1.0
       fd[57] = giGrid.intensity
-      // fd[58], fd[59] = 0 (pad)
+      fd[58] = giGrid.dcWeight
+      // fd[59] = 0 (pad)
       fd[60] = giGrid.boundsMin[0]
       fd[61] = giGrid.boundsMin[1]
       fd[62] = giGrid.boundsMin[2]

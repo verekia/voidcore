@@ -285,7 +285,7 @@ export const useGIProbes = (options: UseGIProbesOptions): GIProbeGrid => {
       return g
     },
     // eslint-disable-next-line
-    [options.boundsMin?.join(','), options.boundsMax?.join(','), options.resolution?.join(','), options.intensity],
+    [options.boundsMin?.join(','), options.boundsMax?.join(','), options.resolution?.join(','), options.intensity, options.dcWeight],
   )
 
   useEffect(() => {

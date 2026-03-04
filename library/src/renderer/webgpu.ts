@@ -2697,7 +2697,8 @@ export class WebGPURenderer implements Renderer {
     if (giGrid) {
       fd[52] = 1.0
       fd[53] = giGrid.intensity
-      // fd[54], fd[55] = 0 (pad, already zeroed by fill)
+      fd[54] = giGrid.dcWeight
+      // fd[55] = 0 (pad, already zeroed by fill)
       fd[56] = giGrid.boundsMin[0]
       fd[57] = giGrid.boundsMin[1]
       fd[58] = giGrid.boundsMin[2]

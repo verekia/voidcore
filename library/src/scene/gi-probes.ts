@@ -1,6 +1,6 @@
 // GI Probes – Global Illumination light probes for indirect lighting.
 //
-// GIProbeGrid stores a 3D grid of light probes, each encoding incoming irradiance
+// GIProbeGrid stores a 3D grid of light probes, each encoding incoming incident radiance
 // using L1 Spherical Harmonics (4 coefficients × 3 color channels = 12 floats per probe).
 // At render time, the fragment shader looks up the nearest probes via hardware trilinear
 // interpolation on a 3D texture, evaluates the SH for the surface normal, and adds the
@@ -10,7 +10,14 @@
 // SH L1 captures directional variation: which direction is brighter at each probe location.
 // The four basis functions are constant (DC), X, Y, and Z:
 //   irradiance(n) = c0 + c1*n.x + c2*n.y + c3*n.z
-// where c0..c3 are pre-convolved coefficients stored per color channel.
+// where c0..c3 are per-channel coefficients stored as incident radiance.
+//
+// The `dcWeight` property (0–1) controls how the SH is evaluated at shade time:
+//   dcWeight=0 (default): directional-only evaluation — drops the DC term to prevent
+//     surfaces from being tinted by their own color (no self-reinforcement).
+//   dcWeight=1: full incident radiance with cosine convolution at shade time (L1 cosine
+//     lobe ratio = 2/3 for directional terms). More physically based but may reinforce
+//     surface colors in monochromatic environments.
 //
 // Data is uploaded to the GPU as a single 3D RGBA16F texture (gridX × gridY × gridZ*3).
 // The three color channels (R, G, B) are tiled along the Z axis:
@@ -20,6 +27,7 @@
 //
 // new GIProbeGrid(options) – Creates a probe grid with given bounds and resolution.
 // grid.setProbe(ix, iy, iz, opts) – Sets a probe's irradiance (constant or directional).
+// grid.dcWeight – Controls DC vs directional-only SH evaluation (0–1).
 // grid.needsUpdate – Flag that tells the renderer to re-upload the texture.
 
 // ─── Float32-to-Float16 conversion (matches pack.ts) ─────────────────
@@ -49,6 +57,10 @@ export interface GIProbeGridOptions {
   resolution: [number, number, number]
   /** Intensity multiplier for the GI contribution (default 1.0). */
   intensity?: number
+  /** Weight of the DC (constant) term in SH evaluation (0–1, default 0).
+   *  0 = directional-only (no self-reinforcement), 1 = full incident radiance
+   *  with cosine convolution at shade time (physically based but may reinforce colors). */
+  dcWeight?: number
 }
 
 export interface ProbeData {
@@ -71,6 +83,8 @@ export class GIProbeGrid {
   readonly resolution: [number, number, number]
   /** Intensity multiplier for the GI contribution. */
   intensity: number
+  /** Weight of the DC (constant) term in SH evaluation (0 = directional only, 1 = full). */
+  dcWeight: number
 
   /**
    * Raw SH data: 12 floats per probe (4 coefficients × 3 channels).
@@ -91,6 +105,7 @@ export class GIProbeGrid {
     this.boundsMax = [...opts.boundsMax]
     this.resolution = [...opts.resolution]
     this.intensity = opts.intensity ?? 1.0
+    this.dcWeight = opts.dcWeight ?? 0
     this.probeCount = opts.resolution[0] * opts.resolution[1] * opts.resolution[2]
     this.data = new Float32Array(this.probeCount * 12)
   }
