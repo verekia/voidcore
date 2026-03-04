@@ -205,6 +205,35 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
         gZ += skyG * 0.5
         bZ += skyB * 0.5
 
+        // Clamp per-channel directional magnitude so the SH stays non-negative.
+        // The shader boosts directional terms by 2×, so limit to DC/2 to prevent
+        // dark spots on surfaces near probes with extreme directional bias.
+        const dcLum = 0.299 * rDC + 0.587 * gDC + 0.114 * bDC
+        const maxDir = dcLum * 0.5
+        if (maxDir > 0.001) {
+          const rMag = Math.sqrt(rX * rX + rY * rY + rZ * rZ)
+          if (rMag > maxDir) {
+            const s = maxDir / rMag
+            rX *= s
+            rY *= s
+            rZ *= s
+          }
+          const gMag = Math.sqrt(gX * gX + gY * gY + gZ * gZ)
+          if (gMag > maxDir) {
+            const s = maxDir / gMag
+            gX *= s
+            gY *= s
+            gZ *= s
+          }
+          const bMag = Math.sqrt(bX * bX + bY * bY + bZ * bZ)
+          if (bMag > maxDir) {
+            const s = maxDir / bMag
+            bX *= s
+            bY *= s
+            bZ *= s
+          }
+        }
+
         // Write raw SH coefficients
         const probeOff = (iz * ry * rx + iy * rx + ix) * 12
         grid.data[probeOff] = rDC
