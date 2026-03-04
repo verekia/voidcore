@@ -39,6 +39,7 @@ const Lighting = ({
   useEffect(() => {
     if (!edenGeometry) return
     bakeGIProbes(grid, [{ geometry: edenGeometry, position: EDEN_POSITION }], {
+      maxDistance: 15,
       skyColor: [0.4, 0.6, 0.9],
       skyIntensity: 0.15,
     })

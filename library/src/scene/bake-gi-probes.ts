@@ -13,6 +13,10 @@
 // After accumulating geometry contributions, an optional sky color is added for probes
 // with upward visibility (the Z+ hemisphere), simulating ambient sky illumination.
 //
+// The optional `maxDistance` parameter culls probes that are too far from any mesh surface.
+// Probes beyond this distance get zeroed out (neutral tint in the shader). This avoids
+// wasting computation on probes floating in empty space (e.g. high in the air above terrain).
+//
 // bakeGIProbes(grid, meshes, options?) – Fills the grid with baked indirect lighting data.
 
 import type { Geometry } from '../geometry/geometry'
@@ -28,6 +32,10 @@ export interface BakeGIMesh {
 export interface BakeGIOptions {
   /** Search radius around each probe (default: 2× the largest grid cell dimension). */
   radius?: number
+  /** Maximum distance from any mesh surface for a probe to be active.
+   *  Probes farther than this from all geometry are zeroed out (no tint).
+   *  When unset, all probes are baked regardless of distance. */
+  maxDistance?: number
   /** Sky color to add for upward-facing probes (default: [0.4, 0.6, 0.9]). */
   skyColor?: [number, number, number]
   /** Sky intensity multiplier (default: 0.15). */
@@ -51,6 +59,8 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
   const defaultRadius = 2 * Math.max(stepX, stepY, stepZ)
   const radius = options?.radius ?? defaultRadius
   const radiusSq = radius * radius
+  const maxDistance = options?.maxDistance ?? 0
+  const maxDistSq = maxDistance > 0 ? maxDistance * maxDistance : 0
   const skyColor = options?.skyColor ?? [0.4, 0.6, 0.9]
   const skyIntensity = options?.skyIntensity ?? 0.15
 
@@ -65,6 +75,28 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
         const px = bMin[0] + ix * stepX
         const py = bMin[1] + iy * stepY
         const pz = bMin[2] + iz * stepZ
+
+        // Skip probes too far from any mesh surface
+        if (maxDistSq > 0) {
+          let nearestSq = Infinity
+          for (let t = 0; t < triData.count; t++) {
+            const off = t * 13
+            const dx = triData.data[off]! - px
+            const dy = triData.data[off + 1]! - py
+            const dz = triData.data[off + 2]! - pz
+            const dSq = dx * dx + dy * dy + dz * dz
+            if (dSq < nearestSq) {
+              nearestSq = dSq
+              if (nearestSq <= maxDistSq) break // Early exit: close enough
+            }
+          }
+          if (nearestSq > maxDistSq) {
+            // Zero out this probe (neutral tint in shader)
+            const probeOff = (iz * ry * rx + iy * rx + ix) * 12
+            for (let k = 0; k < 12; k++) grid.data[probeOff + k] = 0
+            continue
+          }
+        }
 
         // SH accumulators: [dc, x, y, z] per channel
         let rDC = 0,
