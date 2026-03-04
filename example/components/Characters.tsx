@@ -168,13 +168,13 @@ const Character = memo(({ x, y, startAngle, timeOffset }: CharacterProps) => {
     if (s.flashFramesLeft > 0) s.flashFramesLeft--
     ;(bodyMesh.outline as MeshOutline).color = flashColor
 
-    // Random green damage tint (smooth fade-out over ~200ms)
+    // Random green damage tint (smooth fade-out over ~800ms)
     if (s.tintIntensity <= 0 && elapsed >= s.nextTint) {
       s.tintIntensity = 1
       s.nextTint = elapsed + Math.random() * 4 + 2
     }
     if (s.tintIntensity > 0) {
-      s.tintIntensity = Math.max(0, s.tintIntensity - dt / 0.2)
+      s.tintIntensity = Math.max(0, s.tintIntensity - dt / 0.8)
     }
     bodyMesh.tintColor = [0, 1, 0]
     bodyMesh.tintIntensity = s.tintIntensity
