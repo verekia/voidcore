@@ -23,6 +23,13 @@
 // underground and gets zeroed out. This prevents incorrect lighting from probes embedded in
 // terrain surfaces.
 //
+// The optional `surfaceOnly` flag keeps only probes on the outer surface of the world mesh.
+// First, every probe is classified as inside or outside using the nearest-triangle signed
+// distance. Then only "boundary" probes are kept — those that have at least one of their 6
+// axis-aligned neighbors with a different inside/outside classification. All other probes
+// (deep interior AND far exterior) are zeroed out. This gives exactly one layer of probes
+// hugging the mesh surface with full coverage, no wasted probes, and no need for maxDistance.
+//
 // bakeGIProbes(grid, meshes, options?) – Fills the grid with baked indirect lighting data.
 
 import type { Geometry } from '../geometry/geometry'
@@ -51,6 +58,12 @@ export interface BakeGIOptions {
    *  back-face side of that triangle's plane. If so, the probe is underground and
    *  gets zeroed out. Default: false. */
   cullInterior?: boolean
+  /** Keep only probes on the outer surface of the world mesh.
+   *  Classifies each probe as inside/outside, then keeps only boundary probes
+   *  (those with at least one neighbor of a different classification). All deep
+   *  interior and far exterior probes are zeroed out. Overrides maxDistance and
+   *  cullInterior. Default: false. */
+  surfaceOnly?: boolean
 }
 
 /**
@@ -75,6 +88,7 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
   const skyColor = options?.skyColor ?? [0.4, 0.6, 0.9]
   const skyIntensity = options?.skyIntensity ?? 0.15
   const cullInterior = options?.cullInterior ?? false
+  const surfaceOnly = options?.surfaceOnly ?? false
 
   // Pre-extract all triangle data from meshes (centroid, normal, color, area)
   // to avoid per-probe per-mesh iteration overhead
@@ -251,7 +265,101 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
     }
   }
 
+  // Surface-only pass: classify probes as inside/outside, keep only boundary probes
+  if (surfaceOnly) {
+    _cullToSurface(grid, triData)
+  }
+
   grid.needsUpdate = true
+}
+
+// ─── Internal: surface-only culling ──────────────────────────────────
+
+/**
+ * Classify every probe as inside (1) or outside (0) the mesh using the nearest
+ * triangle's signed distance. Then zero out all probes that are NOT on the
+ * boundary — i.e. probes whose 6 axis-neighbors all share the same classification.
+ */
+const _cullToSurface = (grid: GIProbeGrid, triData: TriangleData): void => {
+  const [rx, ry, rz] = grid.resolution
+  const bMin = grid.boundsMin
+  const bMax = grid.boundsMax
+  const stepX = rx > 1 ? (bMax[0] - bMin[0]) / (rx - 1) : 0
+  const stepY = ry > 1 ? (bMax[1] - bMin[1]) / (ry - 1) : 0
+  const stepZ = rz > 1 ? (bMax[2] - bMin[2]) / (rz - 1) : 0
+  const probeCount = rx * ry * rz
+
+  // 1) Classify each probe: 1 = inside, 0 = outside
+  const inside = new Uint8Array(probeCount)
+  for (let iz = 0; iz < rz; iz++) {
+    for (let iy = 0; iy < ry; iy++) {
+      for (let ix = 0; ix < rx; ix++) {
+        const px = bMin[0] + ix * stepX
+        const py = bMin[1] + iy * stepY
+        const pz = bMin[2] + iz * stepZ
+
+        // Find nearest triangle
+        let nearestSq = Infinity
+        let nearestIdx = -1
+        for (let t = 0; t < triData.count; t++) {
+          const off = t * 13
+          const dx = triData.data[off]! - px
+          const dy = triData.data[off + 1]! - py
+          const dz = triData.data[off + 2]! - pz
+          const dSq = dx * dx + dy * dy + dz * dz
+          if (dSq < nearestSq) {
+            nearestSq = dSq
+            nearestIdx = t
+          }
+        }
+
+        if (nearestIdx >= 0) {
+          const off = nearestIdx * 13
+          // Signed distance: dot(probe - centroid, face normal)
+          const toPx = px - triData.data[off]!
+          const toPy = py - triData.data[off + 1]!
+          const toPz = pz - triData.data[off + 2]!
+          const signedDist =
+            toPx * triData.data[off + 3]! + toPy * triData.data[off + 4]! + toPz * triData.data[off + 5]!
+          if (signedDist < 0) {
+            inside[iz * ry * rx + iy * rx + ix] = 1
+          }
+        }
+      }
+    }
+  }
+
+  // 2) Keep only boundary probes (adjacent to at least one neighbor with different classification)
+  for (let iz = 0; iz < rz; iz++) {
+    for (let iy = 0; iy < ry; iy++) {
+      for (let ix = 0; ix < rx; ix++) {
+        const idx = iz * ry * rx + iy * rx + ix
+        const val = inside[idx]!
+        let isBoundary = false
+
+        // Check 6 axis-aligned neighbors
+        if (ix > 0 && inside[idx - 1] !== val) isBoundary = true
+        else if (ix < rx - 1 && inside[idx + 1] !== val) isBoundary = true
+        else if (iy > 0 && inside[idx - rx] !== val) isBoundary = true
+        else if (iy < ry - 1 && inside[idx + rx] !== val) isBoundary = true
+        else if (iz > 0 && inside[idx - ry * rx] !== val) isBoundary = true
+        else if (iz < rz - 1 && inside[idx + ry * rx] !== val) isBoundary = true
+
+        // Also treat grid-edge outside probes adjacent to inside as boundary
+        // (edges of the grid are implicitly "outside" neighbors)
+        if (!isBoundary && val === 1) {
+          if (ix === 0 || ix === rx - 1 || iy === 0 || iy === ry - 1 || iz === 0 || iz === rz - 1) {
+            isBoundary = true
+          }
+        }
+
+        if (!isBoundary) {
+          const probeOff = idx * 12
+          for (let k = 0; k < 12; k++) grid.data[probeOff + k] = 0
+        }
+      }
+    }
+  }
 }
 
 // ─── Internal: pre-extract triangle data ─────────────────────────────
