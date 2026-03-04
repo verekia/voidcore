@@ -279,6 +279,8 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
  * Classify every probe as inside (1) or outside (0) the mesh using the nearest
  * triangle's signed distance. Then zero out all probes that are NOT on the
  * boundary — i.e. probes whose 6 axis-neighbors all share the same classification.
+ * Boundary probes must also be within proximity of actual geometry (2× max cell step)
+ * to avoid false boundaries from noisy classification of distant probes.
  */
 const _cullToSurface = (grid: GIProbeGrid, triData: TriangleData): void => {
   const [rx, ry, rz] = grid.resolution
@@ -289,17 +291,23 @@ const _cullToSurface = (grid: GIProbeGrid, triData: TriangleData): void => {
   const stepZ = rz > 1 ? (bMax[2] - bMin[2]) / (rz - 1) : 0
   const probeCount = rx * ry * rz
 
-  // 1) Classify each probe: 1 = inside, 0 = outside
+  // Proximity threshold: probes farther than this from any triangle are not surface probes
+  const maxStep = Math.max(stepX, stepY, stepZ)
+  const proxThresholdSq = (2 * maxStep) * (2 * maxStep)
+
+  // 1) Classify each probe: 1 = inside, 0 = outside. Also store nearest distance².
   const inside = new Uint8Array(probeCount)
+  const nearestDistSq = new Float32Array(probeCount)
   for (let iz = 0; iz < rz; iz++) {
     for (let iy = 0; iy < ry; iy++) {
       for (let ix = 0; ix < rx; ix++) {
         const px = bMin[0] + ix * stepX
         const py = bMin[1] + iy * stepY
         const pz = bMin[2] + iz * stepZ
+        const idx = iz * ry * rx + iy * rx + ix
 
         // Find nearest triangle
-        let nearestSq = Infinity
+        let bestSq = Infinity
         let nearestIdx = -1
         for (let t = 0; t < triData.count; t++) {
           const off = t * 13
@@ -307,11 +315,13 @@ const _cullToSurface = (grid: GIProbeGrid, triData: TriangleData): void => {
           const dy = triData.data[off + 1]! - py
           const dz = triData.data[off + 2]! - pz
           const dSq = dx * dx + dy * dy + dz * dz
-          if (dSq < nearestSq) {
-            nearestSq = dSq
+          if (dSq < bestSq) {
+            bestSq = dSq
             nearestIdx = t
           }
         }
+
+        nearestDistSq[idx] = bestSq
 
         if (nearestIdx >= 0) {
           const off = nearestIdx * 13
@@ -322,14 +332,14 @@ const _cullToSurface = (grid: GIProbeGrid, triData: TriangleData): void => {
           const signedDist =
             toPx * triData.data[off + 3]! + toPy * triData.data[off + 4]! + toPz * triData.data[off + 5]!
           if (signedDist < 0) {
-            inside[iz * ry * rx + iy * rx + ix] = 1
+            inside[idx] = 1
           }
         }
       }
     }
   }
 
-  // 2) Keep only boundary probes (adjacent to at least one neighbor with different classification)
+  // 2) Keep only boundary probes that are also near geometry
   for (let iz = 0; iz < rz; iz++) {
     for (let iy = 0; iy < ry; iy++) {
       for (let ix = 0; ix < rx; ix++) {
@@ -345,12 +355,17 @@ const _cullToSurface = (grid: GIProbeGrid, triData: TriangleData): void => {
         else if (iz > 0 && inside[idx - ry * rx] !== val) isBoundary = true
         else if (iz < rz - 1 && inside[idx + ry * rx] !== val) isBoundary = true
 
-        // Also treat grid-edge outside probes adjacent to inside as boundary
-        // (edges of the grid are implicitly "outside" neighbors)
+        // Inside probes on grid edges are boundary (grid edge = implicit outside neighbor)
         if (!isBoundary && val === 1) {
           if (ix === 0 || ix === rx - 1 || iy === 0 || iy === ry - 1 || iz === 0 || iz === rz - 1) {
             isBoundary = true
           }
+        }
+
+        // Boundary probes must also be near actual geometry to avoid false boundaries
+        // from noisy inside/outside classification of distant probes
+        if (isBoundary && nearestDistSq[idx]! > proxThresholdSq) {
+          isBoundary = false
         }
 
         if (!isBoundary) {
