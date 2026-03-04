@@ -14,6 +14,7 @@
 //   .setStaticBundlePath – Set global static bundle GLB path.
 // useAnimations()   – Create an AnimationMixer and return action map.
 // useGrass(geo, palette, opts) – Generate grass blades on grass-marked terrain faces.
+// useGIProbes(opts)  – Create a GIProbeGrid and attach it to the scene.
 
 import { useContext, useEffect, useRef, useMemo } from 'react'
 
@@ -23,6 +24,7 @@ import { generateGrass, createGrassMaterial } from '../geometry/grass'
 import { loadGLTF } from '../loaders/gltf'
 import { loadKTX2 } from '../loaders/ktx2'
 import { cloneScene } from '../scene/clone'
+import { GIProbeGrid } from '../scene/gi-probes'
 import { Mesh } from '../scene/mesh'
 import { VoidContext, getGlobalStore } from './context'
 
@@ -34,6 +36,7 @@ import type { GLTFResult, LoadOptions } from '../loaders/gltf'
 import type { BasicMaterial, PaletteEntry } from '../materials/material'
 import type { CompressedTextureFormat } from '../materials/texture'
 import type { Texture } from '../materials/texture'
+import type { GIProbeGridOptions } from '../scene/gi-probes'
 import type { Node } from '../scene/node'
 import type { FrameCallback } from './context'
 
@@ -264,3 +267,33 @@ export const useGrass = (
     const grassGeo = generateGrass(geometry, palette, options)
     return { geometry: grassGeo, material: createGrassMaterial(palette, options) }
   }, [geometry, palette, options])
+
+// ─── useGIProbes ──────────────────────────────────────────────────────────────
+
+export interface UseGIProbesOptions extends GIProbeGridOptions {
+  /** Per-probe data setter called once after grid creation. */
+  populate?: (grid: GIProbeGrid) => void
+}
+
+export const useGIProbes = (options: UseGIProbesOptions): GIProbeGrid => {
+  const { scene } = useEngine()
+  // Serialize array deps to strings so inline arrays don't cause grid re-creation
+  const grid = useMemo(
+    () => {
+      const g = new GIProbeGrid(options)
+      if (options.populate) options.populate(g)
+      return g
+    },
+    // eslint-disable-next-line
+    [options.boundsMin?.join(','), options.boundsMax?.join(','), options.resolution?.join(','), options.intensity],
+  )
+
+  useEffect(() => {
+    scene.giProbeGrid = grid
+    return () => {
+      if (scene.giProbeGrid === grid) scene.giProbeGrid = undefined
+    }
+  }, [grid, scene])
+
+  return grid
+}

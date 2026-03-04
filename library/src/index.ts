@@ -15,6 +15,8 @@ export { Sprite } from './scene/sprite'
 export { Group } from './scene/group'
 export { PerspectiveCamera, type CameraOptions } from './scene/camera'
 export { AmbientLight, type AmbientLightOptions, DirectionalLight, type DirectionalLightOptions } from './scene/light'
+export { GIProbeGrid, type GIProbeGridOptions, type ProbeData } from './scene/gi-probes'
+export { bakeGIProbes, type BakeGIMesh, type BakeGIOptions } from './scene/bake-gi-probes'
 export { cloneScene, type CloneOptions, type CloneResult } from './scene/clone'
 
 // Geometry
@@ -67,6 +69,7 @@ export { DOT_NOISE_WGSL, DOT_NOISE_GLSL } from './renderer/shaders'
 
 // Helpers
 export { DirectionalLightHelper } from './helpers/directional-light-helper'
+export { GIProbeHelper, type GIProbeHelperOptions } from './helpers/gi-probe-helper'
 
 // Overlay
 export { createOverlayManager, type OverlayHandle, type OverlayOptions } from './overlay'
@@ -85,7 +88,9 @@ export {
   useColoredStaticGeometry,
   useAnimations,
   useGrass,
+  useGIProbes,
   type UseGLTFOptions,
+  type UseGIProbesOptions,
   type ClonedMesh,
 } from './react/hooks'
 export { VoidContext, type VoidStore, type FrameCallback } from './react/context'

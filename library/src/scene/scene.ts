@@ -4,6 +4,10 @@
 // node lookup by name. Ambient light is provided by adding an <ambientLight> node to the
 // scene graph (just like directional lights).
 //
+// GI (Global Illumination) probes can be attached via `scene.giProbeGrid`. When set, the
+// renderer samples the probe grid's 3D SH texture to add spatially-varying indirect lighting
+// to all Lambert-shaded surfaces. See gi-probes.ts for details.
+//
 // Each frame, the renderer calls scene.updateGraph() which drives an iterative depth-first
 // traversal to recompute world matrices for any nodes whose transforms have changed.
 // Pre-allocated nodeStack and dirtyStack arrays are kept on the Scene to avoid per-frame
@@ -16,8 +20,13 @@
 
 import { Node, updateWorldMatrices } from './node'
 
+import type { GIProbeGrid } from './gi-probes'
+
 export class Scene extends Node {
   private _nameMap = new Map<string, Node>()
+
+  /** Optional GI probe grid for spatially-varying indirect lighting. */
+  giProbeGrid?: GIProbeGrid
   // Pre-allocated stacks for the iterative updateWorldMatrices traversal.
   // Sized for typical scenes; JavaScript arrays grow automatically if exceeded.
   private _updateNodeStack: Node[] = []

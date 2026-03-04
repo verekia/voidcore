@@ -11,7 +11,7 @@ import Lighting from '../components/Lighting'
 import RotatingCube from '../components/RotatingCube'
 import StatsOverlay from '../components/StatsOverlay'
 
-import type { Engine } from 'voidcore'
+import type { Engine, Geometry } from 'voidcore'
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
@@ -22,7 +22,11 @@ const CHARACTER_COUNT = 400
 const IndexPage = () => {
   const [engine, setEngine] = useState<Engine | null>(null)
   const [edenReady, setEdenReady] = useState(false)
+  const [edenGeometry, setEdenGeometry] = useState<Geometry | undefined>()
+  const [debugGIProbes, setDebugGIProbes] = useState(false)
+  const [giEnabled, setGIEnabled] = useState(true)
   const onEdenReady = useCallback(() => setEdenReady(true), [])
+  const onEdenGeometry = useCallback((geo: Geometry) => setEdenGeometry(geo), [])
 
   useEffect(() => {
     const fn = async () => {
@@ -51,12 +55,12 @@ const IndexPage = () => {
           <sphereGeometry args={[{ radius: 300 }]} />
           <basicMaterial color={[0.2, 0.5, 1]} side="back" />
         </mesh>
-        <Lighting />
+        <Lighting debugGIProbes={debugGIProbes} giEnabled={giEnabled} edenGeometry={edenGeometry} />
         <CameraControls />
         <RotatingCube />
         <ColoredCubes count={10} />
         <Suspense fallback={null}>
-          <EdenMesh onReady={onEdenReady} />
+          <EdenMesh onReady={onEdenReady} onGeometry={onEdenGeometry} />
         </Suspense>
         {edenReady && (
           <Suspense fallback={null}>
@@ -66,6 +70,22 @@ const IndexPage = () => {
       </Canvas>
       <StatsOverlay engine={engine} />
       <BackendSwitch engine={engine} />
+      <button
+        onClick={() => setGIEnabled(v => !v)}
+        className={`fixed top-12 right-2.5 z-[1000] cursor-pointer rounded px-3 py-2 font-mono text-sm ${
+          giEnabled ? 'bg-green-600/80 text-white' : 'bg-black/60 text-white'
+        }`}
+      >
+        GI {giEnabled ? 'ON' : 'OFF'}
+      </button>
+      <button
+        onClick={() => setDebugGIProbes(v => !v)}
+        className={`fixed top-24 right-2.5 z-[1000] cursor-pointer rounded px-3 py-2 font-mono text-sm ${
+          debugGIProbes ? 'bg-yellow-600/80 text-white' : 'bg-black/60 text-white'
+        }`}
+      >
+        GI Probes {debugGIProbes ? 'ON' : 'OFF'}
+      </button>
     </>
   )
 }
