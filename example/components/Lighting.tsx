@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useLayoutEffect } from 'react'
 
 import { bakeGIProbes, GIProbeHelper, useGIProbes, type GIProbeGrid } from 'voidcore'
 
@@ -11,7 +11,15 @@ const GIProbeDebug = ({ grid, bakeKey }: { grid: GIProbeGrid; bakeKey?: unknown 
   return <primitive object={helper.mesh} />
 }
 
-const Lighting = ({ debugGIProbes = false, edenGeometry }: { debugGIProbes?: boolean; edenGeometry?: Geometry }) => {
+const Lighting = ({
+  debugGIProbes = false,
+  giEnabled = true,
+  edenGeometry,
+}: {
+  debugGIProbes?: boolean
+  giEnabled?: boolean
+  edenGeometry?: Geometry
+}) => {
   const lightRef = useRef<DirectionalLight>(null)
 
   const grid = useGIProbes({
@@ -20,6 +28,11 @@ const Lighting = ({ debugGIProbes = false, edenGeometry }: { debugGIProbes?: boo
     resolution: [12, 17, 3],
     intensity: 1.0,
   })
+
+  // Toggle GI on/off by setting intensity (read each frame by the renderer)
+  useLayoutEffect(() => {
+    grid.intensity = giEnabled ? 1.0 : 0.0
+  }, [grid, giEnabled])
 
   // Bake probes from actual scene geometry when it becomes available
   useEffect(() => {

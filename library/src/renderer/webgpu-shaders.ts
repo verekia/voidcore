@@ -144,7 +144,7 @@ fn sampleShadow(worldPos: vec3<f32>, NdotL: f32) -> f32 {
 }
 
 fn sampleGI(worldPos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
-  if (frame.giParams.x < 0.5) { return vec3<f32>(0.0); }
+  if (frame.giParams.x < 0.5) { return vec3<f32>(1.0); }
 
   let gridPos = clamp(
     (worldPos - frame.giBoundsMin.xyz) / frame.giBoundsSize.xyz,
@@ -162,7 +162,10 @@ fn sampleGI(worldPos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
   let shB = textureSampleLevel(giProbeTexture, giProbeSampler, vec3<f32>(x, y, (zBase + res.z * 2.0) / depth), 0.0);
 
   let basis = vec4<f32>(1.0, normal.x, normal.y, normal.z);
-  return max(vec3<f32>(dot(shR, basis), dot(shG, basis), dot(shB, basis)), vec3<f32>(0.0)) * frame.giParams.y;
+  let raw = max(vec3<f32>(dot(shR, basis), dot(shG, basis), dot(shB, basis)), vec3<f32>(0.0));
+  let rawMax = max(raw.r, max(raw.g, raw.b));
+  let tint = select(vec3<f32>(1.0), raw / rawMax, rawMax > 0.001);
+  return mix(vec3<f32>(1.0), tint, min(rawMax * frame.giParams.y, 1.0));
 }`
 
 // ─── Shadow depth shaders (vertex-only, no fragment) ─────────────────
@@ -270,7 +273,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let alpha = material.opacity;
 
   let gi = sampleGI(in.worldPos, normal);
-  let ambient = frame.ambientColor * frame.ambientIntensity + gi;
+  let ambient = frame.ambientColor * frame.ambientIntensity * gi;
   let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
@@ -363,7 +366,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let alpha = material.opacity;
 
   let gi = sampleGI(in.worldPos, normal);
-  let ambient = frame.ambientColor * frame.ambientIntensity + gi;
+  let ambient = frame.ambientColor * frame.ambientIntensity * gi;
   let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
@@ -578,7 +581,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
 
   let ao = mix(1.0, aoSample, material.aoIntensity) * tiledAo;
   let gi = sampleGI(in.worldPos, normal);
-  let ambient = (frame.ambientColor * frame.ambientIntensity + gi) * ao;
+  let ambient = (frame.ambientColor * frame.ambientIntensity * gi) * ao;
   let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
@@ -804,7 +807,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
 
   let ao = mix(1.0, aoSample, material.aoIntensity) * tiledAo;
   let gi = sampleGI(in.worldPos, normal);
-  let ambient = (frame.ambientColor * frame.ambientIntensity + gi) * ao;
+  let ambient = (frame.ambientColor * frame.ambientIntensity * gi) * ao;
   let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
@@ -899,7 +902,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
 
   let ao = mix(1.0, aoSample, material.aoIntensity);
   let gi = sampleGI(in.worldPos, normal);
-  let ambient = (frame.ambientColor * frame.ambientIntensity + gi) * ao;
+  let ambient = (frame.ambientColor * frame.ambientIntensity * gi) * ao;
 
   let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
@@ -1088,7 +1091,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   var alpha = material.opacity;
 
   let gi = sampleGI(in.worldPos, normal);
-  let ambient = frame.ambientColor * frame.ambientIntensity + gi;
+  let ambient = frame.ambientColor * frame.ambientIntensity * gi;
   let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {
@@ -1188,7 +1191,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   var alpha = material.opacity;
 
   let gi = sampleGI(in.worldPos, normal);
-  let ambient = frame.ambientColor * frame.ambientIntensity + gi;
+  let ambient = frame.ambientColor * frame.ambientIntensity * gi;
   let rawNdotL = dot(normal, frame.lightDir);
   var shadow = 1.0;
   if (material.receiveShadow > 0.5) {

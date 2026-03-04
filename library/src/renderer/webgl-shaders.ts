@@ -45,7 +45,8 @@
 // GI (Global Illumination) probes are sampled in all Lambert fragments via a 3D RGBA16F
 // texture containing L1 spherical harmonic coefficients. The sampleGI() function reads
 // the frame uniforms for grid bounds/resolution and performs trilinear-interpolated lookup.
-// When no GI probes are active, u_giParams.x is 0 and the function returns vec3(0).
+// When no GI probes are active, u_giParams.x is 0 and the function returns vec3(1.0) (neutral tint).
+// GI is applied as a multiplicative tint on the ambient term, preserving overall brightness.
 //
 // Data flow: CPU uploads uniform buffers (UBOs) with matrices and light info. The vertex
 // shader reads per-object transforms from ObjectBlock/SkinnedObjectBlock (binding 1) and
@@ -164,7 +165,7 @@ const GI_FUNCTIONS = `
 uniform highp sampler3D u_giProbeTexture;
 
 vec3 sampleGI(vec3 worldPos, vec3 normal) {
-  if (u_giParams.x < 0.5) return vec3(0.0);
+  if (u_giParams.x < 0.5) return vec3(1.0);
 
   vec3 gridPos = clamp(
     (worldPos - u_giBoundsMin.xyz) / u_giBoundsSize.xyz,
@@ -182,7 +183,10 @@ vec3 sampleGI(vec3 worldPos, vec3 normal) {
   vec4 shB = texture(u_giProbeTexture, vec3(x, y, (zBase + res.z * 2.0) / depth));
 
   vec4 basis = vec4(1.0, normal.x, normal.y, normal.z);
-  return max(vec3(dot(shR, basis), dot(shG, basis), dot(shB, basis)), vec3(0.0)) * u_giParams.y;
+  vec3 raw = max(vec3(dot(shR, basis), dot(shG, basis), dot(shB, basis)), vec3(0.0));
+  float rawMax = max(raw.r, max(raw.g, raw.b));
+  vec3 tint = rawMax > 0.001 ? raw / rawMax : vec3(1.0);
+  return mix(vec3(1.0), tint, min(rawMax * u_giParams.y, 1.0));
 }
 `
 
@@ -297,7 +301,7 @@ void main() {
   vec3 baseColor = u_baseColor;
 
   vec3 gi = sampleGI(v_worldPos, normal);
-  vec3 ambient = u_ambientColor * u_ambientIntensity + gi;
+  vec3 ambient = u_ambientColor * u_ambientIntensity * gi;
   float rawNdotL = dot(normal, u_lightDirection);
   float shadow = u_receiveShadow ? sampleShadow(v_worldPos, max(rawNdotL, 0.0)) : 1.0;
   float wrap = u_wrapLighting;
@@ -547,7 +551,7 @@ void main() {
 
   float ao = mix(1.0, texture(u_aoMap, v_uv).r, u_aoIntensity) * tiledAo;
   vec3 gi = sampleGI(v_worldPos, normal);
-  vec3 ambient = (u_ambientColor * u_ambientIntensity + gi) * ao;
+  vec3 ambient = (u_ambientColor * u_ambientIntensity * gi) * ao;
   float rawNdotL = dot(normal, u_lightDirection);
   float shadow = u_receiveShadow ? sampleShadow(v_worldPos, max(rawNdotL, 0.0)) : 1.0;
   float wrap = u_wrapLighting;
@@ -669,7 +673,7 @@ void main() {
 
   float ao = mix(1.0, texture(u_aoMap, v_uv).r, u_aoIntensity);
   vec3 gi = sampleGI(v_worldPos, normal);
-  vec3 ambient = (u_ambientColor * u_ambientIntensity + gi) * ao;
+  vec3 ambient = (u_ambientColor * u_ambientIntensity * gi) * ao;
 
   float rawNdotL = dot(normal, u_lightDirection);
   float shadow = u_receiveShadow ? sampleShadow(v_worldPos, max(rawNdotL, 0.0)) : 1.0;
@@ -875,7 +879,7 @@ void main() {
   vec3 baseColor = u_baseColor;
 
   vec3 gi = sampleGI(v_worldPos, normal);
-  vec3 ambient = u_ambientColor * u_ambientIntensity + gi;
+  vec3 ambient = u_ambientColor * u_ambientIntensity * gi;
   float rawNdotL = dot(normal, u_lightDirection);
   float shadow = u_receiveShadow ? sampleShadow(v_worldPos, max(rawNdotL, 0.0)) : 1.0;
   float wrap = u_wrapLighting;
