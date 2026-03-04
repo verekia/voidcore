@@ -190,7 +190,12 @@ vec3 sampleGI(vec3 worldPos, vec3 normal) {
   vec3 dc = vec3(mix(dcLum, shR.x, dcW), mix(dcLum, shG.x, dcW), mix(dcLum, shB.x, dcW));
   float cosW = 2.0 - dcW * 1.3333;
   vec3 n3 = vec3(normal.x, normal.y, normal.z) * cosW;
-  vec3 raw = max(dc + vec3(dot(shR.yzw, n3), dot(shG.yzw, n3), dot(shB.yzw, n3)), vec3(0.0));
+  // Collapse directional SH to a single luminance-weighted scalar so that
+  // directions only modulate brightness, not chromaticity. Per-channel
+  // directional evaluation causes wrong hues (e.g. purple stains on orange
+  // surfaces) when R/G/B directional terms point in different directions.
+  float dirScalar = 0.299 * dot(shR.yzw, n3) + 0.587 * dot(shG.yzw, n3) + 0.114 * dot(shB.yzw, n3);
+  vec3 raw = max(dc + vec3(dirScalar), vec3(0.0));
   float rawMax = max(raw.r, max(raw.g, raw.b));
   vec3 tint = rawMax > 0.001 ? raw / rawMax : vec3(1.0);
   // Normalize tint to unit luminance so GI only shifts chromaticity, not brightness.
