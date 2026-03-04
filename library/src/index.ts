@@ -68,6 +68,7 @@ export { DOT_NOISE_WGSL, DOT_NOISE_GLSL } from './renderer/shaders'
 
 // Helpers
 export { DirectionalLightHelper } from './helpers/directional-light-helper'
+export { GIProbeHelper, type GIProbeHelperOptions } from './helpers/gi-probe-helper'
 
 // Overlay
 export { createOverlayManager, type OverlayHandle, type OverlayOptions } from './overlay'

@@ -34,6 +34,7 @@ const IndexPage = () => {
 
   const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
   const forceWebGL = params?.has('webgl')
+  const debugGIProbes = params?.has('giprobes') ?? false
 
   return (
     <>
@@ -51,7 +52,7 @@ const IndexPage = () => {
           <sphereGeometry args={[{ radius: 300 }]} />
           <basicMaterial color={[0.2, 0.5, 1]} side="back" />
         </mesh>
-        <Lighting />
+        <Lighting debugGIProbes={debugGIProbes} />
         <CameraControls />
         <RotatingCube />
         <ColoredCubes count={10} />

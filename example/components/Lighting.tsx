@@ -1,6 +1,7 @@
-import { useRef } from 'react'
+import { useMemo, useRef } from 'react'
 
-import { useGIProbes, type GIProbeGrid } from 'voidcore'
+import { GIProbeHelper, useGIProbes, type GIProbeGrid } from 'voidcore'
+
 import type { DirectionalLight } from 'voidcore'
 
 // Populate GI probes with spatially-varying ambient color.
@@ -15,7 +16,7 @@ const populateProbes = (grid: GIProbeGrid) => {
 
         // Base ambient: blend from warm ground to cool sky
         const r = 0.08 + tz * 0.04
-        const g = 0.10 + tz * 0.06
+        const g = 0.1 + tz * 0.06
         const b = 0.06 + tz * 0.12
 
         // Green bounce from grass at ground level
@@ -31,10 +32,15 @@ const populateProbes = (grid: GIProbeGrid) => {
   }
 }
 
-const Lighting = () => {
+const GIProbeDebug = ({ grid }: { grid: GIProbeGrid }) => {
+  const helper = useMemo(() => new GIProbeHelper(grid, { radius: 0.6 }), [grid])
+  return <primitive object={helper.mesh} />
+}
+
+const Lighting = ({ debugGIProbes = false }: { debugGIProbes?: boolean }) => {
   const lightRef = useRef<DirectionalLight>(null)
 
-  useGIProbes({
+  const grid = useGIProbes({
     boundsMin: [-55, -75, -2],
     boundsMax: [55, 85, 25],
     resolution: [12, 17, 4],
@@ -56,7 +62,7 @@ const Lighting = () => {
         shadowBias={0}
         shadowSlopeBias={0}
       />
-      {/* <DirectionalLightHelper lightRef={lightRef} /> */}
+      {debugGIProbes && <GIProbeDebug grid={grid} />}
     </>
   )
 }

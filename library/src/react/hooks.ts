@@ -36,7 +36,7 @@ import type { GLTFResult, LoadOptions } from '../loaders/gltf'
 import type { BasicMaterial, PaletteEntry } from '../materials/material'
 import type { CompressedTextureFormat } from '../materials/texture'
 import type { Texture } from '../materials/texture'
-import type { GIProbeGridOptions, ProbeData } from '../scene/gi-probes'
+import type { GIProbeGridOptions } from '../scene/gi-probes'
 import type { Node } from '../scene/node'
 import type { FrameCallback } from './context'
 
