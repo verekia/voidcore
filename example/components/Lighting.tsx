@@ -25,7 +25,7 @@ const Lighting = ({
   const grid = useGIProbes({
     boundsMin: [-55, -75, -2],
     boundsMax: [55, 85, 25],
-    resolution: [22, 32, 4],
+    resolution: [22, 16, 7],
     intensity: 1.0,
   })
 
