@@ -29,6 +29,10 @@
 // Outline vertices are inflated by thickness from the object UBO, and the fragment shader uses
 // gl_FrontFacing to discard front-facing outline triangles (keeping only back-facing silhouette).
 //
+// Per-mesh tint: u_tintColorAndIntensity (vec4, xyz=color, w=intensity) is applied after all
+// lighting as `mix(finalColor, tintColor, tintIntensity)`. Outlines early-return before the
+// tint mix, so they remain unaffected. Used for damage flash effects.
+//
 // Plus three post-processing shaders (fullscreen triangle, no vertex buffer needed):
 //   Bloom Downsample – 13-tap filter that progressively shrinks the emissive image.
 //                      First pass uses Karis average to prevent "firefly" artifacts.
@@ -72,16 +76,18 @@
 //   float u_invMapSize           float 50
 //   float _biasPad               float 51
 //
-// ObjectBlock (binding 1, 144 bytes std140):
+// ObjectBlock (binding 1, 160 bytes std140):
 //   mat4 u_worldMatrix              offset 0
 //   mat4 u_normalMatrix             offset 64
 //   vec4 u_outlineColorAndThickness  offset 128
+//   vec4 u_tintColorAndIntensity     offset 144
 //
-// SkinnedObjectBlock (binding 1, 2192 bytes std140):
+// SkinnedObjectBlock (binding 1, 2208 bytes std140):
 //   mat4 u_worldMatrix              offset 0
 //   mat4 u_normalMatrix             offset 64
 //   vec4 u_outlineColorAndThickness  offset 128
-//   mat4 u_boneMatrices[32]          offset 144
+//   vec4 u_tintColorAndIntensity     offset 144
+//   mat4 u_boneMatrices[32]          offset 160
 //
 // ShadowBlock (binding 2, 64 bytes std140):
 //   mat4 u_shadowVP          offset 0
@@ -115,6 +121,7 @@ layout(std140) uniform ObjectBlock {
   mat4 u_worldMatrix;
   mat4 u_normalMatrix;
   vec4 u_outlineColorAndThickness;
+  vec4 u_tintColorAndIntensity;
 };`
 
 const SKINNED_OBJECT_BLOCK = `
@@ -122,6 +129,7 @@ layout(std140) uniform SkinnedObjectBlock {
   mat4 u_worldMatrix;
   mat4 u_normalMatrix;
   vec4 u_outlineColorAndThickness;
+  vec4 u_tintColorAndIntensity;
   mat4 u_boneMatrices[32];
 };`
 
@@ -311,6 +319,7 @@ void main() {
   vec3 diffuse = u_lightColor * u_lightIntensity * NdotL;
 
   vec3 finalColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * u_darkness) + diffuse);
+  finalColor = mix(finalColor, u_tintColorAndIntensity.xyz, u_tintColorAndIntensity.w);
 
   fragColor = vec4(finalColor, u_opacity);
   fragEmissive = vec4(0.0, 0.0, 0.0, u_opacity);
@@ -564,6 +573,7 @@ void main() {
   float brightness = dot(emissive, vec3(0.299, 0.587, 0.114));
   vec3 screenEmissive = mix(emissive, vec3(brightness), clamp(brightness, 0.0, 1.0) * u_emissiveBrightness);
   vec3 finalColor = litColor + screenEmissive;
+  finalColor = mix(finalColor, u_tintColorAndIntensity.xyz, u_tintColorAndIntensity.w);
 
   fragColor = vec4(finalColor, u_opacity);
   fragEmissive = vec4(emissive * u_opacity, u_opacity);
@@ -684,6 +694,7 @@ void main() {
   vec3 diffuse = u_lightColor * u_lightIntensity * NdotL;
 
   vec3 finalColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * u_darkness) + diffuse);
+  finalColor = mix(finalColor, u_tintColorAndIntensity.xyz, u_tintColorAndIntensity.w);
 
   fragColor = vec4(finalColor, u_opacity);
   fragEmissive = vec4(0.0, 0.0, 0.0, u_opacity);
@@ -891,6 +902,7 @@ void main() {
   vec3 finalColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * u_darkness) + diffuse);
   float alpha = u_opacity;
   ${customFragment ?? ''}
+  finalColor = mix(finalColor, u_tintColorAndIntensity.xyz, u_tintColorAndIntensity.w);
 
   fragColor = vec4(finalColor, alpha);
   fragEmissive = vec4(0.0, 0.0, 0.0, alpha);

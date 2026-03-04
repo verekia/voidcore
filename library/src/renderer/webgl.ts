@@ -895,11 +895,11 @@ export class WebGLRenderer implements Renderer {
   // FrameBlock (binding 0): 288 bytes = 72 floats (VP + light + shadow data + cameraPos + GI)
   private _frameUBO!: WebGLBuffer
   private _frameData = new Float32Array(72)
-  // ObjectBlock (binding 1, dynamic): mat4 worldMatrix + mat4 normalMatrix + vec4 outlineColorAndThickness = 144 bytes
-  // SkinnedObjectBlock (binding 1, dynamic): above + mat4[32] boneMatrices = 2192 bytes
+  // ObjectBlock (binding 1, dynamic): mat4 worldMatrix + mat4 normalMatrix + vec4 outlineColorAndThickness + vec4 tintColorAndIntensity = 160 bytes
+  // SkinnedObjectBlock (binding 1, dynamic): above + mat4[32] boneMatrices = 2208 bytes
   private _uboAlignment = 256
-  private _alignedObjectSize = 256 // ceil(144 / alignment) * alignment
-  private _alignedSkinnedSize = 2304 // ceil(2192 / alignment) * alignment
+  private _alignedObjectSize = 256 // ceil(160 / alignment) * alignment
+  private _alignedSkinnedSize = 2304 // ceil(2208 / alignment) * alignment
   private _objectDynBuf!: WebGLBuffer
   private _skinnedDynBuf!: WebGLBuffer
   private _objectBatchData!: Float32Array
@@ -1029,8 +1029,8 @@ export class WebGLRenderer implements Renderer {
 
     // UBO setup
     this._uboAlignment = gl.getParameter(gl.UNIFORM_BUFFER_OFFSET_ALIGNMENT) as number
-    this._alignedObjectSize = Math.ceil(144 / this._uboAlignment) * this._uboAlignment
-    this._alignedSkinnedSize = Math.ceil(2192 / this._uboAlignment) * this._uboAlignment
+    this._alignedObjectSize = Math.ceil(160 / this._uboAlignment) * this._uboAlignment
+    this._alignedSkinnedSize = Math.ceil(2208 / this._uboAlignment) * this._uboAlignment
 
     // Frame UBO (288 bytes = 72 floats)
     this._frameUBO = gl.createBuffer()!
@@ -1774,7 +1774,12 @@ export class WebGLRenderer implements Renderer {
         skinnedBatch[off + 33] = oc[1]
         skinnedBatch[off + 34] = oc[2]
         skinnedBatch[off + 35] = thickness
-        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 36)
+        const tc = mesh.tintColor
+        skinnedBatch[off + 36] = tc[0]
+        skinnedBatch[off + 37] = tc[1]
+        skinnedBatch[off + 38] = tc[2]
+        skinnedBatch[off + 39] = mesh.tintIntensity
+        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 40)
         mesh._batchIndex = skinnedIdx++
       } else {
         const off = objIdx * alignedObjFloats
@@ -1803,6 +1808,11 @@ export class WebGLRenderer implements Renderer {
         objBatch[off + 33] = oc[1]
         objBatch[off + 34] = oc[2]
         objBatch[off + 35] = thickness
+        const tc = mesh.tintColor
+        objBatch[off + 36] = tc[0]
+        objBatch[off + 37] = tc[1]
+        objBatch[off + 38] = tc[2]
+        objBatch[off + 39] = mesh.tintIntensity
         mesh._batchIndex = objIdx++
       }
     }
@@ -1823,7 +1833,11 @@ export class WebGLRenderer implements Renderer {
         skinnedBatch[off + 33] = 0
         skinnedBatch[off + 34] = 0
         skinnedBatch[off + 35] = 0
-        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 36)
+        skinnedBatch[off + 36] = 0
+        skinnedBatch[off + 37] = 0
+        skinnedBatch[off + 38] = 0
+        skinnedBatch[off + 39] = 0
+        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 40)
         mesh._batchIndex = skinnedIdx++
       } else {
         const off = objIdx * alignedObjFloats
@@ -1836,6 +1850,10 @@ export class WebGLRenderer implements Renderer {
         objBatch[off + 33] = 0
         objBatch[off + 34] = 0
         objBatch[off + 35] = 0
+        objBatch[off + 36] = 0
+        objBatch[off + 37] = 0
+        objBatch[off + 38] = 0
+        objBatch[off + 39] = 0
         mesh._batchIndex = objIdx++
       }
     }
@@ -1969,12 +1987,12 @@ export class WebGLRenderer implements Renderer {
             1,
             this._skinnedDynBuf,
             mesh._batchIndex * this._alignedSkinnedSize,
-            2192,
+            2208,
           )
         } else {
           this._setProgram(this.shadowDepthProgram)
           this._setVAO(this.ensureShadowVAO(mesh.geometry, false))
-          gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 144)
+          gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 160)
         }
 
         gl.drawElements(gl.TRIANGLES, mesh.geometry.indexCount, idxType, 0)
@@ -2006,12 +2024,12 @@ export class WebGLRenderer implements Renderer {
             1,
             this._skinnedDynBuf,
             mesh._batchIndex * this._alignedSkinnedSize,
-            2192,
+            2208,
           )
         } else {
           this._setProgram(this.shadowDepthProgram)
           this._setVAO(this.ensureShadowVAO(mesh.geometry, false))
-          gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 144)
+          gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 160)
         }
 
         gl.drawElements(gl.TRIANGLES, mesh.geometry.indexCount, idxType, 0)
@@ -2067,9 +2085,9 @@ export class WebGLRenderer implements Renderer {
       }
 
       if (mesh._isSkinned) {
-        gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._skinnedDynBuf, mesh._batchIndex * this._alignedSkinnedSize, 2192)
+        gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._skinnedDynBuf, mesh._batchIndex * this._alignedSkinnedSize, 2208)
       } else {
-        gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 144)
+        gl.bindBufferRange(gl.UNIFORM_BUFFER, 1, this._objectDynBuf, mesh._batchIndex * this._alignedObjectSize, 160)
       }
 
       const materialChanged = mesh.material !== this._glMaterial || programChanged

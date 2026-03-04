@@ -19,6 +19,12 @@
 // to 0 in the UBO when the camera is farther than that distance (squared distance comparison,
 // zero allocation), and the shader discards all outline fragments when thickness is 0.
 //
+// Per-mesh tint overlays an unlit color on Lambert meshes for damage flash effects.
+// `tintColor` sets the overlay RGB color and `tintIntensity` (0–1) controls the blend:
+// at 0 the mesh renders normally, at 1 it is fully replaced by the unlit tint color.
+// Animate tintIntensity from 1→0 over ~200ms for a smooth damage flash. Outlines are
+// unaffected by the tint since they early-return before the tint mix in the fragment shader.
+//
 // new Mesh(geometry, material) – Creates a mesh from a geometry and material.
 // Both parameters are optional to support deferred attachment (e.g. React reconciler).
 
@@ -43,6 +49,8 @@ export class Mesh extends Node {
   skeleton?: Skeleton
   outline?: MeshOutline | number
   maxDistance = 0
+  tintColor: [number, number, number] = [1, 1, 1]
+  tintIntensity = 0
   _batchIndex = 0
   _batchFrame = -1
   _isSkinned = false

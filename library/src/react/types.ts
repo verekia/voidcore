@@ -108,6 +108,8 @@ export interface MeshProps extends NodeProps {
   skeleton?: Skeleton
   outline?: MeshOutline | number
   maxDistance?: number
+  tintColor?: [number, number, number]
+  tintIntensity?: number
 }
 
 export interface GroupProps extends NodeProps {}
