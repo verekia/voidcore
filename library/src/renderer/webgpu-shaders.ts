@@ -167,7 +167,7 @@ fn sampleGI(worldPos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
   let dcW = frame.giParams.z;
   let dcLum = 0.299 * shR.x + 0.587 * shG.x + 0.114 * shB.x;
   let dc = vec3<f32>(mix(dcLum, shR.x, dcW), mix(dcLum, shG.x, dcW), mix(dcLum, shB.x, dcW));
-  let cosW = 1.0 - dcW * 0.3333;
+  let cosW = 2.0 - dcW * 1.3333;
   let n3 = vec3<f32>(normal.x, normal.y, normal.z) * cosW;
   let raw = max(dc + vec3<f32>(dot(shR.yzw, n3), dot(shG.yzw, n3), dot(shB.yzw, n3)), vec3<f32>(0.0));
   let rawMax = max(raw.r, max(raw.g, raw.b));

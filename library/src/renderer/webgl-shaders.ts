@@ -188,7 +188,7 @@ vec3 sampleGI(vec3 worldPos, vec3 normal) {
   float dcW = u_giParams.z;
   float dcLum = 0.299 * shR.x + 0.587 * shG.x + 0.114 * shB.x;
   vec3 dc = vec3(mix(dcLum, shR.x, dcW), mix(dcLum, shG.x, dcW), mix(dcLum, shB.x, dcW));
-  float cosW = 1.0 - dcW * 0.3333;
+  float cosW = 2.0 - dcW * 1.3333;
   vec3 n3 = vec3(normal.x, normal.y, normal.z) * cosW;
   vec3 raw = max(dc + vec3(dot(shR.yzw, n3), dot(shG.yzw, n3), dot(shB.yzw, n3)), vec3(0.0));
   float rawMax = max(raw.r, max(raw.g, raw.b));
