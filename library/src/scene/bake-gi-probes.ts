@@ -24,11 +24,13 @@
 // terrain surfaces.
 //
 // The optional `surfaceOnly` flag keeps only probes on the outer surface of the world mesh.
-// First, every probe is classified as inside or outside using the nearest-triangle signed
-// distance. Then only outside probes that neighbor at least one inside cell are kept — giving
-// a single layer of probes hugging the exterior of the mesh. Inside probes (embedded in
-// terrain) and distant outside probes (floating in empty space) are all zeroed out. This
-// gives full coverage with no wasted probes and no need for maxDistance.
+// Uses a flood-fill algorithm for robust inside/outside classification:
+//   1) Probes near mesh triangles are marked as "occupied" (the shell barrier)
+//   2) Flood fill from grid boundary through non-occupied probes finds the true exterior
+//   3) Everything not reached by the flood fill is interior (enclosed by the mesh)
+//   4) Only exterior probes adjacent to occupied/interior cells are kept
+// This gives a clean single layer of probes hugging the mesh surface regardless of topology
+// complexity (overhangs, platforms, caves). No need for maxDistance.
 //
 // bakeGIProbes(grid, meshes, options?) – Fills the grid with baked indirect lighting data.
 
@@ -59,10 +61,9 @@ export interface BakeGIOptions {
    *  gets zeroed out. Default: false. */
   cullInterior?: boolean
   /** Keep only probes on the outer surface of the world mesh.
-   *  Classifies each probe as inside/outside, then keeps only boundary probes
-   *  (those with at least one neighbor of a different classification). All deep
-   *  interior and far exterior probes are zeroed out. Overrides maxDistance and
-   *  cullInterior. Default: false. */
+   *  Uses flood fill from the grid boundary to robustly classify interior vs exterior,
+   *  then keeps only the outermost layer of exterior probes adjacent to the mesh shell.
+   *  All interior and distant exterior probes are zeroed out. Default: false. */
   surfaceOnly?: boolean
 }
 
@@ -275,12 +276,19 @@ export const bakeGIProbes = (grid: GIProbeGrid, meshes: BakeGIMesh[], options?: 
 
 // ─── Internal: surface-only culling ──────────────────────────────────
 
+// Cell states for the flood-fill classification
+const CELL_EMPTY = 0 // Not yet classified
+const CELL_OCCUPIED = 1 // Near mesh surface (shell barrier)
+const CELL_EXTERIOR = 2 // Reachable from grid boundary (outside)
+
 /**
- * Classify every probe as inside (1) or outside (0) the mesh using the nearest
- * triangle's signed distance. Then keep only outside probes that neighbor at least
- * one inside cell — a single layer hugging the mesh exterior. Inside probes are
- * always culled. Boundary probes must also be within proximity of actual geometry
- * (2× max cell step) to avoid false boundaries from noisy classification of distant probes.
+ * Flood-fill based surface culling. Much more robust than signed-distance classification
+ * for complex topology (overhangs, platforms, thin features).
+ *
+ * 1) Mark probes near mesh geometry as "occupied" (the shell)
+ * 2) Flood fill from grid boundary through non-occupied probes → "exterior"
+ * 3) Everything not reached is "interior"
+ * 4) Keep only exterior probes adjacent to an occupied or interior cell
  */
 const _cullToSurface = (grid: GIProbeGrid, triData: TriangleData): void => {
   const [rx, ry, rz] = grid.resolution
@@ -290,87 +298,104 @@ const _cullToSurface = (grid: GIProbeGrid, triData: TriangleData): void => {
   const stepY = ry > 1 ? (bMax[1] - bMin[1]) / (ry - 1) : 0
   const stepZ = rz > 1 ? (bMax[2] - bMin[2]) / (rz - 1) : 0
   const probeCount = rx * ry * rz
+  const xySlice = ry * rx
 
-  // Proximity threshold: probes farther than this from any triangle are not surface probes
-  const maxStep = Math.max(stepX, stepY, stepZ)
-  const proxThresholdSq = (2 * maxStep) * (2 * maxStep)
+  // Shell threshold: probes within this distance of any triangle centroid are "occupied".
+  // Use the cell diagonal so the shell forms a continuous barrier with no gaps.
+  const cellDiag = Math.sqrt(stepX * stepX + stepY * stepY + stepZ * stepZ)
+  const shellThresholdSq = cellDiag * cellDiag
 
-  // 1) Classify each probe: 1 = inside, 0 = outside. Also store nearest distance².
-  const inside = new Uint8Array(probeCount)
-  const nearestDistSq = new Float32Array(probeCount)
+  // 1) Mark occupied probes (near mesh surface)
+  const cells = new Uint8Array(probeCount) // CELL_EMPTY by default
   for (let iz = 0; iz < rz; iz++) {
     for (let iy = 0; iy < ry; iy++) {
       for (let ix = 0; ix < rx; ix++) {
         const px = bMin[0] + ix * stepX
         const py = bMin[1] + iy * stepY
         const pz = bMin[2] + iz * stepZ
-        const idx = iz * ry * rx + iy * rx + ix
 
-        // Find nearest triangle
-        let bestSq = Infinity
-        let nearestIdx = -1
+        // Check if any triangle centroid is within shell distance
         for (let t = 0; t < triData.count; t++) {
           const off = t * 13
           const dx = triData.data[off]! - px
           const dy = triData.data[off + 1]! - py
           const dz = triData.data[off + 2]! - pz
-          const dSq = dx * dx + dy * dy + dz * dz
-          if (dSq < bestSq) {
-            bestSq = dSq
-            nearestIdx = t
-          }
-        }
-
-        nearestDistSq[idx] = bestSq
-
-        if (nearestIdx >= 0) {
-          const off = nearestIdx * 13
-          // Signed distance: dot(probe - centroid, face normal)
-          const toPx = px - triData.data[off]!
-          const toPy = py - triData.data[off + 1]!
-          const toPz = pz - triData.data[off + 2]!
-          const signedDist =
-            toPx * triData.data[off + 3]! + toPy * triData.data[off + 4]! + toPz * triData.data[off + 5]!
-          if (signedDist < 0) {
-            inside[idx] = 1
+          if (dx * dx + dy * dy + dz * dz < shellThresholdSq) {
+            cells[iz * xySlice + iy * rx + ix] = CELL_OCCUPIED
+            break
           }
         }
       }
     }
   }
 
-  // 2) Keep only outside boundary probes (outside probes neighboring at least one inside cell).
-  //    This gives a single-layer shell on the exterior of the mesh, rather than a two-layer
-  //    boundary (inside+outside) which wastes probes embedded under surfaces.
+  // 2) Flood fill from all grid-boundary probes that are not occupied → mark as EXTERIOR.
+  //    Uses a queue-based BFS to avoid recursion stack limits on large grids.
+  const queue: number[] = []
+
+  // Seed: all non-occupied probes on the 6 grid faces
   for (let iz = 0; iz < rz; iz++) {
     for (let iy = 0; iy < ry; iy++) {
       for (let ix = 0; ix < rx; ix++) {
-        const idx = iz * ry * rx + iy * rx + ix
-        const val = inside[idx]!
+        if (ix !== 0 && ix !== rx - 1 && iy !== 0 && iy !== ry - 1 && iz !== 0 && iz !== rz - 1) continue
+        const idx = iz * xySlice + iy * rx + ix
+        if (cells[idx] === CELL_EMPTY) {
+          cells[idx] = CELL_EXTERIOR
+          queue.push(idx)
+        }
+      }
+    }
+  }
 
-        // Inside probes are always culled — we only keep exterior probes
-        if (val === 1) {
+  // BFS through non-occupied neighbors
+  while (queue.length > 0) {
+    const idx = queue.pop()!
+    const ix = idx % rx
+    const iy = Math.floor(idx / rx) % ry
+    const iz = Math.floor(idx / xySlice)
+
+    // Check 6 neighbors
+    const neighbors = [
+      ix > 0 ? idx - 1 : -1,
+      ix < rx - 1 ? idx + 1 : -1,
+      iy > 0 ? idx - rx : -1,
+      iy < ry - 1 ? idx + rx : -1,
+      iz > 0 ? idx - xySlice : -1,
+      iz < rz - 1 ? idx + xySlice : -1,
+    ]
+    for (const nIdx of neighbors) {
+      if (nIdx >= 0 && cells[nIdx] === CELL_EMPTY) {
+        cells[nIdx] = CELL_EXTERIOR
+        queue.push(nIdx)
+      }
+    }
+  }
+
+  // 3) Keep only exterior probes that neighbor at least one non-exterior cell
+  //    (occupied or interior). This gives a single layer hugging the mesh surface.
+  for (let iz = 0; iz < rz; iz++) {
+    for (let iy = 0; iy < ry; iy++) {
+      for (let ix = 0; ix < rx; ix++) {
+        const idx = iz * xySlice + iy * rx + ix
+        const cell = cells[idx]!
+
+        // Non-exterior probes (occupied + interior) are always culled
+        if (cell !== CELL_EXTERIOR) {
           const probeOff = idx * 12
           for (let k = 0; k < 12; k++) grid.data[probeOff + k] = 0
           continue
         }
 
-        // Outside probe: keep only if it neighbors at least one inside cell
-        let hasInsideNeighbor = false
-        if (ix > 0 && inside[idx - 1] === 1) hasInsideNeighbor = true
-        else if (ix < rx - 1 && inside[idx + 1] === 1) hasInsideNeighbor = true
-        else if (iy > 0 && inside[idx - rx] === 1) hasInsideNeighbor = true
-        else if (iy < ry - 1 && inside[idx + rx] === 1) hasInsideNeighbor = true
-        else if (iz > 0 && inside[idx - ry * rx] === 1) hasInsideNeighbor = true
-        else if (iz < rz - 1 && inside[idx + ry * rx] === 1) hasInsideNeighbor = true
+        // Exterior probe: keep only if adjacent to a non-exterior cell
+        let hasNonExterior = false
+        if (ix > 0 && cells[idx - 1] !== CELL_EXTERIOR) hasNonExterior = true
+        else if (ix < rx - 1 && cells[idx + 1] !== CELL_EXTERIOR) hasNonExterior = true
+        else if (iy > 0 && cells[idx - rx] !== CELL_EXTERIOR) hasNonExterior = true
+        else if (iy < ry - 1 && cells[idx + rx] !== CELL_EXTERIOR) hasNonExterior = true
+        else if (iz > 0 && cells[idx - xySlice] !== CELL_EXTERIOR) hasNonExterior = true
+        else if (iz < rz - 1 && cells[idx + xySlice] !== CELL_EXTERIOR) hasNonExterior = true
 
-        // Outside probes must also be near actual geometry to avoid false boundaries
-        // from noisy inside/outside classification of distant probes
-        if (hasInsideNeighbor && nearestDistSq[idx]! > proxThresholdSq) {
-          hasInsideNeighbor = false
-        }
-
-        if (!hasInsideNeighbor) {
+        if (!hasNonExterior) {
           const probeOff = idx * 12
           for (let k = 0; k < 12; k++) grid.data[probeOff + k] = 0
         }
