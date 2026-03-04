@@ -174,8 +174,8 @@ interface RenderTargets {
 const FRAME_UB_SIZE = 272
 // ShadowUniforms: mat4(64)
 const SHADOW_UB_SIZE = 64
-// ObjectUniforms: mat4(64) + mat4(64) + vec4(16) = 144 bytes
-const OBJECT_UB_SIZE = 144
+// ObjectUniforms: mat4(64) + mat4(64) + vec4(16) + vec4(16) = 160 bytes
+const OBJECT_UB_SIZE = 160
 // MaterialUniforms: vec3+f32(16) + 4*f32(16) + f32+3*pad(16) = 48 bytes
 const MATERIAL_UB_SIZE = 48
 // Bloom down params: vec2+f32+pad(16)
@@ -185,8 +185,8 @@ const BLOOM_UP_UB_SIZE = 16
 // Blit params: f32+pad(16)
 const BLIT_UB_SIZE = 16
 
-// SkinnedObjectUniforms: mat4(64) + mat4(64) + vec4(16) + 32*mat4(2048) = 2192 bytes
-const SKINNED_OBJECT_UB_SIZE = 2192
+// SkinnedObjectUniforms: mat4(64) + mat4(64) + vec4(16) + vec4(16) + 32*mat4(2048) = 2208 bytes
+const SKINNED_OBJECT_UB_SIZE = 2208
 
 // ─── Vertex buffer layout (shared by lambert + basic) ────────────────
 
@@ -2565,7 +2565,12 @@ export class WebGPURenderer implements Renderer {
         skinnedBatch[off + 33] = oc[1]
         skinnedBatch[off + 34] = oc[2]
         skinnedBatch[off + 35] = thickness
-        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 36)
+        const tc = mesh.tintColor
+        skinnedBatch[off + 36] = tc[0]
+        skinnedBatch[off + 37] = tc[1]
+        skinnedBatch[off + 38] = tc[2]
+        skinnedBatch[off + 39] = mesh.tintIntensity
+        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 40)
         mesh._batchIndex = skinnedIdx++
       } else {
         const off = objIdx * alignedObjFloats
@@ -2594,6 +2599,11 @@ export class WebGPURenderer implements Renderer {
         objBatch[off + 33] = oc[1]
         objBatch[off + 34] = oc[2]
         objBatch[off + 35] = thickness
+        const tc = mesh.tintColor
+        objBatch[off + 36] = tc[0]
+        objBatch[off + 37] = tc[1]
+        objBatch[off + 38] = tc[2]
+        objBatch[off + 39] = mesh.tintIntensity
         mesh._batchIndex = objIdx++
       }
     }
@@ -2614,7 +2624,11 @@ export class WebGPURenderer implements Renderer {
         skinnedBatch[off + 33] = 0
         skinnedBatch[off + 34] = 0
         skinnedBatch[off + 35] = 0
-        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 36)
+        skinnedBatch[off + 36] = 0
+        skinnedBatch[off + 37] = 0
+        skinnedBatch[off + 38] = 0
+        skinnedBatch[off + 39] = 0
+        skinnedBatch.set(mesh.skeleton!.boneMatrices, off + 40)
         mesh._batchIndex = skinnedIdx++
       } else {
         const off = objIdx * alignedObjFloats
@@ -2627,6 +2641,10 @@ export class WebGPURenderer implements Renderer {
         objBatch[off + 33] = 0
         objBatch[off + 34] = 0
         objBatch[off + 35] = 0
+        objBatch[off + 36] = 0
+        objBatch[off + 37] = 0
+        objBatch[off + 38] = 0
+        objBatch[off + 39] = 0
         mesh._batchIndex = objIdx++
       }
     }

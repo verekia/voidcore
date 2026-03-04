@@ -24,6 +24,10 @@
 // in object.outlineColorAndThickness.w, and the fragment shader uses front_facing to discard
 // front-facing outline triangles (keeping only back-facing silhouette fragments).
 //
+// Per-mesh tint: object.tintColorAndIntensity (vec4, xyz=color, w=intensity) is applied after
+// all lighting as `mix(finalColor, tintColor, tintIntensity)`. Outlines early-return before
+// the tint mix, so they remain unaffected. Used for damage flash effects.
+//
 // Vertex-color (VC) variants read per-vertex color (unorm8x4) and emissive (float16x4)
 // attributes, replacing the old palette uniform system. Non-VC shaders use material.baseColor
 // directly with no emissive. The bakePalette() utility resolves palette entries into vertex
@@ -88,6 +92,7 @@ struct ObjectUniforms {
   worldMatrix: mat4x4<f32>,
   normalMatrix: mat4x4<f32>,
   outlineColorAndThickness: vec4<f32>,
+  tintColorAndIntensity: vec4<f32>,
 };`
 
 const SKINNED_OBJECT_UNIFORMS = `
@@ -95,6 +100,7 @@ struct ObjectUniforms {
   worldMatrix: mat4x4<f32>,
   normalMatrix: mat4x4<f32>,
   outlineColorAndThickness: vec4<f32>,
+  tintColorAndIntensity: vec4<f32>,
   boneMatrices: array<mat4x4<f32>, 32>,
 };`
 
@@ -286,8 +292,9 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
 
   let finalColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * material.darkness) + diffuse);
+  let tintedColor = mix(finalColor, object.tintColorAndIntensity.xyz, object.tintColorAndIntensity.w);
 
-  out.color = vec4<f32>(finalColor * alpha, alpha);
+  out.color = vec4<f32>(tintedColor * alpha, alpha);
   out.emissive = vec4<f32>(0.0, 0.0, 0.0, alpha);
   return out;
 }
@@ -379,8 +386,9 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
 
   let finalColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * material.darkness) + diffuse);
+  let tintedColor = mix(finalColor, object.tintColorAndIntensity.xyz, object.tintColorAndIntensity.w);
 
-  out.color = vec4<f32>(finalColor * alpha, alpha);
+  out.color = vec4<f32>(tintedColor * alpha, alpha);
   out.emissive = vec4<f32>(0.0, 0.0, 0.0, alpha);
   return out;
 }
@@ -597,8 +605,9 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let brightness = dot(emissive, vec3<f32>(0.299, 0.587, 0.114));
   let screenEmissive = mix(emissive, vec3<f32>(brightness), saturate(brightness) * material.emissiveBrightness);
   let finalColor = litColor + screenEmissive;
+  let tintedColor = mix(finalColor, object.tintColorAndIntensity.xyz, object.tintColorAndIntensity.w);
 
-  out.color = vec4<f32>(finalColor * alpha, alpha);
+  out.color = vec4<f32>(tintedColor * alpha, alpha);
   out.emissive = vec4<f32>(emissive * alpha, alpha);
   return out;
 }
@@ -823,8 +832,9 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let brightness = dot(emissive, vec3<f32>(0.299, 0.587, 0.114));
   let screenEmissive = mix(emissive, vec3<f32>(brightness), saturate(brightness) * material.emissiveBrightness);
   let finalColor = litColor + screenEmissive;
+  let tintedColor = mix(finalColor, object.tintColorAndIntensity.xyz, object.tintColorAndIntensity.w);
 
-  out.color = vec4<f32>(finalColor * alpha, alpha);
+  out.color = vec4<f32>(tintedColor * alpha, alpha);
   out.emissive = vec4<f32>(emissive * alpha, alpha);
   return out;
 }
@@ -916,8 +926,9 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
   let diffuse = frame.lightColor * frame.lightIntensity * NdotL;
 
   let finalColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * material.darkness) + diffuse);
+  let tintedColor = mix(finalColor, object.tintColorAndIntensity.xyz, object.tintColorAndIntensity.w);
 
-  out.color = vec4<f32>(finalColor * alpha, alpha);
+  out.color = vec4<f32>(tintedColor * alpha, alpha);
   out.emissive = vec4<f32>(0.0, 0.0, 0.0, alpha);
   return out;
 }
@@ -1105,6 +1116,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
 
   var finalColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * material.darkness) + diffuse);
   ${customFragment ?? ''}
+  finalColor = mix(finalColor, object.tintColorAndIntensity.xyz, object.tintColorAndIntensity.w);
 
   out.color = vec4<f32>(finalColor * alpha, alpha);
   out.emissive = vec4<f32>(0.0, 0.0, 0.0, alpha);
@@ -1205,6 +1217,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
 
   var finalColor = baseColor * (ambient * (1.0 - max(-rawNdotL, 0.0) * material.darkness) + diffuse);
   ${customFragment ?? ''}
+  finalColor = mix(finalColor, object.tintColorAndIntensity.xyz, object.tintColorAndIntensity.w);
 
   out.color = vec4<f32>(finalColor * alpha, alpha);
   out.emissive = vec4<f32>(0.0, 0.0, 0.0, alpha);
