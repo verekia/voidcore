@@ -10,8 +10,8 @@
   "scripts": {
     "dev": "bun run --parallel --filter '*' dev",
     "build": "bun run --filter '*' build",
-    "start": "bun run --filter '*' start",
-    "typecheck": "bun run --filter '*' typecheck",
+    "start": "bun run --parallel --filter '*' start",
+    "typecheck": "bun run --parallel --filter '*' typecheck",
     "lint": "oxlint --quiet",
     "lint:fix": "oxlint --fix",
     "format": "oxfmt --write .",
