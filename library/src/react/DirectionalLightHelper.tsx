@@ -26,6 +26,8 @@ export interface DirectionalLightHelperProps {
 export const DirectionalLightHelper = ({ lightRef, color, opacity }: DirectionalLightHelperProps) => {
   const { scene } = useEngine()
   const helperRef = useRef<HelperImpl | null>(null)
+  // Serialize array to avoid re-creating on every render due to new array references
+  const colorKey = color ? `${color[0]},${color[1]},${color[2]}` : ''
 
   useEffect(() => {
     const helper = new HelperImpl({ color, opacity })
@@ -36,7 +38,8 @@ export const DirectionalLightHelper = ({ lightRef, color, opacity }: Directional
       helper.dispose()
       helperRef.current = null
     }
-  }, [scene, color, opacity])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scene, colorKey, opacity])
 
   useFrame(() => {
     const light = lightRef.current

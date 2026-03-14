@@ -32,7 +32,12 @@ export const cloneScene = (source: Node, skeletons: Skeleton[] = [], options: Cl
   const cloneNode = (src: Node): Node => {
     let clone: Node
     if (src instanceof Mesh && (!meshFilter || meshFilter(src))) {
-      clone = new Mesh(src.geometry, src.material)
+      const meshClone = new Mesh(src.geometry, src.material)
+      meshClone.outline = src.outline
+      meshClone.maxDistance = src.maxDistance
+      meshClone.tintColor = [src.tintColor[0], src.tintColor[1], src.tintColor[2]]
+      meshClone.tintIntensity = src.tintIntensity
+      clone = meshClone
     } else {
       clone = new Group()
     }

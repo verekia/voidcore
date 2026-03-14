@@ -55,10 +55,27 @@ export class OrbitControls {
   private _velocityPanY = 0
 
   private _pointers = new Map<number, { x: number; y: number }>()
+  // Pre-allocated array for reading two pointer values without spreading
+  private _ptrPair: [{ x: number; y: number }, { x: number; y: number }] = [
+    { x: 0, y: 0 },
+    { x: 0, y: 0 },
+  ]
   private _pointerButton = 0
   private _lastX = 0
   private _lastY = 0
   private _lastPinchDist = 0
+
+  /** Read two pointer values into the pre-allocated pair array (avoids allocation). */
+  private _getTwoPointers(): [{ x: number; y: number }, { x: number; y: number }] {
+    let i = 0
+    for (const p of this._pointers.values()) {
+      const dst = this._ptrPair[i]!
+      dst.x = p.x
+      dst.y = p.y
+      if (++i >= 2) break
+    }
+    return this._ptrPair
+  }
 
   private _onChange: (() => void)[] = []
 
@@ -143,8 +160,12 @@ export class OrbitControls {
     for (const cb of this._onChange) cb()
   }
 
-  onChange(callback: () => void) {
+  onChange(callback: () => void): () => void {
     this._onChange.push(callback)
+    return () => {
+      const idx = this._onChange.indexOf(callback)
+      if (idx !== -1) this._onChange.splice(idx, 1)
+    }
   }
 
   dispose() {
@@ -169,7 +190,13 @@ export class OrbitControls {
 
   private _onPointerDown = (e: PointerEvent) => {
     if (!this.enabled) return
-    this._pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    const existing = this._pointers.get(e.pointerId)
+    if (existing) {
+      existing.x = e.clientX
+      existing.y = e.clientY
+    } else {
+      this._pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    }
     this.canvas.setPointerCapture(e.pointerId)
 
     if (this._pointers.size === 1) {
@@ -177,18 +204,21 @@ export class OrbitControls {
       this._lastX = e.clientX
       this._lastY = e.clientY
     } else if (this._pointers.size === 2) {
-      const pts = [...this._pointers.values()]
-      const dx = pts[1]!.x - pts[0]!.x
-      const dy = pts[1]!.y - pts[0]!.y
+      const pts = this._getTwoPointers()
+      const dx = pts[1].x - pts[0].x
+      const dy = pts[1].y - pts[0].y
       this._lastPinchDist = Math.sqrt(dx * dx + dy * dy)
-      this._lastX = (pts[0]!.x + pts[1]!.x) / 2
-      this._lastY = (pts[0]!.y + pts[1]!.y) / 2
+      this._lastX = (pts[0].x + pts[1].x) / 2
+      this._lastY = (pts[0].y + pts[1].y) / 2
     }
   }
 
   private _onPointerMove = (e: PointerEvent) => {
-    if (!this.enabled || !this._pointers.has(e.pointerId)) return
-    this._pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    if (!this.enabled) return
+    const ptr = this._pointers.get(e.pointerId)
+    if (!ptr) return
+    ptr.x = e.clientX
+    ptr.y = e.clientY
 
     if (this._pointers.size === 1) {
       const dx = e.clientX - this._lastX
@@ -206,19 +236,19 @@ export class OrbitControls {
         this._velocityPanY += dy * 0.2
       }
     } else if (this._pointers.size === 2) {
-      const pts = [...this._pointers.values()]
+      const pts = this._getTwoPointers()
 
       // Pinch zoom
-      const pdx = pts[1]!.x - pts[0]!.x
-      const pdy = pts[1]!.y - pts[0]!.y
+      const pdx = pts[1].x - pts[0].x
+      const pdy = pts[1].y - pts[0].y
       const dist = Math.sqrt(pdx * pdx + pdy * pdy)
       const delta = this._lastPinchDist - dist
       this._lastPinchDist = dist
       this._velocityDist += delta * 0.002 * this.distance
 
       // Two-finger pan
-      const mx = (pts[0]!.x + pts[1]!.x) / 2
-      const my = (pts[0]!.y + pts[1]!.y) / 2
+      const mx = (pts[0].x + pts[1].x) / 2
+      const my = (pts[0].y + pts[1].y) / 2
       const panDx = mx - this._lastX
       const panDy = my - this._lastY
       this._lastX = mx
@@ -236,7 +266,7 @@ export class OrbitControls {
 
     // When going from 2 pointers to 1, reset tracking to avoid a jump
     if (this._pointers.size === 1) {
-      const remaining = [...this._pointers.values()][0]!
+      const remaining = this._pointers.values().next().value!
       this._lastX = remaining.x
       this._lastY = remaining.y
       this._pointerButton = 0

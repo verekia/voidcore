@@ -109,13 +109,19 @@ const projectToScreen = (
 }
 
 export const createOverlayManager = (canvas: HTMLCanvasElement) => {
-  // Create container as next sibling of canvas, matching its fixed positioning
+  // Create container as next sibling of canvas, positioned relative to the canvas parent
   const container = document.createElement('div')
-  container.style.cssText = 'position:fixed;inset:0;pointer-events:none;overflow:hidden'
-  canvas.parentNode!.insertBefore(container, canvas.nextSibling)
+  container.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:hidden'
+  // Ensure the parent is a positioning context for our absolute container
+  const parentEl = canvas.parentNode as HTMLElement
+  if (parentEl && getComputedStyle(parentEl).position === 'static') {
+    parentEl.style.position = 'relative'
+  }
+  parentEl.insertBefore(container, canvas.nextSibling)
 
   const entries: (OverlayEntry | null)[] = []
   let nextIndex = 0
+  const freeSlots: number[] = []
 
   const add = (opts: OverlayOptions): OverlayHandle => {
     const entry: OverlayEntry = {
@@ -145,7 +151,7 @@ export const createOverlayManager = (canvas: HTMLCanvasElement) => {
 
     container.appendChild(entry.element)
 
-    const index = nextIndex++
+    const index = freeSlots.length > 0 ? freeSlots.pop()! : nextIndex++
     entries[index] = entry
 
     return { _index: index }
@@ -156,6 +162,7 @@ export const createOverlayManager = (canvas: HTMLCanvasElement) => {
     if (!entry) return
     container.removeChild(entry.element)
     entries[handle._index] = null
+    freeSlots.push(handle._index)
   }
 
   const update = (camera: PerspectiveCamera, canvasWidth: number, canvasHeight: number) => {

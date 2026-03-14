@@ -41,7 +41,8 @@ export class Skeleton {
 
   update() {
     if (!this._dirty) return
-    for (let i = 0; i < this.bones.length; i++) {
+    const count = Math.min(this.bones.length, 32)
+    for (let i = 0; i < count; i++) {
       const bone = this.bones[i]!
       const ibm = this.boneInverseBindMatrices[i]!
       // boneMatrix = bone.worldMatrix * inverseBindMatrix (written directly, no temp copy)

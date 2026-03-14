@@ -95,6 +95,23 @@ const TYPE_COUNTS: Record<string, number> = {
   MAT4: 16,
 }
 
+/** Create a typed array view, copying if the byte offset is not aligned for the element type. */
+const alignedView = <T extends Float32Array | Uint16Array | Uint32Array | Int16Array>(
+  Ctor: new (buffer: ArrayBuffer, byteOffset: number, length: number) => T,
+  bin: ArrayBuffer,
+  byteOffset: number,
+  length: number,
+  bytesPerElement: number,
+): T => {
+  if (byteOffset % bytesPerElement === 0) {
+    return new Ctor(bin, byteOffset, length)
+  }
+  // Unaligned — copy into a new buffer
+  const copy = new Uint8Array(length * bytesPerElement)
+  copy.set(new Uint8Array(bin, byteOffset, length * bytesPerElement))
+  return new Ctor(copy.buffer, 0, length)
+}
+
 const readAccessor = (json: any, bin: ArrayBuffer, accessorIndex: number): { data: ArrayBufferView; count: number } => {
   const accessor = json.accessors[accessorIndex]
   const bufferView = json.bufferViews[accessor.bufferView]
@@ -105,19 +122,19 @@ const readAccessor = (json: any, bin: ArrayBuffer, accessorIndex: number): { dat
 
   switch (accessor.componentType) {
     case 5126: // FLOAT
-      return { data: new Float32Array(bin, byteOffset, totalComponents), count }
+      return { data: alignedView(Float32Array, bin, byteOffset, totalComponents, 4), count }
     case 5123: // UNSIGNED_SHORT
-      return { data: new Uint16Array(bin, byteOffset, totalComponents), count }
+      return { data: alignedView(Uint16Array, bin, byteOffset, totalComponents, 2), count }
     case 5125: // UNSIGNED_INT
-      return { data: new Uint32Array(bin, byteOffset, totalComponents), count }
+      return { data: alignedView(Uint32Array, bin, byteOffset, totalComponents, 4), count }
     case 5121: // UNSIGNED_BYTE
       return { data: new Uint8Array(bin, byteOffset, totalComponents), count }
     case 5122: // SHORT
-      return { data: new Int16Array(bin, byteOffset, totalComponents), count }
+      return { data: alignedView(Int16Array, bin, byteOffset, totalComponents, 2), count }
     case 5120: // BYTE
       return { data: new Int8Array(bin, byteOffset, totalComponents), count }
     default:
-      return { data: new Float32Array(bin, byteOffset, totalComponents), count }
+      return { data: alignedView(Float32Array, bin, byteOffset, totalComponents, 4), count }
   }
 }
 
@@ -347,7 +364,7 @@ export const loadGLTF = async (url: string, options?: LoadOptions): Promise<GLTF
           const positions = new Float32Array(posData.data.buffer, posData.data.byteOffset, posData.count * 3)
           const normals = normData
             ? new Float32Array(normData.data.buffer, normData.data.byteOffset, normData.count * 3)
-            : generateFlatNormals(positions, readIndices(json, bin, primitive.indices))
+            : generateSmoothNormals(positions, readIndices(json, bin, primitive.indices))
 
           let indices: Uint16Array | Uint32Array
           if (primitive.indices !== undefined) {
@@ -448,15 +465,62 @@ export const loadGLTF = async (url: string, options?: LoadOptions): Promise<GLTF
 
     node.name = nodeDef.name ?? ''
 
-    // Apply transforms
-    if (nodeDef.translation) {
-      node.setPosition(nodeDef.translation[0], nodeDef.translation[1], nodeDef.translation[2])
-    }
-    if (nodeDef.rotation) {
-      node.setRotation(nodeDef.rotation[0], nodeDef.rotation[1], nodeDef.rotation[2], nodeDef.rotation[3])
-    }
-    if (nodeDef.scale) {
-      node.setScale(nodeDef.scale[0], nodeDef.scale[1], nodeDef.scale[2])
+    // Apply transforms — glTF nodes use either TRS properties or a column-major matrix
+    if (nodeDef.matrix) {
+      // Decompose column-major 4x4 matrix into TRS
+      const m = nodeDef.matrix
+      // Translation from column 3
+      node.setPosition(m[12], m[13], m[14])
+      // Scale = length of each column (0-2)
+      const sx = Math.sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2])
+      const sy = Math.sqrt(m[4] * m[4] + m[5] * m[5] + m[6] * m[6])
+      const sz = Math.sqrt(m[8] * m[8] + m[9] * m[9] + m[10] * m[10])
+      node.setScale(sx, sy, sz)
+      // Rotation: extract from normalized rotation matrix, convert to quaternion
+      const isx = sx > 1e-6 ? 1 / sx : 0
+      const isy = sy > 1e-6 ? 1 / sy : 0
+      const isz = sz > 1e-6 ? 1 / sz : 0
+      const r00 = m[0] * isx, r01 = m[4] * isy, r02 = m[8] * isz
+      const r10 = m[1] * isx, r11 = m[5] * isy, r12 = m[9] * isz
+      const r20 = m[2] * isx, r21 = m[6] * isy, r22 = m[10] * isz
+      const trace = r00 + r11 + r22
+      let qx: number, qy: number, qz: number, qw: number
+      if (trace > 0) {
+        const s = 0.5 / Math.sqrt(trace + 1)
+        qw = 0.25 / s
+        qx = (r21 - r12) * s
+        qy = (r02 - r20) * s
+        qz = (r10 - r01) * s
+      } else if (r00 > r11 && r00 > r22) {
+        const s = 2 * Math.sqrt(1 + r00 - r11 - r22)
+        qw = (r21 - r12) / s
+        qx = 0.25 * s
+        qy = (r01 + r10) / s
+        qz = (r02 + r20) / s
+      } else if (r11 > r22) {
+        const s = 2 * Math.sqrt(1 + r11 - r00 - r22)
+        qw = (r02 - r20) / s
+        qx = (r01 + r10) / s
+        qy = 0.25 * s
+        qz = (r12 + r21) / s
+      } else {
+        const s = 2 * Math.sqrt(1 + r22 - r00 - r11)
+        qw = (r10 - r01) / s
+        qx = (r02 + r20) / s
+        qy = (r12 + r21) / s
+        qz = 0.25 * s
+      }
+      node.setRotation(qx, qy, qz, qw)
+    } else {
+      if (nodeDef.translation) {
+        node.setPosition(nodeDef.translation[0], nodeDef.translation[1], nodeDef.translation[2])
+      }
+      if (nodeDef.rotation) {
+        node.setRotation(nodeDef.rotation[0], nodeDef.rotation[1], nodeDef.rotation[2], nodeDef.rotation[3])
+      }
+      if (nodeDef.scale) {
+        node.setScale(nodeDef.scale[0], nodeDef.scale[1], nodeDef.scale[2])
+      }
     }
 
     nodeMap.set(nodeIdx, node)
@@ -614,17 +678,17 @@ const readIndices = (json: any, bin: ArrayBuffer, accessorIndex: number): Uint16
   const count = accessor.count
 
   if (accessor.componentType === 5125) {
-    return new Uint32Array(bin, byteOffset, count)
+    return alignedView(Uint32Array, bin, byteOffset, count, 4)
   }
   if (accessor.componentType === 5123) {
-    return new Uint16Array(bin, byteOffset, count)
+    return alignedView(Uint16Array, bin, byteOffset, count, 2)
   }
   // Uint8 indices -> convert to Uint16
   const bytes = new Uint8Array(bin, byteOffset, count)
   return new Uint16Array(bytes)
 }
 
-const generateFlatNormals = (positions: Float32Array, indices: Uint16Array | Uint32Array): Float32Array => {
+const generateSmoothNormals = (positions: Float32Array, indices: Uint16Array | Uint32Array): Float32Array => {
   const normals = new Float32Array(positions.length)
   for (let i = 0; i < indices.length; i += 3) {
     const i0 = indices[i]! * 3,

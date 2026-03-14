@@ -349,7 +349,6 @@ export interface CapsuleGeometryOptions {
   radius?: number
   height?: number
   radialSegments?: number
-  heightSegments?: number
 }
 
 export class CapsuleGeometry extends Geometry {

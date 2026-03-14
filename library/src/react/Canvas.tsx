@@ -196,6 +196,17 @@ export const Canvas = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Sync runtime-changeable props (maxFps, maxDpr) without re-creating the engine
+  useEffect(() => {
+    if (!store) return
+    if (maxFps !== undefined) store.engine.maxFps = maxFps
+  }, [store, maxFps])
+
+  useEffect(() => {
+    if (!store) return
+    if (maxDpr !== undefined) store.engine.maxDpr = maxDpr
+  }, [store, maxDpr])
+
   // Update reconciler when children or store changes
   useEffect(() => {
     if (!store || !rootRef.current) return

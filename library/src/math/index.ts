@@ -626,6 +626,11 @@ export const mat4LookAt = (out: Mat4, eye: Vec3, target: Vec3, up: Vec3 = VEC3_U
     rx *= len
     ry *= len
     rz *= len
+  } else {
+    // Forward is nearly parallel to up — pick an arbitrary perpendicular right vector
+    rx = 0
+    ry = 0
+    rz = 0
   }
 
   // cameraUp = cross(right, forward)
@@ -712,7 +717,7 @@ export const quatNormalize = (out: Quat, a: Quat): Quat => {
     out[0] = 0
     out[1] = 0
     out[2] = 0
-    out[3] = 0
+    out[3] = 1 // Identity quaternion, not zero (zero is not a valid rotation)
   }
   return out
 }
@@ -774,7 +779,7 @@ export const quatInvert = (out: Quat, a: Quat): Quat => {
     out[0] = 0
     out[1] = 0
     out[2] = 0
-    out[3] = 0
+    out[3] = 1 // Identity quaternion, not zero (zero is not a valid rotation)
   }
   return out
 }
@@ -792,23 +797,29 @@ export const quatConjugate = (out: Quat, a: Quat): Quat => {
 export const aabbCreate = (): AABB => new Float32Array([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity])
 
 export const aabbFromPoints = (out: AABB, positions: Float32Array, count: number): AABB => {
-  out[0] = Infinity
-  out[1] = Infinity
-  out[2] = Infinity
-  out[3] = -Infinity
-  out[4] = -Infinity
-  out[5] = -Infinity
+  let minX = Infinity,
+    minY = Infinity,
+    minZ = Infinity
+  let maxX = -Infinity,
+    maxY = -Infinity,
+    maxZ = -Infinity
   for (let i = 0; i < count; i++) {
     const x = positions[i * 3]!
     const y = positions[i * 3 + 1]!
     const z = positions[i * 3 + 2]!
-    if (x < out[0]!) out[0] = x
-    if (y < out[1]!) out[1] = y
-    if (z < out[2]!) out[2] = z
-    if (x > out[3]!) out[3] = x
-    if (y > out[4]!) out[4] = y
-    if (z > out[5]!) out[5] = z
+    if (x < minX) minX = x
+    if (y < minY) minY = y
+    if (z < minZ) minZ = z
+    if (x > maxX) maxX = x
+    if (y > maxY) maxY = y
+    if (z > maxZ) maxZ = z
   }
+  out[0] = minX
+  out[1] = minY
+  out[2] = minZ
+  out[3] = maxX
+  out[4] = maxY
+  out[5] = maxZ
   return out
 }
 

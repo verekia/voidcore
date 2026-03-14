@@ -144,35 +144,33 @@ export const collectMeshes = (
     if (node.type === 'mesh' || node.type === 'sprite') {
       const mesh = node as Mesh
 
-      // Distance culling: skip mesh entirely if beyond maxDistance
+      // Distance culling: skip this mesh but still process children below
+      let distCulled = false
       if (mesh.maxDistance > 0) {
         const dx = mesh._worldMatrix[12]! - cameraPosition[0]!
         const dy = mesh._worldMatrix[13]! - cameraPosition[1]!
         const dz = mesh._worldMatrix[14]! - cameraPosition[2]!
         if (dx * dx + dy * dy + dz * dz > mesh.maxDistance * mesh.maxDistance) {
           culledCount++
-          // Still process children below — distance culling is per-mesh
-          const children = node.children
-          for (let i = children.length - 1; i >= 0; i--) {
-            stack[stackTop++] = children[i]!
-          }
-          continue
+          distCulled = true
         }
       }
 
-      if (!mesh.geometry || !mesh.material) {
-        culledCount++
-      } else if (mesh.frustumCulled) {
-        aabbTransform(worldAABB, mesh.geometry.aabb, mesh._worldMatrix)
-        if (frustumContainsAABB(cameraFrustum, worldAABB)) {
-          meshes[meshCount++] = mesh
-        } else if (shadowFrustum && mesh.castShadow && frustumContainsAABB(shadowFrustum, worldAABB)) {
-          shadowMeshes[shadowCount++] = mesh
-        } else {
+      if (!distCulled) {
+        if (!mesh.geometry || !mesh.material) {
           culledCount++
+        } else if (mesh.frustumCulled) {
+          aabbTransform(worldAABB, mesh.geometry.aabb, mesh._worldMatrix)
+          if (frustumContainsAABB(cameraFrustum, worldAABB)) {
+            meshes[meshCount++] = mesh
+          } else if (shadowFrustum && mesh.castShadow && frustumContainsAABB(shadowFrustum, worldAABB)) {
+            shadowMeshes[shadowCount++] = mesh
+          } else {
+            culledCount++
+          }
+        } else {
+          meshes[meshCount++] = mesh
         }
-      } else {
-        meshes[meshCount++] = mesh
       }
     }
     const children = node.children
@@ -248,12 +246,6 @@ export const computeShadowMatrix = (
   // Final shadow VP = proj * view
   mat4Multiply(shadowVP, lightProj, lightView)
 }
-
-/**
- * Scratch buffer for billboard matrix computation — avoids per-call allocation.
- * Both renderers use this via computeBillboardMatrix() in the batch fill phase.
- */
-const _bbMatrix: Mat4 = mat4Create()
 
 /**
  * Compute a billboard world matrix that makes a sprite always face the camera.

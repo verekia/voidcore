@@ -80,6 +80,20 @@ const _invWorldMat = mat4Create()
 let _lastU = 0
 let _lastV = 0
 
+/** In-place insertion sort for the first `count` elements of a RaycastHit array by distance. */
+const _insertionSort = (arr: RaycastHit[], count: number): void => {
+  for (let i = 1; i < count; i++) {
+    const key = arr[i]!
+    const keyDist = key.distance
+    let j = i - 1
+    while (j >= 0 && arr[j]!.distance > keyDist) {
+      arr[j + 1] = arr[j]!
+      j--
+    }
+    arr[j + 1] = key
+  }
+}
+
 // ─── BVH Node Layout ───────────────────────────────────────────────────────────
 // 32 bytes per node, 8 floats / 8 ints (aliased over same buffer):
 //   floats[o+0..2] = minX, minY, minZ
@@ -546,19 +560,21 @@ const intersectMeshInto = (
 
   // Stack-based BVH traversal
   let stackPtr = 0
-  _stack[stackPtr++] = 0
 
   let closestDist = Infinity
   let closestTriIdx = -1
   let closestU = 0
   let closestV = 0
 
+  // Test root node before entering loop — avoids redundant AABB re-tests for every
+  // non-root node (children are tested before being pushed, so re-testing on pop is wasteful).
+  if (rayIntersectsAABBNode(floatNodes, 0, lox, loy, loz, lidx, lidy, lidz, closestDist) >= 0) {
+    _stack[stackPtr++] = 0
+  }
+
   while (stackPtr > 0) {
     const nodeIdx = _stack[--stackPtr]!
     const o = nodeIdx * 8
-
-    const tmin = rayIntersectsAABBNode(floatNodes, o, lox, loy, loz, lidx, lidy, lidz, closestDist)
-    if (tmin < 0) continue
 
     const rightOrCount = intNodes[o + 3]!
     const leftOrStart = intNodes[o + 7]!
@@ -664,8 +680,11 @@ const intersectMeshInto = (
     if (!hit.uv) hit.uv = new Float32Array(2) as Vec2
     hit.uv[0] = uvs[u0]! * w + uvs[u1]! * closestU + uvs[u2]! * closestV
     hit.uv[1] = uvs[u0 + 1]! * w + uvs[u1 + 1]! * closestU + uvs[u2 + 1]! * closestV
-  } else {
-    hit.uv = null
+  } else if (hit.uv) {
+    // Zero out UVs but don't null the field — in the zero-allocation path, nulling
+    // causes re-allocation when the next hit has UVs.
+    hit.uv[0] = 0
+    hit.uv[1] = 0
   }
 
   return true
@@ -753,8 +772,8 @@ export class Raycaster {
       this._collectHitsInto(object, recursive)
       const count = this._hitCount
       this._hitTarget = null
-      // Sort only the filled portion
-      if (count > 1) target.slice(0, count).sort((a, b) => a.distance - b.distance)
+      // Sort the filled portion in-place (insertion sort — fast for small N, no allocation)
+      if (count > 1) _insertionSort(target, count)
       return count
     }
     const hits: RaycastHit[] = []
@@ -780,7 +799,7 @@ export class Raycaster {
       }
       const count = this._hitCount
       this._hitTarget = null
-      if (count > 1) target.slice(0, count).sort((a, b) => a.distance - b.distance)
+      if (count > 1) _insertionSort(target, count)
       return count
     }
     const hits: RaycastHit[] = []
