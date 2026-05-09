@@ -12,18 +12,29 @@
     "build": "bun run --filter '*' build",
     "start": "bun run --filter '*' start",
     "typecheck": "bun run --filter '*' typecheck",
-    "lint": "oxlint --quiet",
-    "lint:fix": "oxlint --fix",
-    "format": "oxfmt --write .",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint --fix .",
+    "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "buntest": "bun test",
-    "all": "bun run lint && bun run format:check && bun run buntest && bun run typecheck",
+    "test": "bun test",
+    "warden": "warden",
+    "all": "bun run format:check && bun run lint && bun run typecheck && bun run warden && bun run test",
     "prepare": "husky",
     "pub": "bun run --filter 'voidcore' build && npm publish --workspace library"
   },
   "devDependencies": {
+    "@verekia/warden": "0.0.3",
     "husky": "9.1.7",
-    "oxfmt": "0.28.0",
-    "oxlint": "1.43.0"
+    "oxfmt": "0.48.0",
+    "oxlint": "1.63.0"
+  },
+  "warden": {
+    "checks": {
+      "typecheckScript": {
+        "modes": {
+          "voidcore": "bun-filter-all"
+        }
+      }
+    }
   }
 }

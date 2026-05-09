@@ -193,7 +193,6 @@ export const Canvas = ({
       cleanupRef.current = null
       setStore(null)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Update reconciler when children or store changes
