@@ -21,13 +21,7 @@ describe('mat4Identity', () => {
     // Dirty the matrix first to ensure every element is written
     out.fill(99)
     mat4Identity(out)
-    // prettier-ignore
-    expect(Array.from(out)).toEqual([
-      1, 0, 0, 0,
-      0, 1, 0, 0,
-      0, 0, 1, 0,
-      0, 0, 0, 1,
-    ])
+    expect(Array.from(out)).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
   })
 })
 
