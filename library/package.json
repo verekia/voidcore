@@ -21,16 +21,16 @@
   },
   "devDependencies": {
     "@types/bun": "1.3.8",
-    "@types/react": "19.2.8",
+    "@types/react": "19.2.14",
     "@types/react-reconciler": "^0.33.0",
     "@typescript/native-preview": "^7.0.0-dev.20260206.1",
     "@webgpu/types": "^0.1.69",
     "tsup": "8.5.1",
-    "typescript": "5.9.3"
+    "typescript": "6.0.3"
   },
   "peerDependencies": {
-    "react": ">=18",
-    "react-dom": ">=18"
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
   },
   "peerDependenciesMeta": {
     "react": {

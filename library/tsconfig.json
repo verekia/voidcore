@@ -22,7 +22,9 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false,
-    "incremental": false
+    "incremental": false,
+    // tsup uses baseUrl
+    "ignoreDeprecations": "6.0"
   },
   "include": ["src"],
   "exclude": ["node_modules", "dist", "**/*.test.ts"]
