@@ -19,7 +19,7 @@ VoidCore is a performant 3D graphics engine written in TypeScript. It supports b
 
 ## Project Structure
 
-Monorepo with bun workspaces. Linting (oxlint) and formatting (oxfmt) are configured at the root.
+Monorepo with bun workspaces. Linting (oxlint) and formatting (bun fmt) are configured at the root.
 
 ```
 library/       – The library package (published to npm as "voidcore")
@@ -78,9 +78,9 @@ All commands run from the monorepo root unless noted.
 - `bun run dev` – Start the Next.js example dev server
 - `bun run build` – Build all packages (library via tsup, example via next build)
 - `bun run lint` – Lint with oxlint
-- `bun run format` – Format with oxfmt
+- `bun run format` – Format with bun fmt
 - `bun run buntest` – Run tests with bun
-- `bun run typecheck` – Typecheck all packages with tsgo
+- `bun run typecheck` – Typecheck all packages with bun check
 - `bun run all` – Lint + format check + test + typecheck
 - `bun run pub` – Build the library and publish to npm
 

@@ -14,8 +14,8 @@
     "typecheck": "bun run --filter '*' typecheck",
     "lint": "oxlint .",
     "lint:fix": "oxlint --fix .",
-    "format": "oxfmt .",
-    "format:check": "oxfmt --check .",
+    "format": "bun fmt",
+    "format:check": "bun fmt --check",
     "test": "bun test",
     "warden": "warden",
     "all": "bun run format:check && bun run lint && bun run typecheck && bun run warden && bun run test",
@@ -23,11 +23,14 @@
     "pub": "bun run --filter 'voidcore' build && npm publish --workspace library"
   },
   "devDependencies": {
-    "@verekia/warden": "0.0.4",
+    "@verekia/warden": "0.0.6",
     "husky": "9.1.7",
-    "oxfmt": "0.48.0",
     "oxlint": "1.63.0"
   },
+  "engines": {
+    "bun": "1.4.4"
+  },
+  "packageManager": "bun@1.4.4",
   "warden": {
     "checks": {
       "typecheckScript": {

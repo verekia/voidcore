@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "serve out",
     "postinstall": "next typegen",
-    "typecheck": "tsgo"
+    "typecheck": "bun check"
   },
   "dependencies": {
     "eruda": "3.4.3",
@@ -21,7 +21,6 @@
     "@types/node": "25.7.0",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
-    "@typescript/native-preview": "^7.0.0-dev.20260206.1",
     "@webgpu/types": "^0.1.69",
     "babel-plugin-react-compiler": "1.0.0",
     "next": "16.2.6",
